@@ -97,7 +97,7 @@ func (m *Migrator) CheckReadiness(ctx context.Context, opts Options) (*PreMigrat
 	}
 
 	// CSV phase and reason
-	if sub.Status.InstalledCSV != "" {
+	if sub.Status.InstalledCSV != "" { //nolint:nestif
 		csvName := sub.Status.InstalledCSV
 		var csv operatorsv1alpha1.ClusterServiceVersion
 		if err := m.Client.Get(ctx, types.NamespacedName{
@@ -110,17 +110,33 @@ func (m *Migrator) CheckReadiness(ctx context.Context, opts Options) (*PreMigrat
 				Message: fmt.Sprintf("failed to get CSV %s: %v", csvName, err),
 			})
 		} else if csv.Status.Phase != operatorsv1alpha1.CSVPhaseSucceeded {
-			report.Checks = append(report.Checks, CheckResult{
-				Name:    "CSV health",
-				Passed:  false,
-				Message: fmt.Sprintf("phase is %q, expected %q", csv.Status.Phase, operatorsv1alpha1.CSVPhaseSucceeded),
-			})
+			if opts.AcknowledgeNotSteadyState {
+				report.Checks = append(report.Checks, CheckResult{
+					Name:    "CSV health",
+					Passed:  true,
+					Message: fmt.Sprintf("overridden: phase is %q (not at steady state acknowledged)", csv.Status.Phase),
+				})
+			} else {
+				report.Checks = append(report.Checks, CheckResult{
+					Name:    "CSV health",
+					Passed:  false,
+					Message: fmt.Sprintf("phase is %q, expected %q", csv.Status.Phase, operatorsv1alpha1.CSVPhaseSucceeded),
+				})
+			}
 		} else if csv.Status.Reason != operatorsv1alpha1.CSVReasonInstallSuccessful {
-			report.Checks = append(report.Checks, CheckResult{
-				Name:    "CSV health",
-				Passed:  false,
-				Message: fmt.Sprintf("reason is %q, expected %q", csv.Status.Reason, operatorsv1alpha1.CSVReasonInstallSuccessful),
-			})
+			if opts.AcknowledgeNotSteadyState {
+				report.Checks = append(report.Checks, CheckResult{
+					Name:    "CSV health",
+					Passed:  true,
+					Message: fmt.Sprintf("overridden: reason is %q (not at steady state acknowledged)", csv.Status.Reason),
+				})
+			} else {
+				report.Checks = append(report.Checks, CheckResult{
+					Name:    "CSV health",
+					Passed:  false,
+					Message: fmt.Sprintf("reason is %q, expected %q", csv.Status.Reason, operatorsv1alpha1.CSVReasonInstallSuccessful),
+				})
+			}
 		} else {
 			report.Checks = append(report.Checks, CheckResult{
 				Name:    "CSV health",

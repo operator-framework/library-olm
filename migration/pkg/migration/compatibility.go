@@ -56,13 +56,21 @@ func (m *Migrator) checkAllNamespacesMode(ctx context.Context, opts Options) ([]
 	og := ogList.Items[0]
 	var checks []CheckResult
 
-	// spec.serviceAccountName (C6)
+	// spec.serviceAccountName (C6 — soft)
 	if og.Spec.ServiceAccountName != "" {
-		checks = append(checks, CheckResult{
-			Name:    "No scoped ServiceAccount",
-			Passed:  false,
-			Message: "OperatorGroup has spec.serviceAccountName set; OLMv1 does not support scoped service accounts",
-		})
+		if opts.AcknowledgeScopedServiceAccount {
+			checks = append(checks, CheckResult{
+				Name:    "No scoped ServiceAccount",
+				Passed:  true,
+				Message: "overridden: operator will use cluster-admin (scoped ServiceAccount acknowledged)",
+			})
+		} else {
+			checks = append(checks, CheckResult{
+				Name:    "No scoped ServiceAccount",
+				Passed:  false,
+				Message: "OperatorGroup has spec.serviceAccountName set; OLMv1 does not support scoped service accounts",
+			})
+		}
 	} else {
 		checks = append(checks, CheckResult{
 			Name:    "No scoped ServiceAccount",
@@ -101,13 +109,21 @@ func (m *Migrator) checkAllNamespacesMode(ctx context.Context, opts Options) ([]
 		})
 	}
 
-	// spec.targetNamespaces — AllNamespaces mode (C1)
+	// spec.targetNamespaces — AllNamespaces mode (C1 — soft)
 	if len(og.Spec.TargetNamespaces) > 0 {
-		checks = append(checks, CheckResult{
-			Name:    "AllNamespaces mode",
-			Passed:  false,
-			Message: "OperatorGroup has spec.targetNamespaces set; operator must be in AllNamespaces mode for migration",
-		})
+		if opts.AcknowledgeWatchScopeChange {
+			checks = append(checks, CheckResult{
+				Name:    "AllNamespaces mode",
+				Passed:  true,
+				Message: "overridden: operator will run AllNamespaces post-migration (watch scope change acknowledged)",
+			})
+		} else {
+			checks = append(checks, CheckResult{
+				Name:    "AllNamespaces mode",
+				Passed:  false,
+				Message: "OperatorGroup has spec.targetNamespaces set; operator must be in AllNamespaces mode for migration",
+			})
+		}
 	} else {
 		checks = append(checks, CheckResult{
 			Name:    "AllNamespaces mode",
@@ -116,13 +132,21 @@ func (m *Migrator) checkAllNamespacesMode(ctx context.Context, opts Options) ([]
 		})
 	}
 
-	// status.namespaces warning — single-namespace targets will become AllNamespaces
+	// status.namespaces warning — single-namespace targets will become AllNamespaces (C1 — soft)
 	if len(og.Status.Namespaces) == 1 && og.Status.Namespaces[0] != "" {
-		checks = append(checks, CheckResult{
-			Name:    "Namespace scope change",
-			Passed:  false,
-			Message: fmt.Sprintf("OperatorGroup targets namespace %q; post-migration the operator will run in AllNamespaces mode", og.Status.Namespaces[0]),
-		})
+		if opts.AcknowledgeWatchScopeChange {
+			checks = append(checks, CheckResult{
+				Name:    "Namespace scope change",
+				Passed:  true,
+				Message: "overridden: watch scope change acknowledged",
+			})
+		} else {
+			checks = append(checks, CheckResult{
+				Name:    "Namespace scope change",
+				Passed:  false,
+				Message: fmt.Sprintf("OperatorGroup targets namespace %q; post-migration the operator will run in AllNamespaces mode", og.Status.Namespaces[0]),
+			})
+		}
 	}
 
 	return checks, nil
@@ -240,6 +264,13 @@ func (m *Migrator) checkNoOperatorConditions(ctx context.Context, opts Options, 
 	}
 
 	if len(oc.Status.Conditions) > 0 {
+		if opts.AcknowledgeOperatorCondition {
+			return CheckResult{
+				Name:    "No OperatorCondition usage",
+				Passed:  true,
+				Message: "overridden: active OperatorCondition usage acknowledged",
+			}, nil
+		}
 		return CheckResult{
 			Name:    "No OperatorCondition usage",
 			Passed:  false,

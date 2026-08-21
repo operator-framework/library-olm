@@ -73,9 +73,28 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	}
 	info.ResolvedCatalogName = catalogName
 
-	backup, err := m.BackupResources(ctx, opts, csv)
+	backup, err := m.BackupResources(ctx, opts, csv, ip)
 	if err != nil {
 		return fmt.Errorf("failed to backup resources: %w", err)
+	}
+
+	// Populate CE backup annotations (R2.5) — must happen before PrepareForMigration deletes the Sub.
+	if backup.Subscription != nil {
+		if j, err := json.Marshal(backup.Subscription.Spec); err == nil {
+			info.SubscriptionBackupJSON = string(j)
+		}
+	}
+	if backup.OperatorGroup != nil {
+		if j, err := json.Marshal(backup.OperatorGroup.Spec); err == nil {
+			info.OperatorGroupBackupJSON = string(j)
+		}
+	}
+
+	// Disk backup (non-fatal per R2.6 — CE annotation backup is authoritative).
+	if opts.BackupDirectory != "" {
+		if err := backup.SaveToDisk(opts.BackupDirectory); err != nil {
+			m.progress(fmt.Sprintf("Warning: backup to disk failed (CE annotation backup is authoritative): %v", err))
+		}
 	}
 
 	if err := m.PrepareForMigration(ctx, opts, csv); err != nil {
@@ -128,8 +147,9 @@ func (m *Migrator) EnsurePrerequisites(ctx context.Context, opts Options) (*oper
 	return csv, ip, readiness, compat, nil
 }
 
-// BackupResources creates in-memory backup copies of the Subscription and CSV for recovery.
-func (m *Migrator) BackupResources(ctx context.Context, opts Options, csv *operatorsv1alpha1.ClusterServiceVersion) (*Backup, error) {
+// BackupResources creates in-memory backup copies of the Subscription, CSV, OperatorGroup,
+// and InstallPlan for recovery and auditing (R1.8, R2.6).
+func (m *Migrator) BackupResources(ctx context.Context, opts Options, csv *operatorsv1alpha1.ClusterServiceVersion, ip *operatorsv1alpha1.InstallPlan) (*Backup, error) {
 	var sub operatorsv1alpha1.Subscription
 	if err := m.Client.Get(ctx, types.NamespacedName{
 		Name:      opts.SubscriptionName,
@@ -138,9 +158,19 @@ func (m *Migrator) BackupResources(ctx context.Context, opts Options, csv *opera
 		return nil, fmt.Errorf("failed to backup Subscription: %w", err)
 	}
 
+	// Best-effort: fetch the OperatorGroup from the Subscription namespace.
+	var ogList operatorsv1.OperatorGroupList
+	_ = m.Client.List(ctx, &ogList, client.InNamespace(opts.SubscriptionNamespace))
+	var og *operatorsv1.OperatorGroup
+	if len(ogList.Items) > 0 {
+		og = ogList.Items[0].DeepCopy()
+	}
+
 	return &Backup{
 		Subscription:          sub.DeepCopy(),
 		ClusterServiceVersion: csv.DeepCopy(),
+		OperatorGroup:         og,
+		InstallPlan:           ip,
 	}, nil
 }
 
@@ -299,16 +329,41 @@ func (m *Migrator) WaitForCOSSucceeded(ctx context.Context, cosName string) erro
 	})
 }
 
-// CreateClusterExtension creates a CE that adopts the COS.
-// ServiceAccount is NOT set (deprecated and ignored in OLMv1).
-// Migration annotations are added to the CE for AlreadyMigrated/Conflict detection.
+// CreateClusterExtension creates a CE that adopts the COS (R2.3).
+// spec.serviceAccount is NOT set — deprecated and ignored in OLMv1 (R2.5/R7).
+// Migration annotations (R2.5) are added for AlreadyMigrated/Conflict detection and rollback.
 func (m *Migrator) CreateClusterExtension(ctx context.Context, opts Options, info *MigrationInfo) error {
+	// Build annotations (R2.5).
+	annotations := map[string]string{
+		MigratedFromSubscriptionAnnotation: fmt.Sprintf("%s/%s", opts.SubscriptionNamespace, opts.SubscriptionName),
+	}
+	if info.SubscriptionBackupJSON != "" {
+		annotations[MigrationSubscriptionBackupAnnotation] = info.SubscriptionBackupJSON
+	}
+	if info.OperatorGroupBackupJSON != "" {
+		annotations[MigrationOperatorGroupBackupAnnotation] = info.OperatorGroupBackupJSON
+	}
+	// Record which eligibility-override flags were acknowledged (audit trail).
+	if opts.AcknowledgeWatchScopeChange {
+		annotations[AnnotationAcknowledgedPrefix+"watch-scope-change"] = "true"
+	}
+	if opts.AcknowledgeOperatorCondition {
+		annotations[AnnotationAcknowledgedPrefix+"operator-condition"] = "true"
+	}
+	if opts.AcknowledgeOLMv0APIAccess {
+		annotations[AnnotationAcknowledgedPrefix+"olmv0-api-access"] = "true"
+	}
+	if opts.AcknowledgeScopedServiceAccount {
+		annotations[AnnotationAcknowledgedPrefix+"scoped-serviceaccount"] = "true"
+	}
+	if opts.AcknowledgeNotSteadyState {
+		annotations[AnnotationAcknowledgedPrefix+"not-steady-state"] = "true"
+	}
+
 	ce := &ocv1.ClusterExtension{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: opts.ClusterExtensionName,
-			Annotations: map[string]string{
-				MigratedFromSubscriptionAnnotation: fmt.Sprintf("%s/%s", opts.SubscriptionNamespace, opts.SubscriptionName),
-			},
+			Name:        opts.ClusterExtensionName,
+			Annotations: annotations,
 		},
 		Spec: ocv1.ClusterExtensionSpec{
 			Namespace: opts.InstallNamespace,

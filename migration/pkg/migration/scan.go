@@ -115,11 +115,34 @@ func (m *Migrator) ScanAllSubscriptions(ctx context.Context) ([]OperatorScanResu
 			continue
 		}
 
-		// Merge failed checks
+		// Merge readiness + compat failed checks
 		result.FailedChecks = append(readiness.FailedChecks(), compat.FailedChecks()...)
+
+		// C7: catalog availability (hard check — no override)
+		// Only run if readiness+compat pass; avoids noisy catalog errors for clearly ineligible operators.
 		if len(result.FailedChecks) == 0 {
-			result.Status = OperatorStatusEligible
-			result.Eligible = true
+			catalogName, catalogErr := m.ResolveClusterCatalog(ctx, &MigrationInfo{
+				PackageName: sub.Spec.Package,
+				Channel:     sub.Spec.Channel,
+				Version:     result.Version,
+			}, m.RESTConfig)
+			if catalogErr != nil {
+				result.FailedChecks = append(result.FailedChecks, CheckResult{
+					Name:    "Catalog availability",
+					Passed:  false,
+					Message: fmt.Sprintf("package not found in any serving ClusterCatalog; run migrate-catalogs-v0-to-v1 first: %v", catalogErr),
+				})
+				result.Status = OperatorStatusIneligible
+				result.Eligible = false
+			} else {
+				result.FailedChecks = append(result.FailedChecks, CheckResult{
+					Name:    "Catalog availability",
+					Passed:  true,
+					Message: fmt.Sprintf("package available in ClusterCatalog %s", catalogName),
+				})
+				result.Status = OperatorStatusEligible
+				result.Eligible = true
+			}
 		} else {
 			result.Status = OperatorStatusIneligible
 			result.Eligible = false
@@ -381,4 +404,40 @@ func splitNamespacedName(ref string) (string, string, error) {
 
 func unmarshalJSON(data string, v interface{}) error {
 	return json.Unmarshal([]byte(data), v)
+}
+
+// ── Canonical R1.1 library API ────────────────────────────────────────────────
+
+// ScanAll classifies all OLMv0 Subscriptions into the four states (R1.1),
+// including catalog-availability (C7) per operator.
+func (m *Migrator) ScanAll(ctx context.Context) ([]OperatorScanResult, error) {
+	return m.ScanAllSubscriptions(ctx)
+}
+
+// Check runs all readiness, compatibility, and catalog-availability checks for
+// one operator without mutating the cluster (R1.1).
+func (m *Migrator) Check(ctx context.Context, opts Options) (*OperatorScanResult, error) {
+	opts.ApplyDefaults()
+	return m.ScanSubscription(ctx, opts)
+}
+
+// Gather collects and returns everything that would be migrated without making
+// any cluster mutations — backs the CLI convert --dry-run (R1.1).
+func (m *Migrator) Gather(ctx context.Context, opts Options) (*MigrationInfo, error) {
+	opts.ApplyDefaults()
+	return m.GatherMigrationInfo(ctx, opts)
+}
+
+// Rollback restores an operator to OLMv0 management (R1.1).
+// opts.AcknowledgeInstalled must be true when the CE is Installed=True.
+func (m *Migrator) Rollback(ctx context.Context, opts Options) error {
+	opts.ApplyDefaults()
+	return m.RollbackClusterExtension(ctx, opts.ClusterExtensionName, opts.AcknowledgeInstalled)
+}
+
+// Cleanup finishes a partial migration in Conflict state by deleting the
+// Subscription and OLMv0 artifacts, leaving the CE intact (R1.1).
+func (m *Migrator) Cleanup(ctx context.Context, opts Options) error {
+	opts.ApplyDefaults()
+	return m.CleanupConflict(ctx, opts.ClusterExtensionName)
 }

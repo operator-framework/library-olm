@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -104,8 +105,14 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 		for _, r := range eligible {
 			info(fmt.Sprintf("Migrating %s/%s...", r.SubscriptionNamespace, r.SubscriptionName))
 			opts := migration.Options{
-				SubscriptionName:      r.SubscriptionName,
-				SubscriptionNamespace: r.SubscriptionNamespace,
+				SubscriptionName:                r.SubscriptionName,
+				SubscriptionNamespace:           r.SubscriptionNamespace,
+				BackupDirectory:                 convertBackupDir,
+				AcknowledgeWatchScopeChange:     convertAckWatchScope,
+				AcknowledgeOperatorCondition:    convertAckOpCond,
+				AcknowledgeOLMv0APIAccess:       convertAckOLMv0API,
+				AcknowledgeScopedServiceAccount: convertAckScopedSA,
+				AcknowledgeNotSteadyState:       convertAckNotSteady,
 			}
 			opts.ApplyDefaults()
 
@@ -131,10 +138,16 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	}
 
 	opts := migration.Options{
-		SubscriptionName:      operatorName,
-		SubscriptionNamespace: convertNamespace,
-		ClusterExtensionName:  convertCEName,
-		InstallNamespace:      convertInstallNs,
+		SubscriptionName:                operatorName,
+		SubscriptionNamespace:           convertNamespace,
+		ClusterExtensionName:            convertCEName,
+		InstallNamespace:                convertInstallNs,
+		BackupDirectory:                 convertBackupDir,
+		AcknowledgeWatchScopeChange:     convertAckWatchScope,
+		AcknowledgeOperatorCondition:    convertAckOpCond,
+		AcknowledgeOLMv0APIAccess:       convertAckOLMv0API,
+		AcknowledgeScopedServiceAccount: convertAckScopedSA,
+		AcknowledgeNotSteadyState:       convertAckNotSteady,
 	}
 	opts.ApplyDefaults()
 
@@ -206,12 +219,30 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	success(fmt.Sprintf("Found %d resources across %d kinds", len(objects), len(kindCounts)))
 
 	stepHeader(5, "Backing up resources")
-	backup, err := m.BackupResources(ctx, opts, csv)
+	backup, err := m.BackupResources(ctx, opts, csv, ip)
 	if err != nil {
 		return fmt.Errorf("failed to backup resources: %w", err)
 	}
-	_ = backup
-	success("Resources backed up in memory")
+	// Populate CE backup annotations (R2.5) — before PrepareForMigration deletes the Sub.
+	if backup.Subscription != nil {
+		if j, jErr := json.Marshal(backup.Subscription.Spec); jErr == nil {
+			bundleInfo.SubscriptionBackupJSON = string(j)
+		}
+	}
+	if backup.OperatorGroup != nil {
+		if j, jErr := json.Marshal(backup.OperatorGroup.Spec); jErr == nil {
+			bundleInfo.OperatorGroupBackupJSON = string(j)
+		}
+	}
+	// Disk backup (non-fatal per R2.6).
+	if convertBackupDir != "" {
+		if err := backup.SaveToDisk(convertBackupDir); err != nil {
+			warn(fmt.Sprintf("Backup to disk failed (CE annotation backup is authoritative): %v", err))
+		} else {
+			success(fmt.Sprintf("Backup written to %s", convertBackupDir))
+		}
+	}
+	success("Resources backed up in memory (CE annotation backup authoritative)")
 
 	stepHeader(6, "Preparing operator for migration")
 	info("Deleting Subscription and CSV (orphan cascade — workloads keep running)...")
