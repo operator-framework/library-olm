@@ -20,6 +20,7 @@ type OperatorScanResult struct {
 	Version               string
 	State                 string
 	Status                OperatorStatus // four-state classification
+	Reason                string         // human-readable explanation of the status (R1.3)
 	Eligible              bool           // true when Status == Eligible (backwards compat)
 	Error                 error
 	FailedChecks          []CheckResult
@@ -71,8 +72,9 @@ func (m *Migrator) ScanAllSubscriptions(ctx context.Context) ([]OperatorScanResu
 		// Conflict: both Subscription and annotated CE exist
 		if _, hasCE := migratedCEBySubRef[subRef]; hasCE {
 			result.Status = OperatorStatusConflict
+			result.Reason = "both Subscription and annotated ClusterExtension exist; resolve with cleanup or rollback"
 			result.Eligible = false
-			result.Error = fmt.Errorf("both Subscription and annotated ClusterExtension exist; resolve with cleanup or rollback")
+			result.Error = fmt.Errorf("%s", result.Reason)
 			results = append(results, result)
 			continue
 		}
@@ -89,6 +91,7 @@ func (m *Migrator) ScanAllSubscriptions(ctx context.Context) ([]OperatorScanResu
 		readiness, err := m.CheckReadiness(ctx, opts)
 		if err != nil {
 			result.Status = OperatorStatusIneligible
+			result.Reason = err.Error()
 			result.Error = err
 			results = append(results, result)
 			continue
@@ -98,6 +101,7 @@ func (m *Migrator) ScanAllSubscriptions(ctx context.Context) ([]OperatorScanResu
 		_, csv, _, err := m.GetCSVAndInstallPlan(ctx, opts)
 		if err != nil {
 			result.Status = OperatorStatusIneligible
+			result.Reason = fmt.Sprintf("failed to get CSV: %v", err)
 			result.Error = fmt.Errorf("failed to get CSV: %w", err)
 			results = append(results, result)
 			continue
@@ -110,6 +114,7 @@ func (m *Migrator) ScanAllSubscriptions(ctx context.Context) ([]OperatorScanResu
 		compat, err := m.CheckCompatibility(ctx, opts, csv, propsJSON)
 		if err != nil {
 			result.Status = OperatorStatusIneligible
+			result.Reason = fmt.Sprintf("compatibility check error: %v", err)
 			result.Error = fmt.Errorf("compatibility check error: %w", err)
 			results = append(results, result)
 			continue
@@ -118,8 +123,8 @@ func (m *Migrator) ScanAllSubscriptions(ctx context.Context) ([]OperatorScanResu
 		// Merge readiness + compat failed checks
 		result.FailedChecks = append(readiness.FailedChecks(), compat.FailedChecks()...)
 
-		// C7: catalog availability (hard check — no override)
-		// Only run if readiness+compat pass; avoids noisy catalog errors for clearly ineligible operators.
+		// C7: catalog availability (hard check — no override).
+		// Only run when readiness+compat pass to avoid noisy catalog errors for clearly ineligible operators.
 		if len(result.FailedChecks) == 0 {
 			catalogName, catalogErr := m.ResolveClusterCatalog(ctx, &MigrationInfo{
 				PackageName: sub.Spec.Package,
@@ -133,6 +138,7 @@ func (m *Migrator) ScanAllSubscriptions(ctx context.Context) ([]OperatorScanResu
 					Message: fmt.Sprintf("package not found in any serving ClusterCatalog; run migrate-catalogs-v0-to-v1 first: %v", catalogErr),
 				})
 				result.Status = OperatorStatusIneligible
+				result.Reason = fmt.Sprintf("package %q not found in any serving ClusterCatalog", sub.Spec.Package)
 				result.Eligible = false
 			} else {
 				result.FailedChecks = append(result.FailedChecks, CheckResult{
@@ -141,10 +147,12 @@ func (m *Migrator) ScanAllSubscriptions(ctx context.Context) ([]OperatorScanResu
 					Message: fmt.Sprintf("package available in ClusterCatalog %s", catalogName),
 				})
 				result.Status = OperatorStatusEligible
+				result.Reason = "passes all readiness, compatibility, and catalog-availability checks"
 				result.Eligible = true
 			}
 		} else {
 			result.Status = OperatorStatusIneligible
+			result.Reason = fmt.Sprintf("%d check(s) failed", len(result.FailedChecks))
 			result.Eligible = false
 		}
 		results = append(results, result)
@@ -156,12 +164,11 @@ func (m *Migrator) ScanAllSubscriptions(ctx context.Context) ([]OperatorScanResu
 			continue // handled above as Conflict or normal sub
 		}
 		results = append(results, OperatorScanResult{
-			SubscriptionName:      ceName,
-			SubscriptionNamespace: "",
-			PackageName:           "",
-			Status:                OperatorStatusAlreadyMigrated,
-			Eligible:              false,
-			State:                 fmt.Sprintf("ClusterExtension %s (migrated from %s)", ceName, subRef),
+			SubscriptionName: ceName,
+			Status:           OperatorStatusAlreadyMigrated,
+			Reason:           fmt.Sprintf("ClusterExtension %s exists with migrated-from-subscription annotation; Subscription is gone", ceName),
+			Eligible:         false,
+			State:            fmt.Sprintf("ClusterExtension %s (migrated from %s)", ceName, subRef),
 		})
 	}
 
@@ -186,7 +193,8 @@ func (m *Migrator) ScanSubscription(ctx context.Context, opts Options) (*Operato
 	for _, ce := range ceList.Items {
 		if ref, ok := ce.Annotations[MigratedFromSubscriptionAnnotation]; ok && ref == subRef {
 			result.Status = OperatorStatusConflict
-			result.Error = fmt.Errorf("both Subscription and annotated ClusterExtension %s exist; resolve with cleanup or rollback", ce.Name)
+			result.Reason = fmt.Sprintf("both Subscription and annotated ClusterExtension %s exist; resolve with cleanup or rollback", ce.Name)
+			result.Error = fmt.Errorf("%s", result.Reason)
 			return result, nil
 		}
 	}
@@ -196,14 +204,15 @@ func (m *Migrator) ScanSubscription(ctx context.Context, opts Options) (*Operato
 		return nil, err
 	}
 
-	_, csv, _, err := m.GetCSVAndInstallPlan(ctx, opts)
+	sub, csv, _, err := m.GetCSVAndInstallPlan(ctx, opts)
 	if err != nil {
 		result.Status = OperatorStatusIneligible
+		result.Reason = err.Error()
 		result.Error = err
 		return result, nil
 	}
 
-	result.PackageName = csv.Spec.Description
+	result.PackageName = sub.Spec.Package
 	result.InstalledCSV = csv.Name
 	result.Version = parseCSVVersion(csv)
 
@@ -211,17 +220,43 @@ func (m *Migrator) ScanSubscription(ctx context.Context, opts Options) (*Operato
 	compat, err := m.CheckCompatibility(ctx, opts, csv, propsJSON)
 	if err != nil {
 		result.Status = OperatorStatusIneligible
+		result.Reason = err.Error()
 		result.Error = err
 		return result, nil
 	}
 
 	result.FailedChecks = append(readiness.FailedChecks(), compat.FailedChecks()...)
-	if len(result.FailedChecks) == 0 {
-		result.Status = OperatorStatusEligible
-		result.Eligible = true
-	} else {
+	if len(result.FailedChecks) > 0 {
 		result.Status = OperatorStatusIneligible
+		result.Reason = fmt.Sprintf("%d check(s) failed", len(result.FailedChecks))
+		return result, nil
 	}
+
+	// C7: catalog availability (hard check — no override)
+	catalogName, catalogErr := m.ResolveClusterCatalog(ctx, &MigrationInfo{
+		PackageName: result.PackageName,
+		Channel:     sub.Spec.Channel,
+		Version:     result.Version,
+	}, m.RESTConfig)
+	if catalogErr != nil {
+		result.FailedChecks = append(result.FailedChecks, CheckResult{
+			Name:    "Catalog availability",
+			Passed:  false,
+			Message: fmt.Sprintf("package not found in any serving ClusterCatalog; run migrate-catalogs-v0-to-v1 first: %v", catalogErr),
+		})
+		result.Status = OperatorStatusIneligible
+		result.Reason = fmt.Sprintf("package %q not found in any serving ClusterCatalog", result.PackageName)
+		return result, nil
+	}
+
+	result.FailedChecks = append(result.FailedChecks, CheckResult{
+		Name:    "Catalog availability",
+		Passed:  true,
+		Message: fmt.Sprintf("package available in ClusterCatalog %s", catalogName),
+	})
+	result.Status = OperatorStatusEligible
+	result.Reason = "passes all readiness, compatibility, and catalog-availability checks"
+	result.Eligible = true
 	return result, nil
 }
 

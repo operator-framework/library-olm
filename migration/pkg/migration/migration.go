@@ -522,9 +522,19 @@ func (m *Migrator) deleteOperatorCondition(ctx context.Context, csvName, namespa
 	return nil
 }
 
-// cleanupOperatorGroup deletes the OperatorGroup if no other Subscriptions remain in the namespace.
+// cleanupOperatorGroup deletes the OperatorGroup when both --delete-operatorgroup is set
+// AND no other Subscriptions remain in the namespace (R6).
 func (m *Migrator) cleanupOperatorGroup(ctx context.Context, opts Options) []CleanupAction {
 	var actions []CleanupAction
+
+	// Both conditions required per R6: flag must be set AND no remaining Subscriptions.
+	if !opts.DeleteOperatorGroup {
+		actions = append(actions, CleanupAction{
+			Description: "Delete OperatorGroup (skipped: --delete-operatorgroup not set)",
+			Skipped:     true,
+		})
+		return actions
+	}
 
 	var subList operatorsv1alpha1.SubscriptionList
 	if err := m.Client.List(ctx, &subList, client.InNamespace(opts.SubscriptionNamespace)); err != nil {

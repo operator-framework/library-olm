@@ -45,6 +45,10 @@ type Options struct {
 
 	// AcknowledgeInstalled is required for Rollback when the CE is Installed=True.
 	AcknowledgeInstalled bool
+
+	// DeleteOperatorGroup deletes the OperatorGroup when both this flag is set AND
+	// no other Subscriptions remain in the namespace (R6).
+	DeleteOperatorGroup bool
 }
 
 // ApplyDefaults fills in default values for any unset optional fields.
