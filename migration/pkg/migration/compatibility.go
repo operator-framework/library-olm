@@ -27,8 +27,9 @@ func (m *Migrator) CheckCompatibility(ctx context.Context, opts Options, csv *op
 	// Dependency checks (C2 — hard block)
 	report.Checks = append(report.Checks, checkNoDependencies(bundleProperties)...)
 
-	// APIService checks (C3 — hard block, temporary until OPRUN-4723)
-	report.Checks = append(report.Checks, checkNoAPIServices(csv))
+	// C3 (APIService definitions) was removed: OLMv1 now manages APIService objects
+	// natively via the registry+v1 renderer (OPRUN-4723). Operators with owned
+	// APIService definitions are now Eligible with no override required.
 
 	// OperatorCondition checks (C4)
 	condCheck, err := m.checkNoOperatorConditions(ctx, opts, csv)
@@ -226,22 +227,6 @@ func checkNoDependencies(propertiesJSON string) []CheckResult {
 		}}
 	}
 	return issues
-}
-
-// checkNoAPIServices enforces C3 — no APIService definitions (hard block, temporary until OPRUN-4723).
-func checkNoAPIServices(csv *operatorsv1alpha1.ClusterServiceVersion) CheckResult {
-	if len(csv.Spec.APIServiceDefinitions.Owned) > 0 || len(csv.Spec.APIServiceDefinitions.Required) > 0 {
-		return CheckResult{
-			Name:    "No APIService definitions",
-			Passed:  false,
-			Message: "CSV has spec.apiservicedefinitions set; OLMv1 does not yet support APIService definitions (tracked by OPRUN-4723)",
-		}
-	}
-	return CheckResult{
-		Name:    "No APIService definitions",
-		Passed:  true,
-		Message: "CSV does not define APIServices",
-	}
 }
 
 // checkNoOperatorConditions enforces C4 — no active OperatorCondition status entries.
