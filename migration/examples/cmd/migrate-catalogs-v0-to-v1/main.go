@@ -96,8 +96,8 @@ func runMigrateCatalogs(cmd *cobra.Command, _ []string) error {
 
 	cm := catalogmigration.NewCatalogMigrator(c)
 	opts := catalogmigration.CatalogMigratorOptions{
-		DryRun:                    dryRun,
-		DeleteCatalogSource:       deleteCatalogSource,
+		DryRun:                      dryRun,
+		DeleteCatalogSource:         deleteCatalogSource,
 		AcknowledgePriorityOverflow: acknowledgePriorityOverflow,
 	}
 

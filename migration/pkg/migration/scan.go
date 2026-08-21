@@ -255,18 +255,6 @@ func EligibleFromScan(results []OperatorScanResult) []OperatorScanResult {
 	return eligible
 }
 
-// migrationAnnotatedCEsForSub returns ClusterExtension names that are annotated
-// with the given subscription ref, or empty if none.
-func migrationAnnotatedCEsForSub(ceList *ocv1.ClusterExtensionList, subRef string) []string {
-	var names []string
-	for _, ce := range ceList.Items {
-		if ref, ok := ce.Annotations[MigratedFromSubscriptionAnnotation]; ok && ref == subRef {
-			names = append(names, ce.Name)
-		}
-	}
-	return names
-}
-
 // RollbackClusterExtension deletes the CE and COS (orphan cascade), then restores the Subscription.
 func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, acknowledgeInstalled bool) error {
 	var ce ocv1.ClusterExtension

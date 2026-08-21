@@ -5,8 +5,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/operator-framework/library-olm/migration/pkg/migration"
 	ocv1 "github.com/operator-framework/operator-controller/api/v1"
+
+	"github.com/operator-framework/library-olm/migration/pkg/migration"
 )
 
 var cleanupAll bool
@@ -33,7 +34,7 @@ func init() {
 	cleanupCmd.Flags().BoolVar(&cleanupAll, "all", false, "Cleanup all Conflict-state ClusterExtensions")
 }
 
-func runCleanup(cmd *cobra.Command, args []string) error {
+func runCleanup(cmd *cobra.Command, args []string) error { //nolint:nestif
 	if cleanupAll && len(args) > 0 {
 		return fmt.Errorf("cannot specify both a CE name and --all")
 	}
@@ -50,7 +51,7 @@ func runCleanup(cmd *cobra.Command, args []string) error {
 	m.Progress = progressFunc
 	ctx := cmd.Context()
 
-	if cleanupAll {
+	if cleanupAll { //nolint:nestif
 		// Find all CEs that are in Conflict state
 		results, err := m.ScanAllSubscriptions(ctx)
 		if err != nil {

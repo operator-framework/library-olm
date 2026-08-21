@@ -10,7 +10,6 @@ import (
 )
 
 var (
-	checkSubscriptionName      string
 	checkSubscriptionNamespace string
 	checkAll                   bool
 )
@@ -35,7 +34,7 @@ func init() {
 	checkCmd.Flags().BoolVar(&checkAll, "all", false, "Check all Subscriptions on the cluster")
 }
 
-func runCheck(cmd *cobra.Command, args []string) error {
+func runCheck(cmd *cobra.Command, args []string) error { //nolint:nestif
 	if checkAll && len(args) > 0 {
 		return fmt.Errorf("cannot specify both an operator name and --all")
 	}
@@ -89,7 +88,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 
 	sectionHeader("Compatibility Checks")
 	_, csv, _, profileErr := m.GetCSVAndInstallPlan(ctx, opts)
-	if profileErr != nil {
+	if profileErr != nil { //nolint:nestif
 		fail(fmt.Sprintf("Could not profile operator: %v", profileErr))
 	} else {
 		propsJSON := csv.Annotations["operatorframework.io/properties"]

@@ -20,11 +20,11 @@ var (
 	convertInstallNs     string
 
 	// Acknowledgment flags
-	convertAckWatchScope  bool
-	convertAckOpCond      bool
-	convertAckOLMv0API    bool
-	convertAckScopedSA    bool
-	convertAckNotSteady   bool
+	convertAckWatchScope bool
+	convertAckOpCond     bool
+	convertAckOLMv0API   bool
+	convertAckScopedSA   bool
+	convertAckNotSteady  bool
 )
 
 var convertCmd = &cobra.Command{
@@ -62,7 +62,7 @@ func init() {
 	convertCmd.Flags().BoolVar(&convertAckNotSteady, "acknowledge-not-steady-state", false, "Acknowledge that the operator is not at steady state")
 }
 
-func runConvert(cmd *cobra.Command, args []string) error {
+func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	if convertAll && len(args) > 0 {
 		return fmt.Errorf("cannot specify both an operator name and --all")
 	}
@@ -79,7 +79,7 @@ func runConvert(cmd *cobra.Command, args []string) error {
 	m.Progress = progressFunc
 	ctx := cmd.Context()
 
-	if convertAll {
+	if convertAll { //nolint:nestif
 		fmt.Printf("\n%s%s🔎 Scanning all Subscriptions for migration...%s\n", colorBold, colorCyan, colorReset)
 		startProgress()
 		results, err := m.ScanAllSubscriptions(ctx)
@@ -139,7 +139,7 @@ func runConvert(cmd *cobra.Command, args []string) error {
 	opts.ApplyDefaults()
 
 	if convertDryRun {
-		return runConvertDryRun(cmd, m, opts, restCfg)
+		return runConvertDryRun(cmd, m, opts)
 	}
 
 	fmt.Printf("\n%s%s🔄 Migrating %s/%s to OLMv1...%s\n", colorBold, colorCyan, convertNamespace, operatorName, colorReset)
@@ -257,7 +257,7 @@ func runConvert(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.Options, restCfg interface{}) error {
+func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.Options) error {
 	ctx := cmd.Context()
 	fmt.Printf("\n%s%s🔍 Dry run: %s/%s%s\n", colorBold, colorCyan, opts.SubscriptionNamespace, opts.SubscriptionName, colorReset)
 

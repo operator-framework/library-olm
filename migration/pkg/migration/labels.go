@@ -22,7 +22,7 @@ const (
 	LabelMetadataName = "olm.operatorframework.io/metadata.name"
 
 	// SecretTypeObjectData is the Secret type for externalized COS object content.
-	SecretTypeObjectData = "olm.operatorframework.io/object-data"
+	SecretTypeObjectData = "olm.operatorframework.io/object-data" //nolint:gosec // G101 false positive: this is a Kubernetes Secret type identifier, not a credential
 
 	// MigratedFromSubscriptionAnnotation is set on both the COS and CE.
 	// Value is "<namespace>/<name>" of the source Subscription.

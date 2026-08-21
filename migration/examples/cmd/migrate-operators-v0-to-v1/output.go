@@ -80,10 +80,6 @@ func detail(key, value string) {
 	fmt.Printf("    %s%-22s%s %s\n", colorDim, key, colorReset, value)
 }
 
-func resource(kind, namespace, name string) {
-	fmt.Printf("    %s%s%s %s/%s\n", colorDim, kind, colorReset, namespace, name)
-}
-
 func printCheckResults(checks []migration.CheckResult) {
 	for _, c := range checks {
 		if c.Passed {

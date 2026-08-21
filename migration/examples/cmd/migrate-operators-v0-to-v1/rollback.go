@@ -5,13 +5,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/operator-framework/library-olm/migration/pkg/migration"
 	ocv1 "github.com/operator-framework/operator-controller/api/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/operator-framework/library-olm/migration/pkg/migration"
 )
 
 var (
-	rollbackAll                bool
+	rollbackAll                  bool
 	rollbackAcknowledgeInstalled bool
 )
 
@@ -37,7 +37,7 @@ func init() {
 	rollbackCmd.Flags().BoolVar(&rollbackAcknowledgeInstalled, "acknowledge-installed", false, "Confirm rollback even when CE is Installed=True")
 }
 
-func runRollback(cmd *cobra.Command, args []string) error {
+func runRollback(cmd *cobra.Command, args []string) error { //nolint:nestif
 	if rollbackAll && len(args) > 0 {
 		return fmt.Errorf("cannot specify both a CE name and --all")
 	}
@@ -54,7 +54,7 @@ func runRollback(cmd *cobra.Command, args []string) error {
 	m.Progress = progressFunc
 	ctx := cmd.Context()
 
-	if rollbackAll {
+	if rollbackAll { //nolint:nestif
 		var ceList ocv1.ClusterExtensionList
 		if err := c.List(ctx, &ceList); err != nil {
 			return fmt.Errorf("failed to list ClusterExtensions: %w", err)
@@ -97,14 +97,5 @@ func runRollback(cmd *cobra.Command, args []string) error {
 
 	success(fmt.Sprintf("ClusterExtension %s rolled back; Subscription restored", ceName))
 	fmt.Println()
-	return nil
-}
-
-// rollbackSingleCE is a helper used when we have the CE object in hand.
-func rollbackSingleCE(ctx interface{}, c client.Client, ce *ocv1.ClusterExtension, acknowledgeInstalled bool) error {
-	_ = c
-	_ = ce
-	_ = ctx
-	_ = acknowledgeInstalled
 	return nil
 }

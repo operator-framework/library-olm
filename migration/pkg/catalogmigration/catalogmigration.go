@@ -26,8 +26,8 @@ const (
 
 // CatalogMigratorOptions configures the catalog migration.
 type CatalogMigratorOptions struct {
-	DryRun                    bool
-	DeleteCatalogSource       bool
+	DryRun                      bool
+	DeleteCatalogSource         bool
 	AcknowledgePriorityOverflow bool
 }
 
@@ -52,9 +52,9 @@ func NewCatalogMigrator(c client.Client) *CatalogMigrator {
 
 // MigrateCatalogs processes all CatalogSources across all namespaces and maps them to ClusterCatalogs.
 // Strategy (per R8):
-//  - Same name + same image across namespaces → consolidate into a single ClusterCatalog
-//  - Same name + different image across namespaces → use <name>-<namespace> for each
-//  - Unique name → use metadata.name directly
+//   - Same name + same image across namespaces → consolidate into a single ClusterCatalog
+//   - Same name + different image across namespaces → use <name>-<namespace> for each
+//   - Unique name → use metadata.name directly
 func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigratorOptions) ([]CatalogMigrationResult, error) {
 	// List all CatalogSources across all namespaces
 	var csList operatorsv1alpha1.CatalogSourceList
@@ -368,15 +368,15 @@ func convertPollInterval(cs operatorsv1alpha1.CatalogSource) int {
 	}
 
 	if cs.Spec.UpdateStrategy == nil || cs.Spec.UpdateStrategy.RegistryPoll == nil {
-		return 0
+		return defaultPollMinutes
 	}
 
-	interval := cs.Spec.UpdateStrategy.RegistryPoll.Interval
+	interval := cs.Spec.UpdateStrategy.Interval
 	if interval == nil || interval.Duration == 0 {
 		return 0
 	}
 
-	minutes := int(interval.Duration.Minutes())
+	minutes := int(interval.Minutes())
 	if minutes < 1 {
 		minutes = 1
 	}
