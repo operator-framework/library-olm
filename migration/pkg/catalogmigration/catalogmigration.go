@@ -20,8 +20,6 @@ import (
 const (
 	// MigratedFromCatalogSourceAnnotation is set on ClusterCatalog when first created or adopted.
 	MigratedFromCatalogSourceAnnotation = "olm.operatorframework.io/migrated-from-catalogsource"
-
-	defaultPollMinutes = 15
 )
 
 // CatalogMigratorOptions configures the catalog migration.
@@ -385,8 +383,11 @@ func convertPollInterval(cs operatorsv1alpha1.CatalogSource) int {
 		return 0
 	}
 
+	// Only convert explicitly set values (R8). When no UpdateStrategy is configured,
+	// leave pollIntervalMinutes unset so OLMv1 uses its own default rather than
+	// inheriting the OLMv0 default (15m) which was never explicitly chosen.
 	if cs.Spec.UpdateStrategy == nil || cs.Spec.UpdateStrategy.RegistryPoll == nil {
-		return defaultPollMinutes
+		return 0
 	}
 
 	interval := cs.Spec.UpdateStrategy.Interval
