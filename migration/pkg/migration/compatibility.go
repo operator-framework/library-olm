@@ -80,13 +80,21 @@ func (m *Migrator) checkAllNamespacesMode(ctx context.Context, opts Options) ([]
 		})
 	}
 
-	// spec.selector
+	// spec.selector — scoped namespace selector means not AllNamespaces (C1 — soft)
 	if og.Spec.Selector != nil && !isEmptyLabelSelector(og.Spec.Selector) {
-		checks = append(checks, CheckResult{
-			Name:    "No namespace selector",
-			Passed:  false,
-			Message: "OperatorGroup has spec.selector set; must convert to spec.targetNamespaces before migration",
-		})
+		if opts.AcknowledgeWatchScopeChange {
+			checks = append(checks, CheckResult{
+				Name:    "No namespace selector",
+				Passed:  true,
+				Message: "overridden: operator will run AllNamespaces post-migration (watch scope change acknowledged)",
+			})
+		} else {
+			checks = append(checks, CheckResult{
+				Name:    "No namespace selector",
+				Passed:  false,
+				Message: "OperatorGroup has spec.selector set; OLMv1 uses AllNamespaces — pass --acknowledge-watch-scope-change to override",
+			})
+		}
 	} else {
 		checks = append(checks, CheckResult{
 			Name:    "No namespace selector",
