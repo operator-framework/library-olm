@@ -38,6 +38,9 @@ func (m *Migrator) CheckCompatibility(ctx context.Context, opts Options, csv *op
 	}
 	report.Checks = append(report.Checks, condCheck)
 
+	// OLMv0-API RBAC check (C5 — soft)
+	report.Checks = append(report.Checks, checkOLMv0APIAccess(opts, csv))
+
 	return report, nil
 }
 
@@ -235,6 +238,71 @@ func checkNoDependencies(propertiesJSON string) []CheckResult {
 		}}
 	}
 	return issues
+}
+
+// olmv0APIResources is the set of operators.coreos.com resource names that signal OLMv0-API
+// dependency (per R3 C5). operatorconditions is explicitly excluded — OLMv0 stamps that RBAC
+// on every operator and its presence is not a usage signal.
+var olmv0APIResources = map[string]bool{
+	"subscriptions":          true,
+	"installplans":           true,
+	"clusterserviceversions": true,
+	"catalogsources":         true,
+}
+
+// checkOLMv0APIAccess implements C5: flag operators whose clusterPermissions grant access to
+// OLMv0 APIs (operators.coreos.com, excluding operatorconditions) without also granting
+// equivalent OLMv1 API access (olm.operatorframework.io). Operators updated for OLMv1
+// compatibility carry both sets of permissions and pass this check.
+func checkOLMv0APIAccess(opts Options, csv *operatorsv1alpha1.ClusterServiceVersion) CheckResult {
+	hasOLMv0Access := false
+	hasOLMv1Access := false
+
+	for _, perm := range csv.Spec.InstallStrategy.StrategySpec.ClusterPermissions {
+		for _, rule := range perm.Rules {
+			for _, group := range rule.APIGroups {
+				switch group {
+				case "operators.coreos.com":
+					for _, res := range rule.Resources {
+						if olmv0APIResources[res] || res == "*" {
+							hasOLMv0Access = true
+						}
+					}
+				case "olm.operatorframework.io":
+					hasOLMv1Access = true
+				}
+			}
+		}
+	}
+
+	if !hasOLMv0Access {
+		return CheckResult{
+			Name:    "OLMv0-API RBAC",
+			Passed:  true,
+			Message: "CSV clusterPermissions do not grant OLMv0 API access",
+		}
+	}
+	if hasOLMv1Access {
+		return CheckResult{
+			Name:    "OLMv0-API RBAC",
+			Passed:  true,
+			Message: "CSV clusterPermissions grant both OLMv0 and OLMv1 API access (updated for compatibility)",
+		}
+	}
+
+	// OLMv0 access without OLMv1 access — soft block
+	if opts.AcknowledgeOLMv0APIAccess {
+		return CheckResult{
+			Name:    "OLMv0-API RBAC",
+			Passed:  true,
+			Message: "overridden: OLMv0 API RBAC without OLMv1 equivalent (olmv0-api-access acknowledged)",
+		}
+	}
+	return CheckResult{
+		Name:    "OLMv0-API RBAC",
+		Passed:  false,
+		Message: "CSV clusterPermissions grant operators.coreos.com access without OLMv1 equivalent; pass --acknowledge-olmv0-api-access to override",
+	}
 }
 
 // checkNoOperatorConditions enforces C4 — no active OperatorCondition status entries.
