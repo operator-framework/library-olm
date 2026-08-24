@@ -136,6 +136,17 @@ func (m *Migrator) GetBundleInfo(ctx context.Context, opts Options, csv *operato
 	info.BundleName = csv.Name
 	info.Version = parseCSVVersion(csv)
 
+	// R4: spec.config → CE deploymentConfig. Drop spec.config.selector (never honored in
+	// OLMv0; no CE equivalent) and warn if it was set.
+	if sub.Spec.Config != nil {
+		cfg := sub.Spec.Config.DeepCopy()
+		if cfg.Selector != nil {
+			m.progress("Warning: Subscription spec.config.selector is not supported by OLMv1 and will be dropped during migration")
+			cfg.Selector = nil
+		}
+		info.SubscriptionConfig = cfg
+	}
+
 	if ip != nil {
 		for _, bl := range ip.Status.BundleLookups {
 			if bl.Identifier == csv.Name {

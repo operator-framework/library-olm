@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -447,6 +448,24 @@ func (m *Migrator) CreateClusterExtension(ctx context.Context, opts Options, inf
 			MatchLabels: map[string]string{
 				LabelMetadataName: info.ResolvedCatalogName,
 			},
+		}
+	}
+
+	// R4: map spec.config → CE.spec.config.inline.deploymentConfig (R4, R7).
+	// DeploymentConfig is a type alias of SubscriptionConfig in operator-controller;
+	// the JSON key must be "deploymentConfig" per the bundle config schema.
+	if info.SubscriptionConfig != nil {
+		cfgJSON, err := json.Marshal(info.SubscriptionConfig)
+		if err != nil {
+			return fmt.Errorf("failed to marshal SubscriptionConfig for CE: %w", err)
+		}
+		inlineJSON, err := json.Marshal(map[string]json.RawMessage{"deploymentConfig": cfgJSON})
+		if err != nil {
+			return fmt.Errorf("failed to marshal CE inline config: %w", err)
+		}
+		ce.Spec.Config = &ocv1.ClusterExtensionConfig{
+			ConfigType: ocv1.ClusterExtensionConfigTypeInline,
+			Inline:     &apiextensionsv1.JSON{Raw: inlineJSON},
 		}
 	}
 

@@ -35,7 +35,7 @@ type channelEntry struct {
 // CatalogPackageInfo holds the results of querying a catalog for a package.
 type CatalogPackageInfo struct {
 	Found             bool
-	DefaultChannel    string   // the package's declared defaultChannel from the FBC
+	DefaultChannel    string // the package's declared defaultChannel from the FBC
 	AvailableVersions []string
 	AvailableChannels []string
 	VersionFound      bool

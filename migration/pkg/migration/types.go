@@ -86,6 +86,10 @@ type MigrationInfo struct {
 	ResolvedCatalogName string
 	CollectedObjects    []unstructured.Unstructured
 
+	// SubscriptionConfig holds spec.config from the Subscription for mapping to CE (R4).
+	// spec.config.selector is dropped (never honored in OLMv0; no CE equivalent).
+	SubscriptionConfig *operatorsv1alpha1.SubscriptionConfig
+
 	// Subscription spec JSON for the CE migration-subscription-backup annotation (R2.5).
 	SubscriptionBackupJSON string
 	// OperatorGroup spec JSON for the CE migration-operatorgroup-backup annotation (R2.5).
