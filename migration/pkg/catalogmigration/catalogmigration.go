@@ -38,6 +38,7 @@ type CatalogMigrationResult struct {
 	ClusterCatalogName     string
 	Status                 string // "created", "adopted", "skipped", "error", "dry-run"
 	Reason                 string
+	Notes                  []string // informational notices (e.g. dropped fields with no OLMv1 equivalent)
 }
 
 // CatalogMigrator migrates OLMv0 CatalogSources to OLMv1 ClusterCatalogs.
@@ -181,6 +182,15 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 		// Convert poll interval
 		pollMinutes := convertPollInterval(cs)
 
+		// Collect informational notes for fields that have no OLMv1 equivalent (R8).
+		var notes []string
+		if len(cs.Spec.Secrets) > 0 {
+			notes = append(notes, fmt.Sprintf("spec.secrets (%d secret(s)) has no OLMv1 equivalent; OLMv1 uses the cluster global pull secret", len(cs.Spec.Secrets)))
+		}
+		if cs.Spec.GrpcPodConfig != nil {
+			notes = append(notes, "spec.grpcPodConfig has no OLMv1 equivalent; catalogd manages the serving pod configuration")
+		}
+
 		csRef := fmt.Sprintf("%s/%s", cs.Namespace, cs.Name)
 
 		// Check if already created this run (consolidation case)
@@ -191,6 +201,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 				ClusterCatalogName:     ccName,
 				Status:                 "adopted",
 				Reason:                 fmt.Sprintf("consolidated into shared ClusterCatalog %s", ccName),
+				Notes:                  notes,
 			})
 			continue
 		}
@@ -205,6 +216,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 					ClusterCatalogName:     existing.Name,
 					Status:                 "dry-run",
 					Reason:                 fmt.Sprintf("would adopt existing ClusterCatalog %s", existing.Name),
+					Notes:                  notes,
 				})
 				continue
 			}
@@ -216,6 +228,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 					ClusterCatalogName:     existing.Name,
 					Status:                 "error",
 					Reason:                 fmt.Sprintf("failed to annotate existing ClusterCatalog: %v", err),
+					Notes:                  notes,
 				})
 				continue
 			}
@@ -227,6 +240,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 				ClusterCatalogName:     existing.Name,
 				Status:                 "adopted",
 				Reason:                 "existing ClusterCatalog with matching image adopted",
+				Notes:                  notes,
 			})
 
 			// Handle --delete-catalogsource
@@ -244,6 +258,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 				ClusterCatalogName:     ccName,
 				Status:                 "dry-run",
 				Reason:                 fmt.Sprintf("would create ClusterCatalog %s from image %s", ccName, cs.Spec.Image),
+				Notes:                  notes,
 			})
 			continue
 		}
@@ -277,6 +292,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 				ClusterCatalogName:     ccName,
 				Status:                 "error",
 				Reason:                 fmt.Sprintf("failed to create ClusterCatalog: %v", err),
+				Notes:                  notes,
 			})
 			continue
 		}
@@ -289,6 +305,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 				ClusterCatalogName:     ccName,
 				Status:                 "error",
 				Reason:                 fmt.Sprintf("ClusterCatalog not serving: %v", err),
+				Notes:                  notes,
 			})
 			continue
 		}
@@ -302,6 +319,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 			ClusterCatalogName:     ccName,
 			Status:                 "created",
 			Reason:                 fmt.Sprintf("created from image %s", cs.Spec.Image),
+			Notes:                  notes,
 		})
 
 		// Handle --delete-catalogsource
