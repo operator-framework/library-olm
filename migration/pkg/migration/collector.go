@@ -254,12 +254,17 @@ func (m *Migrator) CollectResources(ctx context.Context, opts Options, csv *oper
 	return collected, nil
 }
 
+// resourceKey produces a dedup key that is stable across API version aliases.
+// APIVersion is intentionally excluded: the same resource may be returned from
+// different collection sources using different version strings (e.g. "v1" vs
+// "core/v1"), and including it would prevent correct deduplication (R5).
 func resourceKey(obj unstructured.Unstructured) string {
+	gvk := obj.GetObjectKind().GroupVersionKind()
 	return fmt.Sprintf("%s/%s/%s/%s",
-		obj.GetObjectKind().GroupVersionKind().GroupKind().String(),
+		gvk.Group,
+		gvk.Kind,
 		obj.GetNamespace(),
-		obj.GetName(),
-		obj.GetAPIVersion())
+		obj.GetName())
 }
 
 func (m *Migrator) getCRDsByPackage(ctx context.Context, opts Options, packageName string) ([]unstructured.Unstructured, error) {
