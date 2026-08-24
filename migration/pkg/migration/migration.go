@@ -111,6 +111,13 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	}
 	info.CollectedObjects = objects
 
+	// R9: warn about TLS certificate pivot. OLMv0 manages certs directly via its own
+	// cert rotation; OLMv1 delegates to cert-manager (upstream) or openshift-service-ca
+	// (downstream). Pod restarts are expected during this pivot as the new cert secrets
+	// are provisioned. This is known behavior and does not indicate a migration failure.
+	m.progress("Note: TLS certificate management will transfer from OLMv0 to cert-manager/service-ca; " +
+		"expect pod restarts while new cert secrets are provisioned")
+
 	if err := m.CreateClusterObjectSet(ctx, opts, info); err != nil {
 		if recoverErr := m.RecoverBeforeCE(ctx, opts, backup); recoverErr != nil {
 			return fmt.Errorf("COS creation failed: %w; recovery also failed: %v", err, recoverErr)
