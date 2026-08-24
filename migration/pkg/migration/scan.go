@@ -22,8 +22,11 @@ type OperatorScanResult struct {
 	Status                OperatorStatus // four-state classification
 	Reason                string         // human-readable explanation of the status (R1.3)
 	Eligible              bool           // true when Status == Eligible (backwards compat)
-	Error                 error
-	FailedChecks          []CheckResult
+	// Warnings are informational notices that do not affect eligibility (R9).
+	// Example: other installed operators declare a dependency on this package.
+	Warnings     []string
+	Error        error
+	FailedChecks []CheckResult
 }
 
 // ScanAllSubscriptions discovers all Subscriptions on the cluster, checks each for migration
@@ -125,7 +128,7 @@ func (m *Migrator) ScanAllSubscriptions(ctx context.Context) ([]OperatorScanResu
 
 		// C7: catalog availability (hard check — no override).
 		// Only run when readiness+compat pass to avoid noisy catalog errors for clearly ineligible operators.
-		if len(result.FailedChecks) == 0 {
+		if len(result.FailedChecks) == 0 { //nolint:nestif
 			catalogName, catalogErr := m.ResolveClusterCatalog(ctx, &MigrationInfo{
 				PackageName: sub.Spec.Package,
 				Channel:     sub.Spec.Channel,
@@ -149,6 +152,11 @@ func (m *Migrator) ScanAllSubscriptions(ctx context.Context) ([]OperatorScanResu
 				result.Status = OperatorStatusEligible
 				result.Reason = "passes all readiness, compatibility, and catalog-availability checks"
 				result.Eligible = true
+				// R9: warn if other installed operators declare a dependency on this package.
+				if dependents := m.findDependents(ctx, sub.Spec.Package); len(dependents) > 0 {
+					result.Warnings = append(result.Warnings,
+						fmt.Sprintf("other operator(s) may depend on package %q: %v — verify they remain functional after migration", sub.Spec.Package, dependents))
+				}
 			}
 		} else {
 			result.Status = OperatorStatusIneligible
@@ -257,6 +265,11 @@ func (m *Migrator) ScanSubscription(ctx context.Context, opts Options) (*Operato
 	result.Status = OperatorStatusEligible
 	result.Reason = "passes all readiness, compatibility, and catalog-availability checks"
 	result.Eligible = true
+	// R9: warn if other installed operators declare a dependency on this package.
+	if dependents := m.findDependents(ctx, result.PackageName); len(dependents) > 0 {
+		result.Warnings = append(result.Warnings,
+			fmt.Sprintf("other operator(s) may depend on package %q: %v — verify they remain functional after migration", result.PackageName, dependents))
+	}
 	return result, nil
 }
 
@@ -454,6 +467,53 @@ func (m *Migrator) ScanAll(ctx context.Context) ([]OperatorScanResult, error) {
 func (m *Migrator) Check(ctx context.Context, opts Options) (*OperatorScanResult, error) {
 	opts.ApplyDefaults()
 	return m.ScanSubscription(ctx, opts)
+}
+
+// findDependents returns the names of installed operators (Subscription names) whose
+// bundle properties declare an olm.package.required dependency on packageName (R9).
+// The spec requires a warning — not a block — when migrating an operator others depend on.
+func (m *Migrator) findDependents(ctx context.Context, packageName string) []string {
+	var subList operatorsv1alpha1.SubscriptionList
+	if err := m.Client.List(ctx, &subList); err != nil {
+		return nil
+	}
+
+	var dependents []string
+	for _, sub := range subList.Items {
+		if sub.Spec.Package == packageName {
+			continue // skip the operator itself
+		}
+		if sub.Status.InstalledCSV == "" {
+			continue
+		}
+		var csv operatorsv1alpha1.ClusterServiceVersion
+		if err := m.Client.Get(ctx, client.ObjectKey{
+			Name:      sub.Status.InstalledCSV,
+			Namespace: sub.Namespace,
+		}, &csv); err != nil {
+			continue
+		}
+		propsJSON := csv.Annotations["operatorframework.io/properties"]
+		if propsJSON == "" {
+			continue
+		}
+		props, err := parseProperties(propsJSON)
+		if err != nil {
+			continue
+		}
+		for _, p := range props {
+			if p.Type == "olm.package.required" {
+				var req struct {
+					PackageName string `json:"packageName"`
+				}
+				if err := json.Unmarshal(p.Value, &req); err == nil && req.PackageName == packageName {
+					dependents = append(dependents, fmt.Sprintf("%s/%s", sub.Namespace, sub.Name))
+					break
+				}
+			}
+		}
+	}
+	return dependents
 }
 
 // Gather collects and returns everything that would be migrated without making
