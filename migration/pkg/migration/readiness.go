@@ -22,7 +22,7 @@ func (m *Migrator) CheckReadiness(ctx context.Context, opts Options) (*PreMigrat
 		return nil, fmt.Errorf("failed to get Subscription %s/%s: %w", opts.SubscriptionNamespace, opts.SubscriptionName, err)
 	}
 
-	// Subscription state
+	// Subscription state (C8 — soft; same flag as CSV health)
 	if sub.Status.State == operatorsv1alpha1.SubscriptionStateAtLatest ||
 		sub.Status.State == operatorsv1alpha1.SubscriptionStateUpgradePending {
 		report.Checks = append(report.Checks, CheckResult{
@@ -30,11 +30,17 @@ func (m *Migrator) CheckReadiness(ctx context.Context, opts Options) (*PreMigrat
 			Passed:  true,
 			Message: fmt.Sprintf("state is %q", sub.Status.State),
 		})
+	} else if opts.AcknowledgeNotSteadyState {
+		report.Checks = append(report.Checks, CheckResult{
+			Name:    "Subscription state",
+			Passed:  true,
+			Message: fmt.Sprintf("overridden: Subscription state is %q (not steady state acknowledged)", sub.Status.State),
+		})
 	} else {
 		report.Checks = append(report.Checks, CheckResult{
 			Name:    "Subscription state",
 			Passed:  false,
-			Message: fmt.Sprintf("must be %q or %q, got %q", operatorsv1alpha1.SubscriptionStateAtLatest, operatorsv1alpha1.SubscriptionStateUpgradePending, sub.Status.State),
+			Message: fmt.Sprintf("must be %q or %q, got %q; pass --acknowledge-not-steady-state to override", operatorsv1alpha1.SubscriptionStateAtLatest, operatorsv1alpha1.SubscriptionStateUpgradePending, sub.Status.State),
 		})
 	}
 
