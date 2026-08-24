@@ -106,12 +106,13 @@ func (m *Migrator) checkAllNamespacesMode(ctx context.Context, opts Options) ([]
 		})
 	}
 
-	// spec.upgradeStrategy
+	// spec.upgradeStrategy — TechPreviewUnsafeFailForward is not mapped to OLMv1 and is not
+	// equivalent to SelfCertified. R6 says this is informational only: warn but do not block.
 	if og.Spec.UpgradeStrategy != "" && og.Spec.UpgradeStrategy != operatorsv1.UpgradeStrategyDefault {
 		checks = append(checks, CheckResult{
 			Name:    "Upgrade strategy",
-			Passed:  false,
-			Message: fmt.Sprintf("must be %q or unset, got %q", operatorsv1.UpgradeStrategyDefault, og.Spec.UpgradeStrategy),
+			Passed:  true,
+			Message: fmt.Sprintf("OperatorGroup upgradeStrategy %q is not mapped to OLMv1 and will be ignored post-migration", og.Spec.UpgradeStrategy),
 		})
 	} else {
 		checks = append(checks, CheckResult{
