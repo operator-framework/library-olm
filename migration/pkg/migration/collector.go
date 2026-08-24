@@ -299,11 +299,11 @@ func (m *Migrator) gatherResourcesByOwnerLabel(ctx context.Context, csvName stri
 			Kind:    gvk.Kind + "List",
 		})
 
+		// R5: match on olm.owner=<csv-name> only. The spec does not require
+		// olm.managed=true; adding it would miss resources that carry olm.owner
+		// but were not stamped with the managed label.
 		if err := m.Client.List(ctx, &list,
-			client.MatchingLabels{
-				"olm.managed": "true",
-				"olm.owner":   csvName,
-			},
+			client.MatchingLabels{"olm.owner": csvName},
 		); err != nil {
 			continue
 		}
