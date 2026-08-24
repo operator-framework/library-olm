@@ -49,6 +49,18 @@ type Options struct {
 	// DeleteOperatorGroup deletes the OperatorGroup when both this flag is set AND
 	// no other Subscriptions remain in the namespace (R6).
 	DeleteOperatorGroup bool
+
+	// SystemNamespace is the namespace where COS ref Secrets are created (R2.4).
+	// Defaults to "olmv1-system" when empty.
+	SystemNamespace string
+}
+
+// systemNamespace returns the effective system namespace.
+func (o Options) systemNamespace() string {
+	if o.SystemNamespace != "" {
+		return o.SystemNamespace
+	}
+	return "olmv1-system"
 }
 
 // ApplyDefaults fills in default values for any unset optional fields.

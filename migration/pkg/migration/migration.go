@@ -260,6 +260,7 @@ func (m *Migrator) RecoverBeforeCE(ctx context.Context, opts Options, backup *Ba
 // boxcutter ClusterObjectDeployment design.
 func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, info *MigrationInfo) error {
 	cosName := fmt.Sprintf("%s-1", opts.ClusterExtensionName)
+	systemNS := opts.systemNamespace()
 
 	cosObjects := make([]ocv1ac.ClusterObjectSetObjectApplyConfiguration, 0, len(info.CollectedObjects))
 	for _, obj := range info.CollectedObjects {
@@ -270,6 +271,39 @@ func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, inf
 	}
 
 	phases := PhaseSort(cosObjects)
+
+	// Pack inline objects into Secrets to stay within etcd's size limit (R2.4).
+	// SecretPacker gzip-compresses large objects and splits across multiple Secrets
+	// when the combined size would exceed 900 KiB per Secret.
+	packer := &secretPacker{
+		RevisionName:    cosName,
+		OwnerName:       opts.ClusterExtensionName,
+		SystemNamespace: systemNS,
+	}
+	packed, err := packer.pack(phases)
+	if err != nil {
+		return fmt.Errorf("failed to pack COS objects into Secrets: %w", err)
+	}
+
+	// Create ref Secrets before the COS so the COS controller can find them immediately.
+	for i := range packed.Secrets {
+		secret := &packed.Secrets[i]
+		if err := m.Client.Create(ctx, secret); err != nil {
+			return fmt.Errorf("failed to create COS ref Secret %s: %w", secret.Name, err)
+		}
+	}
+
+	// Replace inline objects with Secret refs in the phases.
+	for pos, ref := range packed.Refs {
+		phaseIdx, objIdx := pos[0], pos[1]
+		localRef := ref
+		phases[phaseIdx].Objects[objIdx].Object = nil
+		phases[phaseIdx].Objects[objIdx].Ref = &ocv1ac.ObjectSourceRefApplyConfiguration{
+			Name:      &localRef.Name,
+			Namespace: &localRef.Namespace,
+			Key:       &localRef.Key,
+		}
+	}
 
 	cosSpec := ocv1ac.ClusterObjectSetSpec().
 		WithRevision(1).
