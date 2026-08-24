@@ -90,13 +90,23 @@ func (m *Migrator) GetCSVAndInstallPlan(ctx context.Context, opts Options) (*ope
 	}
 
 	var ip *operatorsv1alpha1.InstallPlan
+	ipName, ipNamespace := "", sub.Namespace
 	if sub.Status.InstallPlanRef != nil {
+		ipName = sub.Status.InstallPlanRef.Name
+		if sub.Status.InstallPlanRef.Namespace != "" {
+			ipNamespace = sub.Status.InstallPlanRef.Namespace
+		}
+	} else if sub.Status.Install != nil {
+		// Fallback to the deprecated status.install field (R4).
+		ipName = sub.Status.Install.Name
+	}
+	if ipName != "" {
 		ip = &operatorsv1alpha1.InstallPlan{}
 		if err := m.Client.Get(ctx, types.NamespacedName{
-			Name:      sub.Status.InstallPlanRef.Name,
-			Namespace: sub.Status.InstallPlanRef.Namespace,
+			Name:      ipName,
+			Namespace: ipNamespace,
 		}, ip); err != nil {
-			return nil, nil, nil, fmt.Errorf("failed to get InstallPlan %s: %w", sub.Status.InstallPlanRef.Name, err)
+			return nil, nil, nil, fmt.Errorf("failed to get InstallPlan %s: %w", ipName, err)
 		}
 	}
 
