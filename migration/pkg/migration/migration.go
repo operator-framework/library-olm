@@ -253,6 +253,11 @@ func (m *Migrator) RecoverBeforeCE(ctx context.Context, opts Options, backup *Ba
 // CreateClusterObjectSet builds and creates a COS from the collected resources.
 // It uses CollisionProtection=IfNoController so OLMv1 can adopt existing resources (including CRDs).
 // The COS is annotated with the source Subscription reference.
+//
+// TODO(R2.7): when boxcutter phase 2 introduces ClusterObjectDeployment as a replacement or
+// complement to ClusterObjectSet, update this function (and its callers) to create whichever
+// OLMv1 revision object(s) are appropriate. Track upstream progress at OPRUN-4716 and the
+// boxcutter ClusterObjectDeployment design.
 func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, info *MigrationInfo) error {
 	cosName := fmt.Sprintf("%s-1", opts.ClusterExtensionName)
 
