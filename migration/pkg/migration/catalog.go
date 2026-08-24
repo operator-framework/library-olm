@@ -20,11 +20,12 @@ import (
 
 // catalogMeta represents a single entry from the catalog JSONL response.
 type catalogMeta struct {
-	Schema  string          `json:"schema"`
-	Name    string          `json:"name"`
-	Package string          `json:"package"`
-	Props   json.RawMessage `json:"properties,omitempty"`
-	Entries []channelEntry  `json:"entries,omitempty"`
+	Schema         string          `json:"schema"`
+	Name           string          `json:"name"`
+	Package        string          `json:"package"`
+	DefaultChannel string          `json:"defaultChannel,omitempty"`
+	Props          json.RawMessage `json:"properties,omitempty"`
+	Entries        []channelEntry  `json:"entries,omitempty"`
 }
 
 type channelEntry struct {
@@ -34,6 +35,7 @@ type channelEntry struct {
 // CatalogPackageInfo holds the results of querying a catalog for a package.
 type CatalogPackageInfo struct {
 	Found             bool
+	DefaultChannel    string   // the package's declared defaultChannel from the FBC
 	AvailableVersions []string
 	AvailableChannels []string
 	VersionFound      bool
@@ -98,6 +100,9 @@ func parseCatalogResponse(body io.Reader, packageName, version, channel string) 
 		case "olm.package":
 			if meta.Name == packageName {
 				info.Found = true
+				if meta.DefaultChannel != "" {
+					info.DefaultChannel = meta.DefaultChannel
+				}
 			}
 		case "olm.bundle":
 			if meta.Package != packageName {

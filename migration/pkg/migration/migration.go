@@ -421,8 +421,25 @@ func (m *Migrator) CreateClusterExtension(ctx context.Context, opts Options, inf
 		ce.Spec.Source.Catalog.Version = info.Version
 	}
 
-	if info.Channel != "" {
-		ce.Spec.Source.Catalog.Channels = []string{info.Channel}
+	// R4: when spec.channel is empty, OLMv0 resolved the defaultChannel from the catalog.
+	// OLMv1 without channels considers upgrade edges across *all* channels, which may differ.
+	// Query the resolved ClusterCatalog for the package's declared defaultChannel and set it
+	// explicitly. Warn if it cannot be determined (R4 spec requirement).
+	channel := info.Channel
+	if channel == "" && info.ResolvedCatalogName != "" && m.RESTConfig != nil {
+		var catalog ocv1.ClusterCatalog
+		if err := m.Client.Get(ctx, client.ObjectKey{Name: info.ResolvedCatalogName}, &catalog); err == nil {
+			pkgInfo, qErr := m.QueryCatalogForPackage(ctx, &catalog, info.PackageName, "", "", m.RESTConfig)
+			if qErr == nil && pkgInfo.DefaultChannel != "" {
+				channel = pkgInfo.DefaultChannel
+				m.progress(fmt.Sprintf("Resolved default channel %q for package %q from ClusterCatalog %s", channel, info.PackageName, info.ResolvedCatalogName))
+			} else {
+				m.progress(fmt.Sprintf("Warning: could not determine defaultChannel for package %q — CE will consider all channels; verify upgrade behavior post-migration", info.PackageName))
+			}
+		}
+	}
+	if channel != "" {
+		ce.Spec.Source.Catalog.Channels = []string{channel}
 	}
 
 	if info.ResolvedCatalogName != "" {
