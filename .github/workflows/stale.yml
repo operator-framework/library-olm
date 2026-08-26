@@ -1,0 +1,31 @@
+name: "Close stale issues and PRs"
+
+on:
+  schedule:
+    - cron: "0 1 * * *"
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/stale@v9
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          days-before-stale: 90
+          days-before-close: 30
+          stale-issue-label: "lifecycle/stale"
+          stale-pr-label: "lifecycle/stale"
+          stale-issue-message: >
+            Issues go stale after 90 days of inactivity. If there is no further
+            activity, the issue will be closed in another 30 days.
+          stale-pr-message: >
+            PRs go stale after 90 days of inactivity. If there is no further
+            activity, the PR will be closed in another 30 days.
+          close-issue-message: "This issue has been closed due to inactivity."
+          close-pr-message: "This pull request has been closed due to inactivity."
+          exempt-issue-labels: "security,planned,priority/critical,lifecycle/frozen,verified"
+          exempt-pr-labels: "security,planned,priority/critical,lifecycle/frozen,verified"
+          operations-per-run: 30

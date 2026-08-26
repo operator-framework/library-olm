@@ -2,7 +2,6 @@
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
 # Binaries for programs and plugins
-/bin/
 *.exe
 *.exe~
 *.dll
@@ -19,7 +18,7 @@ coverage.*
 profile.cov
 
 # Dependency directories (remove the comment below to include it)
-vendor/
+# vendor/
 
 # Go workspace file
 go.work
@@ -28,11 +27,6 @@ go.work.sum
 # env file
 .env
 
-# Editor/IDE/OS
- .idea/
- .vscode/
-*.swp
-.DS_Store
-
-# Migration artifacts produced at runtime
-olm-migration-backup-*/
+# Editor/IDE
+# .idea/
+# .vscode/
