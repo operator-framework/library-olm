@@ -1,0 +1,77 @@
+version: "2"
+output:
+  formats:
+    tab:
+      path: stdout
+      colors: false
+linters:
+  enable:
+    - asciicheck
+    - bodyclose
+    - errorlint
+    - gosec
+    - importas
+    - misspell
+    - nestif
+    - nonamedreturns
+    - prealloc
+    - staticcheck
+    - testifylint
+    - tparallel
+    - unconvert
+    - unparam
+    - whitespace
+  settings:
+    errorlint:
+      errorf: false
+    importas:
+      alias:
+        - pkg: k8s.io/apimachinery/pkg/apis/meta/v1
+          alias: metav1
+        - pkg: k8s.io/apimachinery/pkg/api/errors
+          alias: apierrors
+        - pkg: k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1
+          alias: apiextensionsv1
+        - pkg: k8s.io/apimachinery/pkg/util/runtime
+          alias: utilruntime
+        - pkg: ^k8s\.io/api/([^/]+)/(v[^/]+)$
+          alias: $1$2
+        - pkg: sigs.k8s.io/controller-runtime
+          alias: ctrl
+        - pkg: github.com/blang/semver/v4
+          alias: bsemver
+        - pkg: github.com/operator-framework/library-olm/migration/pkg/migration
+          alias: migration
+        - pkg: github.com/operator-framework/library-olm/migration/pkg/catalogmigration
+          alias: catalogmigration
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gci
+    - gofmt
+  settings:
+    gci:
+      sections:
+        - standard
+        - dot
+        - default
+        - prefix(github.com/operator-framework/library-olm)
+        - prefix(github.com/operator-framework)
+        - localmodule
+      custom-order: true
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
