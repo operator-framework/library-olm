@@ -27,9 +27,8 @@ func (m *Migrator) CheckCompatibility(ctx context.Context, opts Options, csv *op
 	// Dependency checks (C2 — hard block)
 	report.Checks = append(report.Checks, checkNoDependencies(bundleProperties)...)
 
-	// C3 (APIService definitions) was removed: OLMv1 now manages APIService objects
-	// natively via the registry+v1 renderer (OPRUN-4723). Operators with owned
-	// APIService definitions are now Eligible with no override required.
+	// APIService definitions check (C3 — hard block)
+	report.Checks = append(report.Checks, checkNoAPIServices(csv))
 
 	// OperatorCondition checks (C4)
 	condCheck, err := m.checkNoOperatorConditions(ctx, opts, csv)
@@ -192,6 +191,25 @@ func parseProperties(propertiesJSON string) ([]olmProperty, error) {
 		return nil, err
 	}
 	return wrapped.Properties, nil
+}
+
+// checkNoAPIServices enforces C3 — no owned APIService definitions (hard block).
+// OLMv1's registry+v1 renderer does not support APIService-based operators
+// end-to-end. The underlying implementation exists in operator-controller as infrastructure
+// but is not supported by the Boxcutter rendering path.
+func checkNoAPIServices(csv *operatorsv1alpha1.ClusterServiceVersion) CheckResult {
+	if len(csv.Spec.APIServiceDefinitions.Owned) > 0 {
+		return CheckResult{
+			Name:    "No APIService definitions",
+			Passed:  false,
+			Message: "CSV has spec.apiservicedefinitions.owned set; OLMv1 does not support APIService-based operators",
+		}
+	}
+	return CheckResult{
+		Name:    "No APIService definitions",
+		Passed:  true,
+		Message: "CSV does not define owned APIServices",
+	}
 }
 
 // checkNoDependencies enforces C2 — no olm.package.required or olm.gvk.required (hard block).

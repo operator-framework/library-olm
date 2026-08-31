@@ -85,9 +85,10 @@ Verified during Phase 8 E2E.
 - On use, record `olm.operatorframework.io/acknowledged-<flag>: "true"` on the CE.
 - Collector places all objects (incl. CRDs) into the COS with `IfNoController`.
 
-**Note:** Once [OPRUN-4723](https://redhat.atlassian.net/browse/OPRUN-4723) (Phase 7) merges,
-**remove C3 entirely** — OLMv1 will manage APIService objects natively so operators with
-APIService definitions become Eligible with no flag required.
+**Note:** C3 remains a hard block until OLMv1 supports APIService-based operators end-to-end.
+The rendering infrastructure was added in operator-controller ([OPRUN-4723](https://redhat.atlassian.net/browse/OPRUN-4723))
+but is not yet wired into the Boxcutter path. C3 will be removed in a future phase once
+end-to-end support is confirmed.
 
 **Depends on:** Phases 1, 2. **Exit:** each soft check flips Ineligible→Eligible when its
 flag is set; CE carries the matching annotation.
@@ -136,26 +137,22 @@ then reports catalog-available.
 labels copied; old namespace deleted only when acknowledged.
 
 ## Phase 7 — OLMv1 APIService renderer support *(cross-repo, operator-controller)* — [OPRUN-4723](https://redhat.atlassian.net/browse/OPRUN-4723)
-**Goal:** Remove C3 (APIService definitions) as a permanent hard block by adding
-`apiregistration.k8s.io` support to the OLMv1 registry+v1 bundle renderer.
+**Goal:** Add `apiregistration.k8s.io` support to the OLMv1 registry+v1 bundle renderer as
+infrastructure for future end-to-end APIService support.
 
-The current `ResourceGenerators` list in `internal/operator-controller/rukpak/render/registryv1/registryv1.go`
-has **no** generator for `APIService` objects — it generates ServiceAccounts, RBAC, CRDs,
-Deployments, Webhooks, and CertProvider, but not `k8s.io/kube-aggregator` APIService
-registrations. Until this is fixed, operators that own APIService definitions cannot be
-migrated at all (C3 hard block).
+The rendering code (`BundleCSVAPIServiceGenerator`, `CheckAPIServiceDeploymentReferentialIntegrity`,
+cert provider updates) was added to operator-controller as infrastructure but is **not yet
+registered** in `ResourceGenerators` or `BundleValidator` because end-to-end Boxcutter support
+is not yet confirmed. C3 remains a hard block until this is fully wired and validated.
 
 **Scope (in `operator-controller`):**
-- Add a `BundleCSVAPIServiceGenerator` to `ResourceGenerators` that reads
-  `csv.spec.apiservicedefinitions.owned` and emits the corresponding `APIService` objects.
-- Update the `BundleValidator` if APIService-specific validation rules are needed.
-- Once merged, **remove C3 entirely** from the migration tool (Phase 3 / OPRUN-4719) — OLMv1
-  manages APIService objects natively; operators with APIService definitions become Eligible
-  with no override flag needed.
+- Added `BundleCSVAPIServiceGenerator`, `CheckAPIServiceDeploymentReferentialIntegrity`, and
+  cert provider support for `APIService` objects (implemented but not yet registered in
+  `ResourceGenerators` / `BundleValidator` pending Boxcutter end-to-end validation).
+- C3 remains a hard block in the migration tool until the Boxcutter path is fully wired.
 
-**Depends on:** nothing (can start immediately, runs in parallel). **Exit:** registry+v1
-renderer generates `APIService` objects; C3 removed from migration tool (Phase 3 / OPRUN-4719
-updated).
+**Depends on:** nothing (ran in parallel). **Status:** rendering infrastructure merged; C3
+removal deferred until end-to-end Boxcutter support is confirmed.
 
 ## Phase 8 — Testing — *(testing stories auto-created per epic)*
 **Goal:** Confidence across unit and E2E (R-wide).
