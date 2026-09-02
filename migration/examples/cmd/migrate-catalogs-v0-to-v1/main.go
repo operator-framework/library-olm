@@ -19,6 +19,14 @@ import (
 	"github.com/operator-framework/library-olm/migration/pkg/catalogmigration"
 )
 
+const (
+	statusCreated = "created"
+	statusAdopted = "adopted"
+	statusSkipped = "skipped"
+	statusError   = "error"
+	statusDryRun  = "dry-run"
+)
+
 var scheme = runtime.NewScheme()
 
 func init() {
@@ -116,15 +124,15 @@ func runMigrateCatalogs(cmd *cobra.Command, _ []string) error {
 	var created, adopted, skipped, errored, dryResults []catalogmigration.CatalogMigrationResult
 	for _, r := range results {
 		switch r.Status {
-		case "created":
+		case statusCreated:
 			created = append(created, r)
-		case "adopted":
+		case statusAdopted:
 			adopted = append(adopted, r)
-		case "skipped":
+		case statusSkipped:
 			skipped = append(skipped, r)
-		case "error":
+		case statusError:
 			errored = append(errored, r)
-		case "dry-run":
+		case statusDryRun:
 			dryResults = append(dryResults, r)
 		}
 	}

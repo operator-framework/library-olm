@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -377,7 +378,7 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 		return fmt.Errorf("failed to unmarshal subscription backup: %w", err)
 	}
 
-	ns, name, err := splitNamespacedName(subRef)
+	ns, name, err := splitSubRef(subRef)
 	if err != nil {
 		return fmt.Errorf("invalid migrated-from-subscription annotation %q: %w", subRef, err)
 	}
@@ -408,7 +409,7 @@ func (m *Migrator) CleanupConflict(ctx context.Context, ceName string) error {
 		return fmt.Errorf("ClusterExtension %s has no migrated-from-subscription annotation", ceName)
 	}
 
-	ns, name, err := splitNamespacedName(subRef)
+	ns, name, err := splitSubRef(subRef)
 	if err != nil {
 		return fmt.Errorf("invalid migrated-from-subscription annotation %q: %w", subRef, err)
 	}
@@ -440,14 +441,13 @@ func (m *Migrator) CleanupConflict(ctx context.Context, ceName string) error {
 	return nil
 }
 
-// splitNamespacedName splits "namespace/name" into its components.
-func splitNamespacedName(ref string) (string, string, error) {
-	for i, c := range ref {
-		if c == '/' {
-			return ref[:i], ref[i+1:], nil
-		}
+// splitSubRef splits a "namespace/name" subscription reference into its components.
+func splitSubRef(ref string) (string, string, error) {
+	parts := strings.SplitN(ref, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("invalid namespace/name ref %q", ref)
 	}
-	return "", "", fmt.Errorf("expected namespace/name format, got %q", ref)
+	return parts[0], parts[1], nil
 }
 
 func unmarshalJSON(data string, v interface{}) error {
