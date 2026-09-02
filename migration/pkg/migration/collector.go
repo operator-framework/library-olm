@@ -15,6 +15,8 @@ import (
 )
 
 // possibleResourceGVKs lists all resource GVKs that may be part of an OLMv0 operator installation.
+// Namespace is included because some operators create namespaces as part of their bundle resources
+// (e.g. to set up a dedicated tenant namespace); these will be collected if labeled appropriately.
 var possibleResourceGVKs = []schema.GroupVersionKind{
 	{Group: "", Version: "v1", Kind: "Namespace"},
 	{Group: "", Version: "v1", Kind: "Secret"},
@@ -59,11 +61,15 @@ var clusterScopedKinds = map[string]bool{
 	"MutatingWebhookConfiguration":   true,
 }
 
-// olmv0OnlyKinds are OLMv0 management resources that should not be included in the COS.
+// olmv0OnlyKinds lists OLMv0 management resource kinds excluded from the COS.
+// These are cleaned up separately and must not be placed under OLMv1 management.
 var olmv0OnlyKinds = map[string]bool{
-	"OperatorCondition": true,
-	"Operator":          true,
-	"OperatorGroup":     true,
+	"ClusterServiceVersion": true,
+	"Subscription":          true,
+	"InstallPlan":           true,
+	"Operator":              true,
+	"OperatorGroup":         true,
+	"OperatorCondition":     true,
 }
 
 // GetCSVAndInstallPlan retrieves the Subscription, CSV, and InstallPlan.
@@ -98,6 +104,7 @@ func (m *Migrator) GetCSVAndInstallPlan(ctx context.Context, opts Options) (*ope
 		}
 	} else if sub.Status.Install != nil {
 		// Fallback to the deprecated status.install field (R4).
+		// TODO: remove this fallback if the deprecated field is removed from the API.
 		ipName = sub.Status.Install.Name
 	}
 	if ipName != "" {
@@ -240,7 +247,7 @@ func (m *Migrator) CollectResources(ctx context.Context, opts Options, csv *oper
 	}
 
 	// Strategy 4: Resources by ownerReference in the subscription namespace
-	for _, obj := range m.gatherResourcesByOwnerRef(ctx, opts.SubscriptionNamespace, csv) {
+	for _, obj := range m.gatherResourcesByOwnerRef(ctx, opts.SubscriptionNamespace, csv.Name) {
 		addIfNew(obj)
 	}
 
@@ -288,7 +295,7 @@ func (m *Migrator) getCRDsByPackage(ctx context.Context, opts Options, packageNa
 	return crdList.Items, nil
 }
 
-func (m *Migrator) gatherResourcesByOwnerLabel(ctx context.Context, csvName string) []unstructured.Unstructured {
+func (m *Migrator) gatherResourcesByOwnerLabel(ctx context.Context, ownerName string) []unstructured.Unstructured {
 	var result []unstructured.Unstructured
 
 	for _, gvk := range possibleResourceGVKs {
@@ -303,7 +310,7 @@ func (m *Migrator) gatherResourcesByOwnerLabel(ctx context.Context, csvName stri
 		// olm.managed=true; adding it would miss resources that carry olm.owner
 		// but were not stamped with the managed label.
 		if err := m.Client.List(ctx, &list,
-			client.MatchingLabels{"olm.owner": csvName},
+			client.MatchingLabels{"olm.owner": ownerName},
 		); err != nil {
 			continue
 		}
@@ -312,7 +319,7 @@ func (m *Migrator) gatherResourcesByOwnerLabel(ctx context.Context, csvName stri
 	return result
 }
 
-func (m *Migrator) gatherResourcesByOwnerRef(ctx context.Context, namespace string, csv *operatorsv1alpha1.ClusterServiceVersion) []unstructured.Unstructured {
+func (m *Migrator) gatherResourcesByOwnerRef(ctx context.Context, namespace string, ownerName string) []unstructured.Unstructured {
 	var result []unstructured.Unstructured
 
 	for _, gvk := range possibleResourceGVKs {
@@ -333,7 +340,7 @@ func (m *Migrator) gatherResourcesByOwnerRef(ctx context.Context, namespace stri
 
 		for _, obj := range list.Items {
 			for _, ref := range obj.GetOwnerReferences() {
-				if ref.Kind == "ClusterServiceVersion" && ref.Name == csv.Name {
+				if ref.Kind == "ClusterServiceVersion" && ref.Name == ownerName {
 					result = append(result, obj)
 					break
 				}
@@ -387,18 +394,12 @@ func (m *Migrator) gatherResourcesFromOperatorCR(ctx context.Context, packageNam
 		return nil, nil
 	}
 
-	skipKinds := map[string]bool{
-		"ClusterServiceVersion": true,
-		"Subscription":          true,
-		"InstallPlan":           true,
-	}
-
 	var result []unstructured.Unstructured
 	for _, ref := range op.Status.Components.Refs {
 		if ref.ObjectReference == nil {
 			continue
 		}
-		if skipKinds[ref.Kind] {
+		if olmv0OnlyKinds[ref.Kind] {
 			continue
 		}
 

@@ -82,6 +82,13 @@ func (m *Migrator) QueryCatalogForPackage(ctx context.Context, catalog *ocv1.Clu
 	return parseCatalogResponse(resp.Body, packageName, version, channel)
 }
 
+// FBC schema type constants for parsing catalog JSONL responses.
+const (
+	fbcSchemaPackage = "olm.package"
+	fbcSchemaBundle  = "olm.bundle"
+	fbcSchemaChannel = "olm.channel"
+)
+
 func parseCatalogResponse(body io.Reader, packageName, version, channel string) (*CatalogPackageInfo, error) {
 	info := &CatalogPackageInfo{}
 	versionSet := map[string]bool{}
@@ -97,14 +104,14 @@ func parseCatalogResponse(body io.Reader, packageName, version, channel string) 
 		}
 
 		switch meta.Schema {
-		case "olm.package":
+		case fbcSchemaPackage:
 			if meta.Name == packageName {
 				info.Found = true
 				if meta.DefaultChannel != "" {
 					info.DefaultChannel = meta.DefaultChannel
 				}
 			}
-		case "olm.bundle":
+		case fbcSchemaBundle:
 			if meta.Package != packageName {
 				continue
 			}
@@ -112,7 +119,7 @@ func parseCatalogResponse(body io.Reader, packageName, version, channel string) 
 			if bundleVersion != "" {
 				versionSet[bundleVersion] = true
 			}
-		case "olm.channel":
+		case fbcSchemaChannel:
 			if meta.Package != packageName {
 				continue
 			}
