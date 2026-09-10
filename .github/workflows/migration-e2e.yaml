@@ -1,0 +1,103 @@
+name: migration-test
+
+on:
+  workflow_dispatch:
+  pull_request:
+  merge_group:
+  push:
+    branches:
+      - main
+
+jobs:
+  unit-coverage:
+    name: migration unit coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Run unit tests with coverage
+        run: make migration/test-coverage
+      - name: Upload unit coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: migration-unit-coverage
+          path: artifacts/coverage
+          if-no-files-found: ignore
+
+  fixture:
+    name: migration fixture E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Set up fixture cluster
+        run: make migration/e2e-fixture-setup
+      - name: Run fixture migration tests
+        run: make migration/test-e2e-fixture-matrix
+      - name: Tear down fixture cluster
+        if: always()
+        run: E2E_CLUSTER_NAME=library-olm-fixture-e2e make migration/e2e-teardown
+      - name: Upload fixture diagnostics and coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: migration-fixture-e2e-artifacts
+          path: artifacts/e2e
+          if-no-files-found: ignore
+
+  coverage:
+    name: migration total coverage
+    needs: [unit-coverage, fixture, live]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Download unit coverage
+        uses: actions/download-artifact@v8
+        with:
+          name: migration-unit-coverage
+          path: artifacts/coverage
+      - name: Download fixture E2E coverage
+        uses: actions/download-artifact@v8
+        with:
+          name: migration-fixture-e2e-artifacts
+          path: artifacts/e2e
+      - name: Download live E2E coverage
+        uses: actions/download-artifact@v8
+        with:
+          name: migration-live-e2e-artifacts
+          path: artifacts/e2e
+      - name: Display combined coverage
+        run: make migration/report-coverage-all
+
+  live:
+    name: migration live-operator E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Set up live cluster
+        run: make migration/e2e-setup
+      - name: Run live-operator migration tests
+        run: make migration/test-e2e-live-matrix
+      - name: Tear down live cluster
+        if: always()
+        run: make migration/e2e-teardown
+      - name: Upload live diagnostics and coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: migration-live-e2e-artifacts
+          path: artifacts/e2e
+          if-no-files-found: ignore
