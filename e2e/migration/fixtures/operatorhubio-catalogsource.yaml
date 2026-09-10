@@ -1,0 +1,11 @@
+# Fixture clusters deliberately omit the OLMv0 controllers. The migrated
+# Subscription snapshots still reference this source, so retain the source
+# object as committed fixture input for catalog migration and resolution.
+apiVersion: operators.coreos.com/v1alpha1
+kind: CatalogSource
+metadata:
+  name: operatorhubio-catalog
+  namespace: olm
+spec:
+  sourceType: grpc
+  image: quay.io/operatorhubio/catalog@sha256:e7a14e472319e3a72ff7b65941e07712b988970bc02e79d35aef70c0cbf50b7f

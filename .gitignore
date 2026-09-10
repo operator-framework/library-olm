@@ -30,3 +30,9 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+# Kind-generated kubeconfigs contain cluster credentials.
+.kubeconfig/
+
+# Locally built CLIs and E2E diagnostics.
+bin/
+artifacts/
