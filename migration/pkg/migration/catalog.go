@@ -3,16 +3,22 @@ package migration
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"path"
+	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/transport"
+	"k8s.io/client-go/tools/portforward"
+	"k8s.io/client-go/transport/spdy"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	ocv1 "github.com/operator-framework/operator-controller/api/v1"
@@ -49,37 +55,108 @@ func (m *Migrator) QueryCatalogForPackage(ctx context.Context, catalog *ocv1.Clu
 		return nil, fmt.Errorf("catalog %s has no URLs in status", catalog.Name)
 	}
 
-	proxyURL := fmt.Sprintf("%s/api/v1/namespaces/olmv1-system/services/https:catalogd-service:443/proxy/catalogs/%s/api/v1/all",
-		restConfig.Host, catalog.Name)
-
-	transportConfig, err := restConfig.TransportConfig()
+	endpoint, stop, inClusterConfig, err := catalogEndpoint(ctx, catalog, restConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get transport config: %w", err)
+		return nil, err
 	}
-
-	rt, err := transport.New(transportConfig)
+	defer stop()
+	transport, err := catalogHTTPTransport(inClusterConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create transport: %w", err)
+		return nil, err
 	}
-
-	httpClient := &http.Client{Transport: rt}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, proxyURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-
-	resp, err := httpClient.Do(req)
+	req.Header.Set("Accept", "application/json")
+	resp, err := (&http.Client{Transport: transport}).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query catalog: %w", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("catalog returned status %d", resp.StatusCode)
 	}
 
 	return parseCatalogResponse(resp.Body, packageName, version, channel)
+}
+
+func catalogHTTPTransport(inClusterConfig *rest.Config) (http.RoundTripper, error) {
+	if inClusterConfig != nil {
+		transport, err := rest.TransportFor(inClusterConfig)
+		if err != nil {
+			return nil, fmt.Errorf("create in-cluster catalog transport: %w", err)
+		}
+		return transport, nil
+	}
+	return &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}}, nil // #nosec G402 -- the port-forward endpoint is bound to loopback.
+}
+
+func catalogEndpoint(ctx context.Context, catalog *ocv1.ClusterCatalog, config *rest.Config) (string, func(), *rest.Config, error) {
+	if inClusterConfig, err := rest.InClusterConfig(); err == nil {
+		return catalog.Status.URLs.Base + "/api/v1/all", func() {}, inClusterConfig, nil
+	}
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("create Kubernetes client for catalog port-forward: %w", err)
+	}
+	pods, err := clientset.CoreV1().Pods("olmv1-system").List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/name=catalogd"})
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("list catalogd pods: %w", err)
+	}
+	if len(pods.Items) == 0 {
+		return "", nil, nil, fmt.Errorf("no catalogd pods found")
+	}
+	// catalogd serves content only from its leader's cache. The Service can route
+	// to a ready follower that has no cache and returns 404, so use the leader
+	// recorded by catalogd's controller-runtime Lease when accessing from outside
+	// the cluster via a pod port-forward.
+	podName := pods.Items[0].Name
+	if lease, leaseErr := clientset.CoordinationV1().Leases("olmv1-system").Get(ctx, "catalogd-operator-lock", metav1.GetOptions{}); leaseErr == nil && lease.Spec.HolderIdentity != nil {
+		leaderName := strings.SplitN(*lease.Spec.HolderIdentity, "_", 2)[0]
+		for _, pod := range pods.Items {
+			if pod.Name == leaderName {
+				podName = pod.Name
+				break
+			}
+		}
+	}
+	u, err := url.Parse(config.Host)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	u.Path = path.Join(u.Path, "api", "v1", "namespaces", "olmv1-system", "pods", podName, "portforward")
+	rt, upgrader, err := spdy.RoundTripperFor(config)
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("create catalogd port-forward: %w", err)
+	}
+	stop, ready := make(chan struct{}), make(chan struct{})
+	fw, err := portforward.NewOnAddresses(spdy.NewDialer(upgrader, &http.Client{Transport: rt}, http.MethodPost, u), []string{"127.0.0.1"}, []string{"0:8443"}, stop, ready, io.Discard, io.Discard)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	forwardErr := make(chan error, 1)
+	go func() { forwardErr <- fw.ForwardPorts() }()
+	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	select {
+	case <-ready:
+	case err := <-forwardErr:
+		close(stop)
+		if err != nil {
+			return "", nil, nil, fmt.Errorf("start catalogd port-forward: %w", err)
+		}
+		return "", nil, nil, fmt.Errorf("catalogd port-forward stopped before becoming ready")
+	case <-waitCtx.Done():
+		close(stop)
+		return "", nil, nil, fmt.Errorf("wait for catalogd port-forward: %w", waitCtx.Err())
+	}
+	ports, err := fw.GetPorts()
+	if err != nil {
+		close(stop)
+		return "", nil, nil, err
+	}
+	return fmt.Sprintf("https://127.0.0.1:%d/catalogs/%s/api/v1/all", ports[0].Local, catalog.Name), func() { close(stop) }, nil, nil
 }
 
 func parseCatalogResponse(body io.Reader, packageName, version, channel string) (*CatalogPackageInfo, error) {

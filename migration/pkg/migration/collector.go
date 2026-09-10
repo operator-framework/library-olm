@@ -260,6 +260,12 @@ func (m *Migrator) CollectResources(ctx context.Context, opts Options, csv *oper
 // "core/v1"), and including it would prevent correct deduplication (R5).
 func resourceKey(obj unstructured.Unstructured) string {
 	gvk := obj.GetObjectKind().GroupVersionKind()
+	// Kubernetes core resources are conventionally represented as either "v1"
+	// or "core/v1" by different discovery and unstructured-client paths. Treat
+	// those spellings as the same API group so collection sources deduplicate.
+	if gvk.Group == "core" {
+		gvk.Group = ""
+	}
 	return fmt.Sprintf("%s/%s/%s/%s",
 		gvk.Group,
 		gvk.Kind,
