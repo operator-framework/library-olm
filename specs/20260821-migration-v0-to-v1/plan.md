@@ -154,7 +154,7 @@ is not yet confirmed. C3 remains a hard block until this is fully wired and vali
 **Depends on:** nothing (ran in parallel). **Status:** rendering infrastructure merged; C3
 removal deferred until end-to-end Boxcutter support is confirmed.
 
-## Phase 8 — Testing — *(testing stories auto-created per epic)*
+## Phase 8 — Testing — [OPRUN-4762](https://redhat.atlassian.net/browse/OPRUN-4762)
 **Goal:** Confidence across unit and E2E (R-wide).
 - Unit: ≥80% of `migration/pkg/...` with `controller-runtime/pkg/client/fake` — readiness,
   compatibility (each ack flag), scan (4 states), catalog parsing, collector (CRD/IfNoController,
