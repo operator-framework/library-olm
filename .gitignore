@@ -33,3 +33,9 @@ go.work.sum
 
 # Generated test coverage profiles and reports.
 artifacts/
+
+# Kind-generated kubeconfigs contain cluster credentials.
+.kubeconfig/
+
+# Locally built E2E CLIs.
+bin/
