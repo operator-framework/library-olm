@@ -9,6 +9,10 @@ GOLANG_VERSION := $(shell sed -En 's/^go (.*)$$/\1/p' "go.mod")
 # bingo manages consistent tooling versions.
 include .bingo/Variables.mk
 
+# Migration-specific build and test targets live separately so this Makefile
+# remains the home for repository-wide targets.
+include $(ROOT_DIR)/migration.mk
+
 # Output paths for compiled CLI binaries
 MIGRATE_OPERATORS_BIN := $(BIN_DIR)/migrate-operators-v0-to-v1
 MIGRATE_CATALOGS_BIN  := $(BIN_DIR)/migrate-catalogs-v0-to-v1
@@ -17,7 +21,7 @@ MIGRATE_CATALOGS_BIN  := $(BIN_DIR)/migrate-catalogs-v0-to-v1
 
 .PHONY: help
 help: ## Display this help message
-	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-28s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9\/-]+:.*?##/ { printf "  \033[36m%-36s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
 ##@ Build
 
@@ -37,16 +41,6 @@ build-migrate-catalogs: ## Build migrate-catalogs-v0-to-v1 into bin/
 .PHONY: build-all
 build-all: ## Build and verify all packages (library + CLIs)
 	go build ./...
-
-##@ Test
-
-.PHONY: test
-test: ## Run unit tests
-	go test ./... -count=1
-
-.PHONY: test-verbose
-test-verbose: ## Run unit tests with verbose output
-	go test ./... -v -count=1
 
 ##@ Lint & Verify
 
