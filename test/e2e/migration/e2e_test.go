@@ -209,6 +209,7 @@ func restoreSubscriptionForConflict(t *testing.T, raw string) {
 	run(t, "kubectl", "apply", "-f", path)
 }
 
+// binary returns a verified path to a migration CLI built by the Make target.
 func binary(t *testing.T, name string) string {
 	t.Helper()
 	path := filepath.Join("..", "..", "..", "bin", name)
@@ -218,6 +219,7 @@ func binary(t *testing.T, name string) string {
 	return path
 }
 
+// run fails the current test with the command's combined output on error.
 func run(t *testing.T, command string, args ...string) {
 	t.Helper()
 	if out, err := output(command, args...); err != nil {
@@ -225,6 +227,7 @@ func run(t *testing.T, command string, args ...string) {
 	}
 }
 
+// output runs a command and returns its combined standard output and error.
 func output(command string, args ...string) (string, error) {
 	cmd := exec.Command(command, args...)
 	cmd.Env = os.Environ()
@@ -234,6 +237,7 @@ func output(command string, args ...string) (string, error) {
 	return out.String(), err
 }
 
+// collectArtifacts saves cluster diagnostics when the current test has failed.
 func collectArtifacts(t *testing.T, namespace string) {
 	t.Helper()
 	if !t.Failed() {
@@ -256,7 +260,14 @@ func collectArtifacts(t *testing.T, namespace string) {
 		{"logs", "deployment/operator-controller-controller-manager", "-n", "olmv1-system", "--all-containers", "--tail=-1"},
 	} {
 		out, _ := output("kubectl", resource...)
-		name := strings.NewReplacer(",", "-", "/", "-").Replace(strings.Join(resource[:2], "-")) + ".yaml"
+		name := strings.NewReplacer(",", "-", "/", "-").Replace(strings.Join(resource[:2], "-"))
+		for i, arg := range resource[:len(resource)-1] {
+			if arg == "-n" {
+				name += "-" + resource[i+1]
+				break
+			}
+		}
+		name += ".yaml"
 		_ = os.WriteFile(filepath.Join(dir, name), []byte(out), 0o600)
 	}
 }

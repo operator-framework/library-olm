@@ -3,7 +3,6 @@ package migration
 import (
 	"bufio"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -88,45 +87,44 @@ const (
 	fbcSchemaChannel = "olm.channel"
 )
 
-func catalogHTTPTransport(inClusterConfig *rest.Config) (http.RoundTripper, error) {
-	if inClusterConfig != nil {
-		transport, err := rest.TransportFor(inClusterConfig)
-		if err != nil {
-			return nil, fmt.Errorf("create in-cluster catalog transport: %w", err)
-		}
-		return transport, nil
+// catalogHTTPTransport creates an unauthenticated transport for catalogd.
+// Kubernetes credentials are used only for the API calls that establish access.
+func catalogHTTPTransport(catalogConfig *rest.Config) (http.RoundTripper, error) {
+	if catalogConfig == nil {
+		return nil, fmt.Errorf("catalog transport requires a REST config")
 	}
-	return &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}}, nil // #nosec G402 -- the port-forward endpoint is bound to loopback.
+	transport, err := rest.TransportFor(rest.AnonymousClientConfig(catalogConfig))
+	if err != nil {
+		return nil, fmt.Errorf("create catalog transport: %w", err)
+	}
+	return transport, nil
 }
 
+// catalogEndpoint returns an authenticated API-server path for port forwarding
+// outside a cluster or the catalog URL and its dedicated TLS config in a pod.
 func catalogEndpoint(ctx context.Context, catalog *ocv1.ClusterCatalog, config *rest.Config) (string, func(), *rest.Config, error) {
-	if inClusterConfig, err := rest.InClusterConfig(); err == nil {
-		return catalog.Status.URLs.Base + "/api/v1/all", func() {}, inClusterConfig, nil
+	inCluster := config == nil
+	if config == nil {
+		var err error
+		config, err = rest.InClusterConfig()
+		if err != nil {
+			return "", nil, nil, fmt.Errorf("load in-cluster REST config: %w", err)
+		}
 	}
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("create Kubernetes client for catalog port-forward: %w", err)
 	}
-	pods, err := clientset.CoreV1().Pods("olmv1-system").List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/name=catalogd"})
+	catalogConfig, err := catalogdTLSConfig(ctx, clientset, config)
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("list catalogd pods: %w", err)
+		return "", nil, nil, err
 	}
-	if len(pods.Items) == 0 {
-		return "", nil, nil, fmt.Errorf("no catalogd pods found")
+	if inCluster {
+		return catalog.Status.URLs.Base + "/api/v1/all", func() {}, catalogConfig, nil
 	}
-	// catalogd serves content only from its leader's cache. The Service can route
-	// to a ready follower that has no cache and returns 404, so use the leader
-	// recorded by catalogd's controller-runtime Lease when accessing from outside
-	// the cluster via a pod port-forward.
-	podName := pods.Items[0].Name
-	if lease, leaseErr := clientset.CoordinationV1().Leases("olmv1-system").Get(ctx, "catalogd-operator-lock", metav1.GetOptions{}); leaseErr == nil && lease.Spec.HolderIdentity != nil {
-		leaderName := strings.SplitN(*lease.Spec.HolderIdentity, "_", 2)[0]
-		for _, pod := range pods.Items {
-			if pod.Name == leaderName {
-				podName = pod.Name
-				break
-			}
-		}
+	podName, err := catalogdLeader(ctx, clientset)
+	if err != nil {
+		return "", nil, nil, err
 	}
 	u, err := url.Parse(config.Host)
 	if err != nil {
@@ -163,7 +161,65 @@ func catalogEndpoint(ctx context.Context, catalog *ocv1.ClusterCatalog, config *
 		close(stop)
 		return "", nil, nil, err
 	}
-	return fmt.Sprintf("https://127.0.0.1:%d/catalogs/%s/api/v1/all", ports[0].Local, catalog.Name), func() { close(stop) }, nil, nil
+	catalogConfig.TLSClientConfig.ServerName = "localhost"
+	return fmt.Sprintf("https://127.0.0.1:%d/catalogs/%s/api/v1/all", ports[0].Local, catalog.Name), func() { close(stop) }, catalogConfig, nil
+}
+
+// catalogdTLSConfig replaces the Kubernetes API CA with catalogd's serving CA.
+func catalogdTLSConfig(ctx context.Context, clientset kubernetes.Interface, config *rest.Config) (*rest.Config, error) {
+	secret, err := clientset.CoreV1().Secrets("cert-manager").Get(ctx, "olmv1-ca", metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("get catalogd CA: %w", err)
+	}
+	ca := secret.Data["ca.crt"]
+	if len(ca) == 0 {
+		ca = secret.Data["tls.crt"]
+	}
+	if len(ca) == 0 {
+		return nil, fmt.Errorf("catalogd CA secret has no certificate")
+	}
+	catalogConfig := rest.CopyConfig(config)
+	catalogConfig.TLSClientConfig.CAFile = ""
+	catalogConfig.TLSClientConfig.CAData = ca
+	return catalogConfig, nil
+}
+
+// catalogdLeader waits for catalogd's leader Lease to reference a current pod.
+func catalogdLeader(ctx context.Context, clientset kubernetes.Interface) (string, error) {
+	var lastErr error
+	var leader string
+	err := wait.PollUntilContextTimeout(ctx, time.Second, 30*time.Second, true, func(context.Context) (bool, error) {
+		pods, err := clientset.CoreV1().Pods("olmv1-system").List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/name=catalogd"})
+		if err != nil {
+			lastErr = fmt.Errorf("list catalogd pods: %w", err)
+			return false, nil
+		}
+		lease, err := clientset.CoordinationV1().Leases("olmv1-system").Get(ctx, "catalogd-operator-lock", metav1.GetOptions{})
+		if err != nil {
+			lastErr = fmt.Errorf("get catalogd leader lease: %w", err)
+			return false, nil
+		}
+		if lease.Spec.HolderIdentity == nil || *lease.Spec.HolderIdentity == "" {
+			lastErr = fmt.Errorf("catalogd leader lease has no holder identity")
+			return false, nil
+		}
+		candidate := strings.SplitN(*lease.Spec.HolderIdentity, "_", 2)[0]
+		for _, pod := range pods.Items {
+			if pod.Name == candidate {
+				leader = candidate
+				return true, nil
+			}
+		}
+		lastErr = fmt.Errorf("catalogd leader pod %q was not found", candidate)
+		return false, nil
+	})
+	if err != nil {
+		if lastErr != nil {
+			return "", fmt.Errorf("resolve catalogd leader: %w", lastErr)
+		}
+		return "", fmt.Errorf("resolve catalogd leader: %w", err)
+	}
+	return leader, nil
 }
 
 func parseCatalogResponse(body io.Reader, packageName, version, channel string) (*CatalogPackageInfo, error) {

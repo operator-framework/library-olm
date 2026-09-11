@@ -67,6 +67,7 @@ migration/e2e-teardown: $(KIND) ## Delete the dedicated migration kind cluster
 
 .PHONY: migration/e2e-install-v0
 migration/e2e-install-v0: ## Install one migration E2E operator (E2E_OPERATOR=name) or all via OLMv0
+	@if [[ "$(E2E_OPERATOR)" != all ]]; then E2E_OPERATOR="$(E2E_OPERATOR)" KUBECONFIG="$(E2E_KUBECONFIG)" bash -c 'source "$$1"; operator_fields "$$E2E_OPERATOR"' -- ./hack/e2e/migration/operators.sh; fi
 	@for operator in $$(awk -F '\t' -v wanted="$(E2E_OPERATOR)" 'NF==3 && $$1 !~ /^#/ && (wanted=="all" || $$1==wanted) {print $$1}' test/e2e/migration/operators.tsv); do KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/install-v0.sh "$$operator"; done
 
 .PHONY: migration/test-e2e-live-matrix
@@ -75,6 +76,7 @@ migration/test-e2e-live-matrix: migration/build ## Install and migrate all three
 
 .PHONY: migration/e2e-delete-v1
 migration/e2e-delete-v1: ## Delete one migration E2E operator as OLMv1, or all
+	@if [[ "$(E2E_OPERATOR)" != all ]]; then E2E_OPERATOR="$(E2E_OPERATOR)" KUBECONFIG="$(E2E_KUBECONFIG)" bash -c 'source "$$1"; operator_fields "$$E2E_OPERATOR"' -- ./hack/e2e/migration/operators.sh; fi
 	@for operator in $$(awk -F '\t' -v wanted="$(E2E_OPERATOR)" 'NF==3 && $$1 !~ /^#/ && (wanted=="all" || $$1==wanted) {print $$1}' test/e2e/migration/operators.tsv); do KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$operator"; done
 
 .PHONY: migration/test-e2e-real-operator
