@@ -1,5 +1,7 @@
 package migration
 
+import "time"
+
 // Label and annotation keys used by the migration tool.
 // These match the values expected by operator-controller but are defined here
 // to avoid importing internal packages from that module.
@@ -43,4 +45,19 @@ const (
 
 	// fieldManager is the SSA field manager used for all apply operations.
 	fieldManager = "olm.operatorframework.io/migration"
+
+	// cosWaitPollInterval / cosWaitTimeout control how long to wait for a
+	// ClusterObjectSet to reach Succeeded=True.
+	cosWaitPollInterval = 5 * time.Second
+	cosWaitTimeout      = 5 * time.Minute
+
+	// ceWaitPollInterval / ceWaitTimeout control how long to wait for a
+	// ClusterExtension to reach Installed=True.
+	ceWaitPollInterval = 5 * time.Second
+	ceWaitTimeout      = 5 * time.Minute
+
+	// subWaitPollInterval / subWaitTimeout control how long to wait for a
+	// restored Subscription to reach a steady state during rollback.
+	subWaitPollInterval = 5 * time.Second
+	subWaitTimeout      = 5 * time.Minute
 )

@@ -159,6 +159,9 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 
 	fmt.Printf("\n%s%s🔄 Migrating %s/%s to OLMv1...%s\n", colorBold, colorCyan, convertNamespace, operatorName, colorReset)
 
+	// TODO: the step-by-step flow below duplicates some logic from m.Migrate() to provide
+	// richer per-step output. Consider adding a progress channel to Options so the library
+	// can emit structured events that the CLI can format, avoiding the duplication.
 	stepHeader(1, "Profiling operator")
 	_, csv, ip, err := m.GetCSVAndInstallPlan(ctx, opts)
 	if err != nil {

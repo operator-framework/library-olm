@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -226,7 +225,7 @@ func (m *Migrator) RecoverFromBackup(ctx context.Context, opts Options, backup *
 		return fmt.Errorf("failed to re-create Subscription: %w", err)
 	}
 
-	return wait.PollUntilContextTimeout(ctx, 5*time.Second, 5*time.Minute, true, func(ctx context.Context) (bool, error) {
+	return wait.PollUntilContextTimeout(ctx, subWaitPollInterval, subWaitTimeout, true, func(ctx context.Context) (bool, error) {
 		var restored operatorsv1alpha1.Subscription
 		if err := m.Client.Get(ctx, types.NamespacedName{
 			Name:      opts.SubscriptionName,
@@ -283,6 +282,8 @@ func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, inf
 	// Pack inline objects into Secrets to stay within etcd's size limit (R2.4).
 	// SecretPacker gzip-compresses large objects and splits across multiple Secrets
 	// when the combined size would exceed 900 KiB per Secret.
+	// TODO: consider exporting secretPacker so consumers can configure whether to use
+	// Secret-backed refs or inline objects (useful for small bundles or testing).
 	packer := &secretPacker{
 		RevisionName:    cosName,
 		OwnerName:       opts.ClusterExtensionName,
@@ -355,7 +356,7 @@ func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, inf
 
 // WaitForCOSSucceeded waits for the COS to reach Succeeded=True.
 func (m *Migrator) WaitForCOSSucceeded(ctx context.Context, cosName string) error {
-	return wait.PollUntilContextTimeout(ctx, 5*time.Second, 5*time.Minute, true, func(ctx context.Context) (bool, error) {
+	return wait.PollUntilContextTimeout(ctx, cosWaitPollInterval, cosWaitTimeout, true, func(ctx context.Context) (bool, error) {
 		var cos ocv1.ClusterObjectSet
 		if err := m.Client.Get(ctx, types.NamespacedName{Name: cosName}, &cos); err != nil {
 			m.progress(fmt.Sprintf("Waiting for COS %s (not found yet)", cosName))
@@ -485,7 +486,7 @@ func (m *Migrator) CreateClusterExtension(ctx context.Context, opts Options, inf
 
 // WaitForClusterExtensionInstalled waits for the CE to reach Installed=True.
 func (m *Migrator) WaitForClusterExtensionInstalled(ctx context.Context, ceName string) error {
-	return wait.PollUntilContextTimeout(ctx, 5*time.Second, 5*time.Minute, true, func(ctx context.Context) (bool, error) {
+	return wait.PollUntilContextTimeout(ctx, ceWaitPollInterval, ceWaitTimeout, true, func(ctx context.Context) (bool, error) {
 		var ce ocv1.ClusterExtension
 		if err := m.Client.Get(ctx, types.NamespacedName{Name: ceName}, &ce); err != nil {
 			m.progress(fmt.Sprintf("Waiting for CE %s (not found yet)", ceName))
