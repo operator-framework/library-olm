@@ -161,7 +161,7 @@ func catalogEndpoint(ctx context.Context, catalog *ocv1.ClusterCatalog, config *
 		close(stop)
 		return "", nil, nil, err
 	}
-	catalogConfig.TLSClientConfig.ServerName = "localhost"
+	catalogConfig.ServerName = "localhost"
 	return fmt.Sprintf("https://127.0.0.1:%d/catalogs/%s/api/v1/all", ports[0].Local, catalog.Name), func() { close(stop) }, catalogConfig, nil
 }
 
@@ -179,8 +179,8 @@ func catalogdTLSConfig(ctx context.Context, clientset kubernetes.Interface, conf
 		return nil, fmt.Errorf("catalogd CA secret has no certificate")
 	}
 	catalogConfig := rest.CopyConfig(config)
-	catalogConfig.TLSClientConfig.CAFile = ""
-	catalogConfig.TLSClientConfig.CAData = ca
+	catalogConfig.CAFile = ""
+	catalogConfig.CAData = ca
 	return catalogConfig, nil
 }
 
