@@ -343,6 +343,26 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 		}
 	}
 
+	// Validate the data needed to restore OLMv0 ownership before deleting any
+	// OLMv1 resources. A corrupt or incomplete backup must leave the existing
+	// ClusterExtension and ClusterObjectSet recoverable.
+	subBackupJSON, ok := ce.Annotations[MigrationSubscriptionBackupAnnotation]
+	if !ok || subBackupJSON == "" {
+		return fmt.Errorf("ClusterExtension %s has no migration-subscription-backup annotation; cannot restore Subscription", ceName)
+	}
+	subRef := ce.Annotations[MigratedFromSubscriptionAnnotation]
+	if subRef == "" {
+		return fmt.Errorf("ClusterExtension %s has no migrated-from-subscription annotation", ceName)
+	}
+	var subSpec operatorsv1alpha1.SubscriptionSpec
+	if err := unmarshalJSON(subBackupJSON, &subSpec); err != nil {
+		return fmt.Errorf("failed to unmarshal subscription backup: %w", err)
+	}
+	ns, name, err := splitSubRef(subRef)
+	if err != nil {
+		return fmt.Errorf("invalid migrated-from-subscription annotation %q: %w", subRef, err)
+	}
+
 	// Delete CE (orphan cascade — preserves operator workloads)
 	if err := m.Client.Delete(ctx, &ce, client.PropagationPolicy("Orphan")); err != nil {
 		if client.IgnoreNotFound(err) != nil {
@@ -361,28 +381,7 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 		}
 	}
 
-	// Restore Subscription from backup annotation
-	subBackupJSON, ok := ce.Annotations["olm.operatorframework.io/migration-subscription-backup"]
-	if !ok || subBackupJSON == "" {
-		return fmt.Errorf("ClusterExtension %s has no migration-subscription-backup annotation; cannot restore Subscription", ceName)
-	}
-
-	subRef := ce.Annotations[MigratedFromSubscriptionAnnotation]
-	if subRef == "" {
-		return fmt.Errorf("ClusterExtension %s has no migrated-from-subscription annotation", ceName)
-	}
-
-	// Restore Subscription
-	var subSpec operatorsv1alpha1.SubscriptionSpec
-	if err := unmarshalJSON(subBackupJSON, &subSpec); err != nil {
-		return fmt.Errorf("failed to unmarshal subscription backup: %w", err)
-	}
-
-	ns, name, err := splitSubRef(subRef)
-	if err != nil {
-		return fmt.Errorf("invalid migrated-from-subscription annotation %q: %w", subRef, err)
-	}
-
+	// Restore Subscription from the validated backup.
 	restoredSub := &operatorsv1alpha1.Subscription{}
 	restoredSub.Name = name
 	restoredSub.Namespace = ns
