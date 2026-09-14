@@ -181,6 +181,12 @@ func catalogdTLSConfig(ctx context.Context, clientset kubernetes.Interface, conf
 	catalogConfig := rest.CopyConfig(config)
 	catalogConfig.CAFile = ""
 	catalogConfig.CAData = ca
+	// The copied API-server configuration may accept an insecure server or use
+	// an outbound proxy. Neither setting is correct for catalogd: its serving
+	// certificate must be verified with its own CA, and an external proxy cannot
+	// reach the loopback endpoint used by the port-forward path.
+	catalogConfig.Insecure = false
+	catalogConfig.Proxy = nil
 	return catalogConfig, nil
 }
 
