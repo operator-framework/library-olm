@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -293,13 +294,23 @@ func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, inf
 	if err != nil {
 		return fmt.Errorf("failed to pack COS objects into Secrets: %w", err)
 	}
+	var createdSecrets []corev1.Secret
+	cleanupSecrets := func() {
+		for i := range createdSecrets {
+			// These secrets are not useful without their COS. Keep the original
+			// creation or reconciliation failure as the actionable error.
+			_ = m.Client.Delete(ctx, &createdSecrets[i])
+		}
+	}
 
 	// Create ref Secrets before the COS so the COS controller can find them immediately.
 	for i := range packed.Secrets {
 		secret := &packed.Secrets[i]
 		if err := m.Client.Create(ctx, secret); err != nil {
+			cleanupSecrets()
 			return fmt.Errorf("failed to create COS ref Secret %s: %w", secret.Name, err)
 		}
+		createdSecrets = append(createdSecrets, *secret)
 	}
 
 	// Replace inline objects with Secret refs in the phases.
@@ -348,10 +359,15 @@ func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, inf
 
 	if err := m.Client.Patch(ctx, cosObj, client.RawPatch(types.ApplyPatchType, cosData),
 		client.ForceOwnership, client.FieldOwner(fieldManager)); err != nil {
+		cleanupSecrets()
 		return fmt.Errorf("failed to apply ClusterObjectSet: %w", err)
 	}
 
-	return m.WaitForCOSSucceeded(ctx, cosName)
+	if err := m.WaitForCOSSucceeded(ctx, cosName); err != nil {
+		cleanupSecrets()
+		return err
+	}
+	return nil
 }
 
 // WaitForCOSSucceeded waits for the COS to reach Succeeded=True.

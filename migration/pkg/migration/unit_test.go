@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -30,6 +31,20 @@ import (
 	ocv1ac "github.com/operator-framework/operator-controller/applyconfigurations/api/v1"
 )
 
+type failingMigrationClient struct {
+	client.Client
+	failCOSPatch bool
+}
+
+func (c failingMigrationClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if c.failCOSPatch {
+		if _, ok := obj.(*ocv1.ClusterObjectSet); ok {
+			return errors.New("simulated ClusterObjectSet collision")
+		}
+	}
+	return c.Client.Patch(ctx, obj, patch, opts...)
+}
+
 func migrationTestClient(t *testing.T, objects ...runtime.Object) *Migrator {
 	t.Helper()
 	scheme := runtime.NewScheme()
@@ -40,6 +55,9 @@ func migrationTestClient(t *testing.T, objects ...runtime.Object) *Migrator {
 		t.Fatal(err)
 	}
 	if err := rbacv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 	if err := ocv1.AddToScheme(scheme); err != nil {
@@ -383,6 +401,35 @@ func TestScanStatesAndPublicHelpers(t *testing.T) {
 	}
 }
 
+func TestScanAllKeepsMixedUnsafeOperatorsOutOfEligibleResults(t *testing.T) {
+	ctx := context.Background()
+	busySub, busyCSV := healthySubscriptionFixtures()
+	busySub.Name, busyCSV.Name = "busy", "busy.v1"
+	busySub.Status.InstalledCSV = busyCSV.Name
+	busySub.Status.State = operatorsv1alpha1.SubscriptionStateUpgradeAvailable
+	conflictSub := &operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: "conflict", Namespace: "ns"}, Spec: &operatorsv1alpha1.SubscriptionSpec{Package: "conflict"}}
+	conflictCE := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "conflict", Annotations: map[string]string{MigratedFromSubscriptionAnnotation: "ns/conflict"}}}
+	already := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "already", Annotations: map[string]string{MigratedFromSubscriptionAnnotation: "ns/gone"}}}
+	m := migrationTestClient(t, busySub, busyCSV, conflictSub, conflictCE, already)
+
+	results, err := m.ScanAll(ctx)
+	if err != nil || len(results) != 3 {
+		t.Fatalf("ScanAll() = %#v, %v", results, err)
+	}
+	if eligible := EligibleFromScan(results); len(eligible) != 0 {
+		t.Fatalf("unsafe mixed scan returned eligible operators: %#v", eligible)
+	}
+	got := map[OperatorStatus]int{}
+	for _, result := range results {
+		got[result.Status]++
+	}
+	for _, status := range []OperatorStatus{OperatorStatusIneligible, OperatorStatusConflict, OperatorStatusAlreadyMigrated} {
+		if got[status] != 1 {
+			t.Fatalf("mixed scan status counts = %#v, want one %s", got, status)
+		}
+	}
+}
+
 func TestPrerequisitesAndRecoveryErrors(t *testing.T) {
 	ctx := context.Background()
 	sub, csv := healthySubscriptionFixtures()
@@ -461,7 +508,7 @@ func TestRollbackAndCleanupRejectInvalidInputWithoutMutation(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "installed",
 			Annotations: map[string]string{
-				MigratedFromSubscriptionAnnotation: "ns/sub",
+				MigratedFromSubscriptionAnnotation:    "ns/sub",
 				MigrationSubscriptionBackupAnnotation: `{}`,
 			},
 		},
@@ -490,5 +537,68 @@ func TestRollbackAndCleanupRejectInvalidInputWithoutMutation(t *testing.T) {
 	}
 	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(invalid), &ocv1.ClusterExtension{}); err != nil {
 		t.Fatalf("invalid conflict cleanup deleted ClusterExtension: %v", err)
+	}
+}
+
+func TestCreateClusterObjectSetCleansTemporarySecretsOnCollision(t *testing.T) {
+	ctx := context.Background()
+	m := migrationTestClient(t)
+	m.Client = failingMigrationClient{Client: m.Client, failCOSPatch: true}
+	object := unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "operator-config", "namespace": "ns"},
+	}}
+	err := m.CreateClusterObjectSet(ctx, Options{SubscriptionName: "sub", SubscriptionNamespace: "ns"}, &MigrationInfo{
+		PackageName: "widgets", BundleName: "widgets.v1", Version: "1.0.0", CollectedObjects: []unstructured.Unstructured{object},
+	})
+	if err == nil || !strings.Contains(err.Error(), "simulated ClusterObjectSet collision") {
+		t.Fatalf("CreateClusterObjectSet() error = %v, want collision", err)
+	}
+	var secrets corev1.SecretList
+	if err := m.Client.List(ctx, &secrets, client.InNamespace("olmv1-system")); err != nil {
+		t.Fatal(err)
+	}
+	if len(secrets.Items) != 0 {
+		t.Fatalf("COS collision left temporary Secret(s): %#v", secrets.Items)
+	}
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: "sub-1"}, &ocv1.ClusterObjectSet{}); err == nil {
+		t.Fatal("COS collision created a ClusterObjectSet")
+	}
+}
+
+func TestCreateClusterExtensionRejectsNameCollisionWithoutReplacement(t *testing.T) {
+	ctx := context.Background()
+	existing := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "sub", Annotations: map[string]string{"keep": "existing"}}}
+	m := migrationTestClient(t, existing)
+	err := m.CreateClusterExtension(ctx, Options{SubscriptionName: "sub", SubscriptionNamespace: "ns"}, &MigrationInfo{PackageName: "widgets"})
+	if err == nil {
+		t.Fatal("CreateClusterExtension() unexpectedly replaced an existing ClusterExtension")
+	}
+	var got ocv1.ClusterExtension
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: "sub"}, &got); err != nil || got.Annotations["keep"] != "existing" {
+		t.Fatalf("existing ClusterExtension changed after collision: %#v, err=%v", got, err)
+	}
+}
+
+func TestRollbackRejectsMissingAndMalformedBackupsWithoutMutation(t *testing.T) {
+	ctx := context.Background()
+	for name, annotations := range map[string]map[string]string{
+		"missing backup":     {MigratedFromSubscriptionAnnotation: "ns/sub"},
+		"malformed backup":   {MigratedFromSubscriptionAnnotation: "ns/sub", MigrationSubscriptionBackupAnnotation: "{"},
+		"missing source ref": {MigrationSubscriptionBackupAnnotation: `{}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "sub", Annotations: annotations}}
+			cos := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "sub-1"}}
+			m := migrationTestClient(t, ce, cos)
+			if err := m.Rollback(ctx, Options{ClusterExtensionName: "sub", AcknowledgeInstalled: true}); err == nil {
+				t.Fatal("Rollback() unexpectedly accepted invalid backup metadata")
+			}
+			if err := m.Client.Get(ctx, client.ObjectKeyFromObject(ce), &ocv1.ClusterExtension{}); err != nil {
+				t.Fatalf("invalid rollback deleted ClusterExtension: %v", err)
+			}
+			if err := m.Client.Get(ctx, client.ObjectKeyFromObject(cos), &ocv1.ClusterObjectSet{}); err != nil {
+				t.Fatalf("invalid rollback deleted ClusterObjectSet: %v", err)
+			}
+		})
 	}
 }
