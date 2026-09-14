@@ -20,8 +20,8 @@ import (
 // select their fixture set through E2E_SUITE and use E2E_ARTIFACTS for diagnostics.
 func TestEnvironment(t *testing.T) {
 	suite := os.Getenv("E2E_SUITE")
-	if suite != "real-operator" {
-		t.Fatalf("E2E_SUITE must be real-operator, got %q", suite)
+	if suite != "fixture" && suite != "real-operator" {
+		t.Fatalf("E2E_SUITE must be fixture or real-operator, got %q", suite)
 	}
 
 	kubeconfig := os.Getenv("KUBECONFIG")
@@ -43,6 +43,11 @@ func TestEnvironment(t *testing.T) {
 	for _, groupVersion := range []string{"operators.coreos.com/v1alpha1", "olm.operatorframework.io/v1"} {
 		if _, err := discoveryClient.ServerResourcesForGroupVersion(groupVersion); err != nil {
 			t.Fatalf("required API %s is unavailable: %v", groupVersion, err)
+		}
+	}
+	if suite == "fixture" {
+		if _, err := output("kubectl", "get", "deployment/olm-operator", "-n", "olm"); err == nil {
+			t.Fatal("fixture suite must not run with the OLMv0 controller installed")
 		}
 	}
 	t.Logf("running %s suite against Kubernetes %s", suite, serverVersion.GitVersion)
@@ -145,17 +150,21 @@ func TestMigration(t *testing.T) {
 	// Catalog migration is deliberately run before the operator check: C7 is a
 	// hard prerequisite and this verifies the prescribed command sequence.
 	run(t, binary(t, "migrate-catalogs-v0-to-v1"), "--kubeconfig", os.Getenv("KUBECONFIG"))
-	allChecks, err := output(binary(t, "migrate-operators-v0-to-v1"), "check", "--all", "--kubeconfig", os.Getenv("KUBECONFIG"))
-	if err != nil {
-		t.Fatalf("check --all failed: %v\n%s", err, allChecks)
-	}
-	if !strings.Contains(allChecks, namespace+"/"+subscription) {
-		t.Fatalf("check --all did not report %s/%s:\n%s", namespace, subscription, allChecks)
+	if os.Getenv("E2E_SUITE") == "real-operator" {
+		allChecks, err := output(binary(t, "migrate-operators-v0-to-v1"), "check", "--all", "--kubeconfig", os.Getenv("KUBECONFIG"))
+		if err != nil {
+			t.Fatalf("check --all failed: %v\n%s", err, allChecks)
+		}
+		if !strings.Contains(allChecks, namespace+"/"+subscription) {
+			t.Fatalf("check --all did not report %s/%s:\n%s", namespace, subscription, allChecks)
+		}
 	}
 	run(t, binary(t, "migrate-operators-v0-to-v1"), "check", subscription, "-n", namespace, "--kubeconfig", os.Getenv("KUBECONFIG"))
-	run(t, binary(t, "migrate-operators-v0-to-v1"), "convert", subscription, "-n", namespace, "--dry-run", "--kubeconfig", os.Getenv("KUBECONFIG"))
-	if _, err := output("kubectl", "get", "clusterextension", subscription); err == nil {
-		t.Fatal("convert --dry-run created a ClusterExtension")
+	if os.Getenv("E2E_SUITE") == "real-operator" {
+		run(t, binary(t, "migrate-operators-v0-to-v1"), "convert", subscription, "-n", namespace, "--dry-run", "--kubeconfig", os.Getenv("KUBECONFIG"))
+		if _, err := output("kubectl", "get", "clusterextension", subscription); err == nil {
+			t.Fatal("convert --dry-run created a ClusterExtension")
+		}
 	}
 	run(t, binary(t, "migrate-operators-v0-to-v1"), "convert", subscription, "-n", namespace, "--kubeconfig", os.Getenv("KUBECONFIG"))
 
@@ -169,17 +178,19 @@ func TestMigration(t *testing.T) {
 	if _, err := output("kubectl", "get", "subscription", subscription, "-n", namespace); err == nil {
 		t.Fatal("Subscription still exists after successful conversion")
 	}
-	restoreSubscriptionForConflict(t, subscriptionJSON)
-	run(t, binary(t, "migrate-operators-v0-to-v1"), "cleanup", subscription, "--kubeconfig", os.Getenv("KUBECONFIG"))
-	run(t, "kubectl", "get", "clusterextension", subscription)
-	if _, err := output("kubectl", "get", "subscription", subscription, "-n", namespace); err == nil {
-		t.Fatal("cleanup left the conflict Subscription in place")
+	if os.Getenv("E2E_SUITE") == "real-operator" {
+		restoreSubscriptionForConflict(t, subscriptionJSON)
+		run(t, binary(t, "migrate-operators-v0-to-v1"), "cleanup", subscription, "--kubeconfig", os.Getenv("KUBECONFIG"))
+		run(t, "kubectl", "get", "clusterextension", subscription)
+		if _, err := output("kubectl", "get", "subscription", subscription, "-n", namespace); err == nil {
+			t.Fatal("cleanup left the conflict Subscription in place")
+		}
+		if _, err := output(binary(t, "migrate-operators-v0-to-v1"), "rollback", subscription, "--kubeconfig", os.Getenv("KUBECONFIG")); err == nil {
+			t.Fatal("rollback of an installed ClusterExtension succeeded without acknowledgment")
+		}
+		run(t, binary(t, "migrate-operators-v0-to-v1"), "rollback", subscription, "--acknowledge-installed", "--kubeconfig", os.Getenv("KUBECONFIG"))
+		run(t, "kubectl", "get", "subscription", subscription, "-n", namespace)
 	}
-	if _, err := output(binary(t, "migrate-operators-v0-to-v1"), "rollback", subscription, "--kubeconfig", os.Getenv("KUBECONFIG")); err == nil {
-		t.Fatal("rollback of an installed ClusterExtension succeeded without acknowledgment")
-	}
-	run(t, binary(t, "migrate-operators-v0-to-v1"), "rollback", subscription, "--acknowledge-installed", "--kubeconfig", os.Getenv("KUBECONFIG"))
-	run(t, "kubectl", "get", "subscription", subscription, "-n", namespace)
 }
 
 // restoreSubscriptionForConflict replays the pre-migration Subscription without
