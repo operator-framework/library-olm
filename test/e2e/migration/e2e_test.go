@@ -5,6 +5,7 @@ package e2e
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -128,6 +129,47 @@ func TestCatalogSourceMigration(t *testing.T) {
 	run(t, "kubectl", "get", "catalogsource/"+name, "-n", namespace)
 }
 
+// TestFixtureNegativeGuards verifies that fixture migration refuses unsafe
+// inputs without creating OLMv1 resources. It runs before TestMigration, which
+// recreates the migrated catalog and performs the successful conversion.
+func TestFixtureNegativeGuards(t *testing.T) {
+	if os.Getenv("E2E_SUITE") != "fixture" {
+		t.Skip("negative fixture guards run only against the controller-free OLMv0 fixture suite")
+	}
+	namespace, subscription := os.Getenv("E2E_NAMESPACE"), os.Getenv("E2E_SUBSCRIPTION")
+	if namespace == "" || subscription == "" {
+		t.Fatal("E2E_NAMESPACE and E2E_SUBSCRIPTION are required")
+	}
+
+	// A non-steady Subscription is unsafe to migrate. Both check and convert
+	// must reject it before they remove OLMv0 resources or create OLMv1 ones.
+	run(t, "kubectl", "patch", "subscription/"+subscription, "-n", namespace,
+		"--subresource=status", "--type=merge", "--patch", `{"status":{"state":"UpgradeAvailable"}}`)
+	expectCheckFailure(t, "Subscription state", binary(t, "migrate-operators-v0-to-v1"), "check", subscription, "-n", namespace, "--kubeconfig", os.Getenv("KUBECONFIG"))
+	expectFailure(t, binary(t, "migrate-operators-v0-to-v1"), "convert", subscription, "-n", namespace, "--kubeconfig", os.Getenv("KUBECONFIG"))
+	assertNoMigrationObjects(t, subscription)
+	run(t, "kubectl", "patch", "subscription/"+subscription, "-n", namespace,
+		"--subresource=status", "--type=merge", "--patch", `{"status":{"state":"AtLatestKnown"}}`)
+	run(t, "kubectl", "get", "subscription/"+subscription, "-n", namespace)
+
+	// Catalog availability is a hard prerequisite. Ask the serving catalog for a
+	// package that does not exist, then verify the failed resolution is still
+	// non-mutating. Unlike deleting ClusterCatalogs, this does not race the
+	// bootstrap catalog reconciler.
+	packageName, err := output("kubectl", "get", "subscription/"+subscription, "-n", namespace, "-o", "jsonpath={.spec.name}")
+	if err != nil || strings.TrimSpace(packageName) == "" {
+		t.Fatalf("get source package: %v (%s)", err, packageName)
+	}
+	run(t, "kubectl", "patch", "subscription/"+subscription, "-n", namespace,
+		"--type=merge", "--patch", `{"spec":{"name":"migration-fixture-package-that-does-not-exist"}}`)
+	expectCheckFailure(t, "No ClusterCatalog found", binary(t, "migrate-operators-v0-to-v1"), "check", subscription, "-n", namespace, "--kubeconfig", os.Getenv("KUBECONFIG"))
+	expectFailure(t, binary(t, "migrate-operators-v0-to-v1"), "convert", subscription, "-n", namespace, "--kubeconfig", os.Getenv("KUBECONFIG"))
+	assertNoMigrationObjects(t, subscription)
+	run(t, "kubectl", "patch", "subscription/"+subscription, "-n", namespace,
+		"--type=merge", "--patch", fmt.Sprintf(`{"spec":{"name":%q}}`, strings.TrimSpace(packageName)))
+	run(t, "kubectl", "get", "subscription/"+subscription, "-n", namespace)
+}
+
 // TestMigration applies the suite's complete fixture, exercises the two migration
 // binaries, and observes the API server rather than mocking either OLM controller.
 // E2E_MANIFEST must create the namespace, a CatalogSource, and the named Subscription.
@@ -239,6 +281,41 @@ func run(t *testing.T, command string, args ...string) {
 	t.Helper()
 	if out, err := output(command, args...); err != nil {
 		t.Fatalf("%s %s failed: %v\n%s", command, strings.Join(args, " "), err, out)
+	}
+}
+
+// expectFailure requires a command to reject its input and includes its output
+// in the test failure to make an accidental success diagnosable.
+func expectFailure(t *testing.T, command string, args ...string) {
+	t.Helper()
+	if out, err := output(command, args...); err == nil {
+		t.Fatalf("%s %s unexpectedly succeeded:\n%s", command, strings.Join(args, " "), out)
+	}
+}
+
+// expectCheckFailure verifies the CLI's deliberate check contract: it returns
+// success after reporting failed prerequisites, allowing callers to inspect the
+// full report. Conversion itself must still reject those prerequisites.
+func expectCheckFailure(t *testing.T, want, command string, args ...string) {
+	t.Helper()
+	out, err := output(command, args...)
+	if err != nil {
+		t.Fatalf("%s %s returned an error instead of a check report: %v\n%s", command, strings.Join(args, " "), err, out)
+	}
+	if !strings.Contains(out, want) {
+		t.Fatalf("%s %s did not report %q:\n%s", command, strings.Join(args, " "), want, out)
+	}
+}
+
+// assertNoMigrationObjects proves a rejected conversion did not create either
+// OLMv1 resource that would take ownership of the OLMv0 installation.
+func assertNoMigrationObjects(t *testing.T, subscription string) {
+	t.Helper()
+	if out, err := output("kubectl", "get", "clusterextension/"+subscription); err == nil {
+		t.Fatalf("rejected conversion created ClusterExtension %s:\n%s", subscription, out)
+	}
+	if out, err := output("kubectl", "get", "clusterobjectsets", "-l", "olm.operatorframework.io/owner-name="+subscription, "-o", "name"); err != nil || strings.TrimSpace(out) != "" {
+		t.Fatalf("rejected conversion created ClusterObjectSet(s): err=%v\n%s", err, out)
 	}
 }
 
