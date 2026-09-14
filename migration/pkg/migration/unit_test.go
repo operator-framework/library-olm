@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +19,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -112,6 +116,28 @@ not-json
 	csv := &operatorsv1alpha1.ClusterServiceVersion{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"operatorframework.io/properties": `[{"type":"olm.package","value":{"version":"3.1.4"}}]`}}}
 	if got := parseCSVVersion(csv); got != "3.1.4" {
 		t.Fatalf("CSV version = %q", got)
+	}
+}
+
+func TestCatalogdTLSConfigUsesCatalogCAWithoutAPIServerTransportSettings(t *testing.T) {
+	ca := []byte("catalogd-ca")
+	config := &rest.Config{
+		TLSClientConfig: rest.TLSClientConfig{CAData: []byte("api-server-ca"), Insecure: true},
+		Proxy: func(*http.Request) (*url.URL, error) {
+			return &url.URL{Scheme: "https", Host: "proxy.example"}, nil
+		},
+	}
+	clientset := k8sfake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "olmv1-ca", Namespace: "cert-manager"},
+		Data:       map[string][]byte{"ca.crt": ca},
+	})
+
+	got, err := catalogdTLSConfig(context.Background(), clientset, config)
+	if err != nil {
+		t.Fatalf("catalogdTLSConfig() error = %v", err)
+	}
+	if got == config || got.Insecure || got.Proxy != nil || got.CAFile != "" || !bytes.Equal(got.CAData, ca) {
+		t.Fatalf("catalog transport config = %#v, want copied config with catalog CA, TLS verification, and no proxy", got)
 	}
 }
 

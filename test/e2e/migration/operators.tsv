@@ -1,0 +1,4 @@
+# package	channel	namespace
+ecr-secret-operator	alpha	migration-e2e-ecr-secret
+redis-operator	stable	migration-e2e-redis
+external-secrets-operator	alpha	migration-e2e-external-secrets
