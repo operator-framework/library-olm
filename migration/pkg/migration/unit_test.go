@@ -410,3 +410,85 @@ func TestPrerequisitesAndRecoveryErrors(t *testing.T) {
 		t.Fatal("Cleanup() unexpectedly succeeded for a missing ClusterExtension")
 	}
 }
+
+// TestMigrateRejectsUnsafeOperatorsWithoutMutation verifies the safety boundary
+// of conversion: failures before preparation must leave OLMv0 resources intact.
+func TestMigrateRejectsUnsafeOperatorsWithoutMutation(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name   string
+		mutate func(*operatorsv1alpha1.Subscription, *operatorsv1alpha1.ClusterServiceVersion)
+	}{
+		{
+			name: "not steady",
+			mutate: func(sub *operatorsv1alpha1.Subscription, _ *operatorsv1alpha1.ClusterServiceVersion) {
+				sub.Status.State = operatorsv1alpha1.SubscriptionStateUpgradeAvailable
+			},
+		},
+		{
+			name: "incompatible API service",
+			mutate: func(_ *operatorsv1alpha1.Subscription, csv *operatorsv1alpha1.ClusterServiceVersion) {
+				csv.Spec.APIServiceDefinitions.Owned = []operatorsv1alpha1.APIServiceDescription{{Name: "v1.widgets"}}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub, csv := healthySubscriptionFixtures()
+			tt.mutate(sub, csv)
+			m := migrationTestClient(t, sub, csv)
+
+			if err := m.Migrate(ctx, Options{SubscriptionName: sub.Name, SubscriptionNamespace: sub.Namespace}); err == nil {
+				t.Fatal("Migrate() unexpectedly accepted an unsafe operator")
+			}
+			if err := m.Client.Get(ctx, client.ObjectKeyFromObject(sub), &operatorsv1alpha1.Subscription{}); err != nil {
+				t.Fatalf("unsafe migration deleted Subscription: %v", err)
+			}
+			if err := m.Client.Get(ctx, client.ObjectKeyFromObject(csv), &operatorsv1alpha1.ClusterServiceVersion{}); err != nil {
+				t.Fatalf("unsafe migration deleted CSV: %v", err)
+			}
+			if err := m.Client.Get(ctx, client.ObjectKey{Name: sub.Name}, &ocv1.ClusterExtension{}); err == nil {
+				t.Fatal("unsafe migration created a ClusterExtension")
+			}
+		})
+	}
+}
+
+func TestRollbackAndCleanupRejectInvalidInputWithoutMutation(t *testing.T) {
+	ctx := context.Background()
+	installed := &ocv1.ClusterExtension{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "installed",
+			Annotations: map[string]string{
+				MigratedFromSubscriptionAnnotation: "ns/sub",
+				MigrationSubscriptionBackupAnnotation: `{}`,
+			},
+		},
+		Status: ocv1.ClusterExtensionStatus{Conditions: []metav1.Condition{{Type: "Installed", Status: metav1.ConditionTrue}}},
+	}
+	cos := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "installed-1"}}
+	m := migrationTestClient(t, installed, cos)
+	if err := m.Rollback(ctx, Options{ClusterExtensionName: "installed"}); err == nil {
+		t.Fatal("rollback of Installed=True ClusterExtension unexpectedly succeeded without acknowledgement")
+	}
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(installed), &ocv1.ClusterExtension{}); err != nil {
+		t.Fatalf("unacknowledged rollback deleted ClusterExtension: %v", err)
+	}
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(cos), &ocv1.ClusterObjectSet{}); err != nil {
+		t.Fatalf("unacknowledged rollback deleted ClusterObjectSet: %v", err)
+	}
+
+	invalid := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "invalid", Annotations: map[string]string{MigratedFromSubscriptionAnnotation: "not-a-reference"}}}
+	sub := &operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: "sub", Namespace: "ns"}}
+	m = migrationTestClient(t, invalid, sub)
+	if err := m.CleanupConflict(ctx, "invalid"); err == nil {
+		t.Fatal("cleanup accepted an invalid migrated-from-subscription annotation")
+	}
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(sub), &operatorsv1alpha1.Subscription{}); err != nil {
+		t.Fatalf("invalid conflict cleanup deleted Subscription: %v", err)
+	}
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(invalid), &ocv1.ClusterExtension{}); err != nil {
+		t.Fatalf("invalid conflict cleanup deleted ClusterExtension: %v", err)
+	}
+}
