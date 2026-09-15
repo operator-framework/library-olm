@@ -1,9 +1,10 @@
 # E2E Test Strategy — OLMv0 → OLMv1 Migration
 
 This document implements the Phase 8 E2E plan from [validation.md](validation.md).
-It deliberately uses two suites: deterministic fixture scenarios for the migration tool's
-decision and recovery paths, and real-operator smoke scenarios for controller adoption.
-Both suites are required CI gates for pull requests, merge queues, and pushes to `main`.
+It uses deterministic fixture scenarios for the migration tool's decision and recovery paths,
+real-operator smoke scenarios for controller adoption, and an in-cluster Job that verifies
+ServiceAccount authentication. All are required CI gates for pull requests, merge queues, and
+pushes to `main`.
 
 ## Test environments
 
@@ -11,10 +12,11 @@ Both suites are required CI gates for pull requests, merge queues, and pushes to
 |---|---|---|---|
 | `fixture` | kind + OLMv1 + OLMv0 CRDs only (no OLMv0 controllers) | Committed OLMv0-install snapshots and a digest-pinned CatalogSource | Deterministic coverage of V1, V2, V3, V4. |
 | `real-operator` | separate kind cluster with OLMv0 + OLMv1 | OLMv0's installed OperatorHub catalog | Proves V5.2–V5.8 with real deployed operators. |
+| `in-cluster-job` | fixture cluster | A replayed ecr-secret-operator installation | Proves both CLIs authenticate and migrate using only a Pod ServiceAccount. |
 | `kind-only` | kind + OLMv1 | Local fixture objects, no OLMv0 controllers | Fast contract tests for resource rendering and COS adoption prerequisites. |
 
 Do not use a mutable `latest` image or an unpinned release installer in CI. The default
-bootstrap pins OLMv0 to `v0.46.0`, OLMv1 to `v1.11.0`, and kind to `v0.31.0` with the
+bootstrap pins OLMv0 to `v0.46.0`, OLMv1 to `v1.11.0`, and kind to `v0.33.0` with the
 digest-pinned Kubernetes `v1.36.1` node image; CI should
 mirror those release artifacts and override the URLs when it cannot access GitHub. The job inputs
 are the kind node image, OLMv0 manifest URL and digest, operator-controller release
@@ -107,12 +109,13 @@ coverage while still showing which migration paths the E2E suite executes.
 
 ## CI rollout
 
-1. The `migration-test` workflow runs unit coverage, fixture E2E, and live-operator E2E
-   independently, each with its own Kind cluster and kubeconfig; a fourth job merges their
-   coverage profiles and displays the total report.
-2. Run all four jobs for pull requests, merge queues, and pushes to `main`. The fixture and
-   live-operator suites are required merge gates. Preserve E2E diagnostics and CLI coverage
-   artifacts for failed jobs.
+1. The `migration-test` workflow runs unit coverage, fixture E2E, live-operator E2E, and the
+   in-cluster Job E2E independently. The first three provide CLI coverage; a fifth job merges
+   their coverage profiles and displays the total report.
+2. Run all five jobs for pull requests, merge queues, and pushes to `main`. The fixture,
+   live-operator, and in-cluster Job suites are required merge gates. Preserve diagnostics and
+   CLI coverage artifacts for the coverage-producing fixture and live-operator suites; the
+   focused in-cluster Job check uploads neither.
 3. Retry only provisioning/image-pull failures once; never retry a failed assertion automatically.
 
 ## Run order
@@ -173,3 +176,16 @@ For a single package, replace `all` with its name from `e2e/migration/operators.
 `make migration/e2e-install-v0 E2E_OPERATOR=redis-operator`. Snapshot capture must occur while the
 operator remains OLMv0-managed. Fixture CI never captures snapshots, so it can run
 independently and in parallel with the live suite.
+
+### In-cluster Job test
+
+This focused test is independent of coverage collection. It provisions the fixture cluster,
+loads a locally built, uninstrumented image into Kind, then runs catalog and operator migration
+from a Job using projected ServiceAccount credentials (with a test-only `cluster-admin` binding).
+It intentionally retains the Job namespace for log inspection; the next invocation removes it
+before creating a fresh Job.
+
+```bash
+make migration/test-e2e-in-cluster-job
+E2E_CLUSTER_NAME=library-olm-fixture-e2e make migration/e2e-teardown
+```

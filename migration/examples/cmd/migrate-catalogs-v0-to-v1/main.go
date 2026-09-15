@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -86,7 +87,15 @@ func newClient() (client.Client, error) {
 
 	restConfig, err := kubeConfig.ClientConfig()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get REST config: %w", err)
+		// A migration Job has no kubeconfig file. Prefer an explicitly supplied
+		// kubeconfig, but otherwise use the projected ServiceAccount credentials
+		// when the CLI runs in a Pod.
+		if kubeconfig == "" {
+			restConfig, err = rest.InClusterConfig()
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to get REST config: %w", err)
+		}
 	}
 
 	c, err := client.New(restConfig, client.Options{Scheme: scheme})

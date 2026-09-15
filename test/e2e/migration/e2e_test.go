@@ -21,8 +21,8 @@ import (
 // select their fixture set through E2E_SUITE and use E2E_ARTIFACTS for diagnostics.
 func TestEnvironment(t *testing.T) {
 	suite := os.Getenv("E2E_SUITE")
-	if suite != "fixture" && suite != "real-operator" {
-		t.Fatalf("E2E_SUITE must be fixture or real-operator, got %q", suite)
+	if suite != "fixture" && suite != "real-operator" && suite != "in-cluster-job" {
+		t.Fatalf("E2E_SUITE must be fixture, real-operator, or in-cluster-job, got %q", suite)
 	}
 
 	kubeconfig := os.Getenv("KUBECONFIG")
@@ -46,7 +46,7 @@ func TestEnvironment(t *testing.T) {
 			t.Fatalf("required API %s is unavailable: %v", groupVersion, err)
 		}
 	}
-	if suite == "fixture" {
+	if suite == "fixture" || suite == "in-cluster-job" {
 		out, err := output("kubectl", "get", "deployment/olm-operator", "-n", "olm", "--ignore-not-found", "-o", "name")
 		if err != nil {
 			t.Fatalf("verify OLMv0 controller absence: %v\n%s", err, out)
@@ -56,6 +56,72 @@ func TestEnvironment(t *testing.T) {
 		}
 	}
 	t.Logf("running %s suite against Kubernetes %s", suite, serverVersion.GitVersion)
+}
+
+// TestMigrationInClusterJob proves that both migration CLIs can authenticate
+// with projected ServiceAccount credentials rather than a host kubeconfig.
+// It uses the controller-free fixture cluster so its OLMv0 installation is
+// deterministic; unlike the coverage suites, the Job's process is deliberately
+// uninstrumented.
+func TestMigrationInClusterJob(t *testing.T) {
+	if os.Getenv("E2E_SUITE") != "in-cluster-job" {
+		t.Skip("in-cluster migration is exercised by its dedicated target")
+	}
+	namespace, subscription, image := os.Getenv("E2E_NAMESPACE"), os.Getenv("E2E_SUBSCRIPTION"), os.Getenv("E2E_MIGRATION_IMAGE")
+	if namespace == "" || subscription == "" || image == "" {
+		t.Fatal("E2E_NAMESPACE, E2E_SUBSCRIPTION, and E2E_MIGRATION_IMAGE are required")
+	}
+	runnerNamespace := "migration-e2e-job"
+	serviceAccount := "migration-runner"
+	binding := "migration-e2e-job-admin"
+	job := "migration-" + subscription
+	// Retain the Job and its namespace for log inspection. The start of the next
+	// invocation removes them before creating fresh ones, while cleanup removes
+	// the test-only elevated binding as soon as the Job has finished.
+	t.Cleanup(func() {
+		_, _ = output("kubectl", "delete", "clusterrolebinding/"+binding, "--ignore-not-found")
+	})
+	run(t, "kubectl", "delete", "clusterrolebinding/"+binding, "--ignore-not-found")
+	run(t, "kubectl", "delete", "namespace/"+runnerNamespace, "--ignore-not-found", "--wait=true")
+	run(t, "kubectl", "create", "namespace", runnerNamespace)
+	run(t, "kubectl", "create", "serviceaccount", serviceAccount, "-n", runnerNamespace)
+	run(t, "kubectl", "create", "clusterrolebinding", binding, "--clusterrole=cluster-admin", "--serviceaccount="+runnerNamespace+":"+serviceAccount)
+
+	jobManifest := fmt.Sprintf(`apiVersion: batch/v1
+kind: Job
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: %s
+      containers:
+      - name: migrate
+        image: %s
+        imagePullPolicy: Never
+        command: ["/bin/sh", "-ec"]
+        args:
+        - |
+          migrate-catalogs-v0-to-v1
+          migrate-operators-v0-to-v1 check %s -n %s
+          migrate-operators-v0-to-v1 convert %s -n %s
+`, job, runnerNamespace, serviceAccount, image, subscription, namespace, subscription, namespace)
+	path := filepath.Join(t.TempDir(), "migration-job.yaml")
+	if err := os.WriteFile(path, []byte(jobManifest), 0o600); err != nil {
+		t.Fatalf("write migration Job: %v", err)
+	}
+	run(t, "kubectl", "apply", "-f", path)
+	if out, err := output("kubectl", "wait", "--for=condition=Complete", "job/"+job, "-n", runnerNamespace, "--timeout=10m"); err != nil {
+		logs, _ := output("kubectl", "logs", "job/"+job, "-n", runnerNamespace)
+		t.Fatalf("wait for migration Job: %v\n%s\nJob logs:\n%s", err, out, logs)
+	}
+	run(t, "kubectl", "wait", "--for=jsonpath={.status.conditions[?(@.type=='Installed')].status}=True", "clusterextension/"+subscription, "--timeout=10m")
+	if _, err := output("kubectl", "get", "subscription/"+subscription, "-n", namespace); err == nil {
+		t.Fatal("Subscription still exists after the in-cluster migration Job completed")
+	}
 }
 
 // TestCatalogSourceMigration creates a real OLMv0 image CatalogSource, migrates

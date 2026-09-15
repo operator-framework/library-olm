@@ -58,6 +58,23 @@ jobs:
           path: artifacts/e2e
           if-no-files-found: ignore
 
+  in-cluster-job:
+    name: migration in-cluster Job E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Run in-cluster migration Job test
+        run: make migration/test-e2e-in-cluster-job
+      - name: Tear down fixture cluster
+        if: always()
+        run: E2E_CLUSTER_NAME=library-olm-fixture-e2e make migration/e2e-teardown
+
   coverage:
     name: migration total coverage
     needs: [unit-coverage, fixture, live]
