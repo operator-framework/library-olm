@@ -18,7 +18,7 @@ kubectl -n "$E2E_NAMESPACE" get \
 	"csv/$csv",\
 	"installplan/$install_plan" \
 	-o yaml >"$snapshot_dir/olmv0.yaml"
-kubectl -n "$E2E_NAMESPACE" get all,cm,sa,role,rolebinding -l "olm.owner=$csv" -o yaml >"$snapshot_dir/namespaced-resources.yaml" || true
+kubectl -n "$E2E_NAMESPACE" get all,cm,sa,role,rolebinding -l "olm.owner=$csv" -o yaml >"$snapshot_dir/namespaced-resources.yaml"
 kubectl get crd -l "operators.coreos.com/$E2E_PACKAGE.$E2E_NAMESPACE" -o yaml >"$snapshot_dir/crds.yaml" || true
 
 # Snapshots are reapplied to fresh clusters. Remove fields assigned by the API

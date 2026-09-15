@@ -46,7 +46,11 @@ func TestEnvironment(t *testing.T) {
 		}
 	}
 	if suite == "fixture" {
-		if _, err := output("kubectl", "get", "deployment/olm-operator", "-n", "olm"); err == nil {
+		out, err := output("kubectl", "get", "deployment/olm-operator", "-n", "olm", "--ignore-not-found", "-o", "name")
+		if err != nil {
+			t.Fatalf("verify OLMv0 controller absence: %v\n%s", err, out)
+		}
+		if strings.TrimSpace(out) != "" {
 			t.Fatal("fixture suite must not run with the OLMv0 controller installed")
 		}
 	}

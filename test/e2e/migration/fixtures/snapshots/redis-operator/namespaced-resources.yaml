@@ -58,7 +58,7 @@ items:
                   value: "false"
                 - name: OPERATOR_CONDITION_NAME
                   value: redis-operator.v0.25.0
-              image: quay.io/opstree/redis-operator:v0.25.0
+              image: quay.io/opstree/redis-operator@sha256:40a04d5b4f104e2f8a628937fc41a3e1d10e25a738a688410d29a75097a45900
               imagePullPolicy: Always
               livenessProbe:
                 failureThreshold: 3

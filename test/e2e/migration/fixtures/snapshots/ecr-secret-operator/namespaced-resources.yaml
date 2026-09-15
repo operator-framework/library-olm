@@ -136,7 +136,7 @@ items:
                       fieldPath: metadata.annotations['olm.targetNamespaces']
                 - name: OPERATOR_CONDITION_NAME
                   value: ecr-secret-operator.v0.6.0
-              image: quay.io/rh-mobb/ecr-secret-operator:v0.6.0
+              image: quay.io/rh-mobb/ecr-secret-operator@sha256:17b34ebf7bc92bd0c691d7ff6395e444f72116c98f75a13d042e1ad7f8ba866e
               imagePullPolicy: IfNotPresent
               livenessProbe:
                 failureThreshold: 3

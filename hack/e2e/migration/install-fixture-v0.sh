@@ -29,7 +29,7 @@ if [[ -f "$snapshot_dir/crds.yaml" ]]; then
 	kubectl apply --server-side --force-conflicts --validate=false -f "$snapshot_dir/crds.yaml"
 fi
 kubectl apply --validate=false -f "$snapshot_dir/olmv0.yaml"
-kubectl apply --validate=false -f "$snapshot_dir/namespaced-resources.yaml" 2>/dev/null || true
+kubectl apply --validate=false -f "$snapshot_dir/namespaced-resources.yaml"
 # CatalogSources are cluster-independent fixture inputs rather than resources
 # owned by an individual operator snapshot. OLMv0 is intentionally absent, but
 # the migration CLI needs this source to map each Subscription to OLMv1's
