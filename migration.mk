@@ -15,6 +15,8 @@ E2E_TIMEOUT ?= 30m
 E2E_ARTIFACTS ?= $(ROOT_DIR)/artifacts/e2e
 E2E_COVERAGE_DIR ?= $(E2E_ARTIFACTS)/coverage
 E2E_CLUSTER_NAME ?= library-olm-e2e
+E2E_FIXTURE_CLUSTER_NAME ?= library-olm-fixture-e2e
+E2E_FIXTURE_KUBECONFIG ?= $(ROOT_DIR)/.kubeconfig/library-olm-fixture-e2e
 # Pin controller releases used by the E2E cluster. Override only to test a
 # compatibility candidate; do not use "latest" in CI.
 OLM_V0_VERSION ?= v0.46.0
@@ -61,6 +63,10 @@ migration/test-coverage: ## Run migration unit tests and display coverage
 migration/e2e-setup: $(KIND) ## Create kind and install pinned OLMv0 and OLMv1 releases
 	E2E_KUBECONFIG="$(E2E_KUBECONFIG)" E2E_CLUSTER_NAME="$(E2E_CLUSTER_NAME)" KIND="$(KIND)" OLM_V0_CRDS="$(OLM_V0_CRDS)" OLM_V0_MANIFEST="$(OLM_V0_MANIFEST)" OLM_V1_INSTALL="$(OLM_V1_INSTALL)" OLM_V1_INSTALL_SHA256="$(OLM_V1_INSTALL_SHA256)" ./hack/e2e/migration/setup.sh
 
+.PHONY: migration/e2e-fixture-setup
+migration/e2e-fixture-setup: $(KIND) ## Create fixture kind cluster with OLMv0 APIs but no OLMv0 controllers
+	E2E_KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" E2E_CLUSTER_NAME="$(E2E_FIXTURE_CLUSTER_NAME)" E2E_INSTALL_OLMV0=false KIND="$(KIND)" OLM_V0_CRDS="$(OLM_V0_CRDS)" OLM_V0_MANIFEST="$(OLM_V0_MANIFEST)" OLM_V1_INSTALL="$(OLM_V1_INSTALL)" OLM_V1_INSTALL_SHA256="$(OLM_V1_INSTALL_SHA256)" ./hack/e2e/migration/setup.sh
+
 .PHONY: migration/e2e-teardown
 migration/e2e-teardown: $(KIND) ## Delete the dedicated migration kind cluster
 	E2E_CLUSTER_NAME="$(E2E_CLUSTER_NAME)" KIND="$(KIND)" ./hack/e2e/migration/teardown.sh
@@ -70,14 +76,35 @@ migration/e2e-install-v0: ## Install one migration E2E operator (E2E_OPERATOR=na
 	@if [[ "$(E2E_OPERATOR)" != all ]]; then E2E_OPERATOR="$(E2E_OPERATOR)" KUBECONFIG="$(E2E_KUBECONFIG)" bash -c 'source "$$1"; operator_fields "$$E2E_OPERATOR"' -- ./hack/e2e/migration/operators.sh; fi
 	@for operator in $$(awk -F '\t' -v wanted="$(E2E_OPERATOR)" 'NF==3 && $$1 !~ /^#/ && (wanted=="all" || $$1==wanted) {print $$1}' test/e2e/migration/operators.tsv); do KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/install-v0.sh "$$operator"; done
 
+.PHONY: migration/e2e-snapshot-v0
+migration/e2e-snapshot-v0: ## Snapshot OLMv0 installs for one migration E2E operator or all
+	@for operator in $$(awk -F '\t' -v wanted="$(E2E_OPERATOR)" 'NF==3 && $$1 !~ /^#/ && (wanted=="all" || $$1==wanted) {print $$1}' test/e2e/migration/operators.tsv); do KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/snapshot-v0.sh "$$operator"; done
+
+.PHONY: migration/e2e-install-fixture-v0
+migration/e2e-install-fixture-v0: ## Replay one OLMv0 install snapshot, or all, as fixtures
+	@for operator in $$(awk -F '\t' -v wanted="$(E2E_OPERATOR)" 'NF==3 && $$1 !~ /^#/ && (wanted=="all" || $$1==wanted) {print $$1}' test/e2e/migration/operators.tsv); do KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$operator"; done
+
 .PHONY: migration/test-e2e-live-matrix
 migration/test-e2e-live-matrix: migration/build ## Install and migrate all three operators from live OLMv0
 	@set -euo pipefail; while IFS=$$'\t' read -r package channel namespace; do [[ -z "$$package" || "$$package" == \#* ]] && continue; coverage_dir="$(E2E_COVERAGE_DIR)/live/$$package"; artifact_dir="$(E2E_ARTIFACTS)/live/$$package"; mkdir -p "$$coverage_dir"; KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/install-v0.sh "$$package"; KUBECONFIG="$(E2E_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$$artifact_dir" E2E_SUITE=real-operator E2E_NAMESPACE="$$namespace" E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -timeout "$(E2E_TIMEOUT)"; KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; done < test/e2e/migration/operators.tsv
+
+.PHONY: migration/test-e2e-fixture-matrix
+migration/test-e2e-fixture-matrix: migration/build ## Replay and migrate all three OLMv0 install snapshots
+	@set -euo pipefail; while IFS=$$'\t' read -r package channel namespace; do [[ -z "$$package" || "$$package" == \#* ]] && continue; coverage_dir="$(E2E_COVERAGE_DIR)/fixture/$$package"; artifact_dir="$(E2E_ARTIFACTS)/fixture/$$package"; mkdir -p "$$coverage_dir"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$$artifact_dir" E2E_SUITE=fixture E2E_NAMESPACE="$$namespace" E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -timeout "$(E2E_TIMEOUT)"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; done < test/e2e/migration/operators.tsv
 
 .PHONY: migration/e2e-delete-v1
 migration/e2e-delete-v1: ## Delete one migration E2E operator as OLMv1, or all
 	@if [[ "$(E2E_OPERATOR)" != all ]]; then E2E_OPERATOR="$(E2E_OPERATOR)" KUBECONFIG="$(E2E_KUBECONFIG)" bash -c 'source "$$1"; operator_fields "$$E2E_OPERATOR"' -- ./hack/e2e/migration/operators.sh; fi
 	@for operator in $$(awk -F '\t' -v wanted="$(E2E_OPERATOR)" 'NF==3 && $$1 !~ /^#/ && (wanted=="all" || $$1==wanted) {print $$1}' test/e2e/migration/operators.tsv); do KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$operator"; done
+
+.PHONY: migration/test-e2e-fixture
+migration/test-e2e-fixture: migration/build ## Run deterministic fixture migration tests against the fixture kubeconfig
+	@test -n "$(E2E_FIXTURE_MANIFEST)" || (echo "E2E_FIXTURE_MANIFEST must install the fixture CatalogSource and Subscription" >&2; exit 2)
+	@test -n "$(E2E_FIXTURE_NAMESPACE)" || (echo "E2E_FIXTURE_NAMESPACE is required" >&2; exit 2)
+	@test -n "$(E2E_FIXTURE_SUBSCRIPTION)" || (echo "E2E_FIXTURE_SUBSCRIPTION is required" >&2; exit 2)
+	@mkdir -p "$(E2E_ARTIFACTS)/fixture"
+	@mkdir -p "$(E2E_COVERAGE_DIR)/fixture"
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$(E2E_COVERAGE_DIR)/fixture" E2E_SUITE=fixture E2E_MANIFEST="$(E2E_FIXTURE_MANIFEST)" E2E_NAMESPACE="$(E2E_FIXTURE_NAMESPACE)" E2E_SUBSCRIPTION="$(E2E_FIXTURE_SUBSCRIPTION)" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/fixture" go test -count=1 -tags=e2e ./test/e2e/migration -timeout "$(E2E_TIMEOUT)"
 
 .PHONY: migration/test-e2e-real-operator
 migration/test-e2e-real-operator: migration/build ## Run real-operator migration smoke tests against the live kubeconfig

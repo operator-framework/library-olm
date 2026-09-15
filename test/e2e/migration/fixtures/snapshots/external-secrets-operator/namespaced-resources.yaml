@@ -1,0 +1,857 @@
+apiVersion: v1
+items:
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      annotations:
+        deployment.kubernetes.io/revision: "1"
+      labels:
+        control-plane: controller-manager
+        olm.deployment-spec-hash: 8y1n9XCjdkNHHkewvMv7DX1Emq8MCexgO98ZTe
+        olm.managed: "true"
+        olm.owner: external-secrets-operator.v0.11.0
+        olm.owner.kind: ClusterServiceVersion
+        olm.owner.namespace: migration-e2e-external-secrets
+        operators.coreos.com/external-secrets-operator.migration-e2e-external-secrets: ""
+      name: external-secrets-operator-controller-manager
+      namespace: migration-e2e-external-secrets
+    spec:
+      progressDeadlineSeconds: 600
+      replicas: 1
+      revisionHistoryLimit: 1
+      selector:
+        matchLabels:
+          control-plane: controller-manager
+      strategy:
+        rollingUpdate:
+          maxSurge: 25%
+          maxUnavailable: 25%
+        type: RollingUpdate
+      template:
+        metadata:
+          annotations:
+            alm-examples: |-
+              [
+                {
+                  "apiVersion": "external-secrets.io/v1alpha1",
+                  "kind": "ClusterSecretStore",
+                  "metadata": {
+                    "name": "example"
+                  },
+                  "spec": {
+                    "controller": "dev",
+                    "provider": {
+                      "aws": {
+                        "auth": {
+                          "secretRef": {
+                            "accessKeyIDSecretRef": {
+                              "key": "access-key",
+                              "name": "awssm-secret"
+                            },
+                            "secretAccessKeySecretRef": {
+                              "key": "secret-access-key",
+                              "name": "awssm-secret"
+                            }
+                          }
+                        },
+                        "region": "eu-central-1",
+                        "role": "iam-role",
+                        "service": "SecretsManager"
+                      },
+                      "gcpsm": {
+                        "auth": {
+                          "secretRef": {
+                            "secretAccessKeySecretRef": {
+                              "key": "secret-access-credentials",
+                              "name": "gcpsm-secret",
+                              "namespace": "example"
+                            }
+                          }
+                        },
+                        "projectID": "myproject"
+                      },
+                      "vault": {
+                        "auth": {
+                          "appRole": {
+                            "path": "approle",
+                            "roleId": "db02de05-fa39-4855-059b-67221c5c2f63",
+                            "secretRef": {
+                              "key": "vault-token",
+                              "name": "my-secret",
+                              "namespace": "secret-admin"
+                            }
+                          },
+                          "kubernetes": {
+                            "mountPath": "kubernetes",
+                            "role": "demo",
+                            "secretRef": {
+                              "key": "vault",
+                              "name": "my-secret",
+                              "namespace": "secret-admin"
+                            },
+                            "serviceAccountRef": {
+                              "name": "my-sa",
+                              "namespace": "secret-admin"
+                            }
+                          },
+                          "tokenSecretRef": {
+                            "key": "vault-token",
+                            "name": "my-secret",
+                            "namespace": "secret-admin"
+                          }
+                        },
+                        "caBundle": "...",
+                        "namespace": "a-team",
+                        "path": "secret",
+                        "server": "https://vault.acme.org",
+                        "version": "v2"
+                      }
+                    }
+                  }
+                },
+                {
+                  "apiVersion": "external-secrets.io/v1alpha1",
+                  "kind": "ExternalSecret",
+                  "metadata": {
+                    "annotations": {
+                      "acme.org/sha": "1234"
+                    },
+                    "labels": {
+                      "acme.org/owned-by": "q-team"
+                    },
+                    "name": "hello-world"
+                  },
+                  "spec": {
+                    "data": [
+                      {
+                        "remoteRef": {
+                          "key": "provider-key",
+                          "property": "provider-key-property",
+                          "version": "provider-key-version"
+                        },
+                        "secretKey": "secret-key-to-be-managed"
+                      }
+                    ],
+                    "dataFrom": [
+                      {
+                        "key": "provider-key",
+                        "property": "provider-key-property",
+                        "version": "provider-key-version"
+                      }
+                    ],
+                    "refreshInterval": "1h",
+                    "secretStoreRef": {
+                      "kind": "SecretStore",
+                      "name": "secret-store-name"
+                    },
+                    "target": {
+                      "creationPolicy": "Merge",
+                      "name": "my-secret",
+                      "template": {
+                        "data": {
+                          "config.yml": "endpoints:\n- https://{{ .data.user }}:{{ .data.password }}@api.exmaple.com\n"
+                        },
+                        "metadata": {
+                          "annotations": {},
+                          "labels": {}
+                        },
+                        "templateFrom": [
+                          {
+                            "configMap": {
+                              "items": [
+                                {
+                                  "key": "alertmanager.yaml"
+                                }
+                              ],
+                              "name": "alertmanager"
+                            }
+                          }
+                        ],
+                        "type": "kubernetes.io/dockerconfigjson"
+                      }
+                    }
+                  }
+                },
+                {
+                  "apiVersion": "external-secrets.io/v1alpha1",
+                  "kind": "SecretStore",
+                  "metadata": {
+                    "name": "example",
+                    "namespace": "example-ns"
+                  },
+                  "spec": {
+                    "controller": "dev",
+                    "provider": {
+                      "aws": {
+                        "auth": {
+                          "secretRef": {
+                            "accessKeyIDSecretRef": {
+                              "key": "access-key",
+                              "name": "awssm-secret"
+                            },
+                            "secretAccessKeySecretRef": {
+                              "key": "secret-access-key",
+                              "name": "awssm-secret"
+                            }
+                          }
+                        },
+                        "region": "eu-central-1",
+                        "role": "iam-role",
+                        "service": "SecretsManager"
+                      },
+                      "gcpsm": {
+                        "auth": {
+                          "secretRef": {
+                            "secretAccessKeySecretRef": {
+                              "key": "secret-access-credentials",
+                              "name": "gcpsm-secret"
+                            }
+                          }
+                        },
+                        "projectID": "myproject"
+                      },
+                      "vault": {
+                        "auth": {
+                          "appRole": {
+                            "path": "approle",
+                            "roleId": "db02de05-fa39-4855-059b-67221c5c2f63",
+                            "secretRef": {
+                              "key": "vault-token",
+                              "name": "my-secret",
+                              "namespace": "secret-admin"
+                            }
+                          },
+                          "kubernetes": {
+                            "mountPath": "kubernetes",
+                            "role": "demo",
+                            "secretRef": {
+                              "key": "vault",
+                              "name": "my-secret",
+                              "namespace": "secret-admin"
+                            },
+                            "serviceAccountRef": {
+                              "name": "my-sa",
+                              "namespace": "secret-admin"
+                            }
+                          },
+                          "tokenSecretRef": {
+                            "key": "vault-token",
+                            "name": "my-secret",
+                            "namespace": "secret-admin"
+                          }
+                        },
+                        "caBundle": "...",
+                        "caProvider": {
+                          "key": "cert-key",
+                          "name": "my-cert-secret",
+                          "namespace": "my-cert-secret-namespace",
+                          "type": "Secret"
+                        },
+                        "namespace": "a-team",
+                        "path": "secret",
+                        "server": "https://vault.acme.org",
+                        "version": "v2"
+                      }
+                    }
+                  }
+                },
+                {
+                  "apiVersion": "external-secrets.io/v1beta1",
+                  "kind": "ClusterExternalSecret",
+                  "metadata": {
+                    "name": "hello-world"
+                  },
+                  "spec": {
+                    "externalSecretName": "hello-world-es",
+                    "externalSecretSpec": {
+                      "data": [
+                        {
+                          "remoteRef": {
+                            "key": "provider-key",
+                            "property": "provider-key-property",
+                            "version": "provider-key-version"
+                          },
+                          "secretKey": "secret-key-to-be-managed"
+                        }
+                      ],
+                      "dataFrom": [
+                        {
+                          "key": "provider-key",
+                          "property": "provider-key-property",
+                          "version": "provider-key-version"
+                        }
+                      ],
+                      "refreshInterval": "1h",
+                      "secretStoreRef": {
+                        "kind": "SecretStore",
+                        "name": "secret-store-name"
+                      },
+                      "target": {
+                        "creationPolicy": "Merge",
+                        "name": "my-secret",
+                        "template": {
+                          "data": {
+                            "config.yml": "endpoints:\n- https://{{ .data.user }}:{{ .data.password }}@api.exmaple.com\n"
+                          },
+                          "metadata": {
+                            "annotations": {},
+                            "labels": {}
+                          },
+                          "templateFrom": [
+                            {
+                              "configMap": {
+                                "items": [
+                                  {
+                                    "key": "alertmanager.yaml"
+                                  }
+                                ],
+                                "name": "alertmanager"
+                              }
+                            }
+                          ],
+                          "type": "kubernetes.io/dockerconfigjson"
+                        }
+                      }
+                    },
+                    "namespaceSelector": {
+                      "matchLabels": {
+                        "cool": "label"
+                      }
+                    },
+                    "refreshTime": "1m"
+                  }
+                },
+                {
+                  "apiVersion": "external-secrets.io/v1beta1",
+                  "kind": "ClusterSecretStore",
+                  "metadata": {
+                    "name": "example"
+                  },
+                  "spec": {
+                    "controller": "dev",
+                    "provider": {
+                      "aws": {
+                        "auth": {
+                          "secretRef": {
+                            "accessKeyIDSecretRef": {
+                              "key": "access-key",
+                              "name": "awssm-secret"
+                            },
+                            "secretAccessKeySecretRef": {
+                              "key": "secret-access-key",
+                              "name": "awssm-secret"
+                            }
+                          }
+                        },
+                        "region": "eu-central-1",
+                        "role": "iam-role",
+                        "service": "SecretsManager"
+                      },
+                      "gcpsm": {
+                        "auth": {
+                          "secretRef": {
+                            "secretAccessKeySecretRef": {
+                              "key": "secret-access-credentials",
+                              "name": "gcpsm-secret",
+                              "namespace": "example"
+                            }
+                          }
+                        },
+                        "projectID": "myproject"
+                      },
+                      "vault": {
+                        "auth": {
+                          "appRole": {
+                            "path": "approle",
+                            "roleId": "db02de05-fa39-4855-059b-67221c5c2f63",
+                            "secretRef": {
+                              "key": "vault-token",
+                              "name": "my-secret",
+                              "namespace": "secret-admin"
+                            }
+                          },
+                          "kubernetes": {
+                            "mountPath": "kubernetes",
+                            "role": "demo",
+                            "secretRef": {
+                              "key": "vault",
+                              "name": "my-secret",
+                              "namespace": "secret-admin"
+                            },
+                            "serviceAccountRef": {
+                              "name": "my-sa",
+                              "namespace": "secret-admin"
+                            }
+                          },
+                          "tokenSecretRef": {
+                            "key": "vault-token",
+                            "name": "my-secret",
+                            "namespace": "secret-admin"
+                          }
+                        },
+                        "caBundle": "...",
+                        "namespace": "a-team",
+                        "path": "secret",
+                        "server": "https://vault.acme.org",
+                        "version": "v2"
+                      }
+                    }
+                  }
+                },
+                {
+                  "apiVersion": "external-secrets.io/v1beta1",
+                  "kind": "ExternalSecret",
+                  "metadata": {
+                    "annotations": {
+                      "acme.org/sha": 1234
+                    },
+                    "labels": {
+                      "acme.org/owned-by": "q-team"
+                    },
+                    "name": "hello-world"
+                  },
+                  "spec": {
+                    "data": [
+                      {
+                        "remoteRef": {
+                          "key": "provider-key",
+                          "property": "provider-key-property",
+                          "version": "provider-key-version"
+                        },
+                        "secretKey": "secret-key-to-be-managed"
+                      }
+                    ],
+                    "dataFrom": [
+                      {
+                        "extract": {
+                          "conversionStrategy": "Default",
+                          "key": "provider-key",
+                          "property": "provider-key-property",
+                          "version": "provider-key-version"
+                        }
+                      },
+                      {
+                        "find": {
+                          "conversionStrategy": "Unicode",
+                          "name": {
+                            "regexp": ".*foobar.*"
+                          },
+                          "path": "path-to-filter",
+                          "tags": {
+                            "foo": "bar"
+                          }
+                        }
+                      }
+                    ],
+                    "refreshInterval": "1h",
+                    "secretStoreRef": {
+                      "kind": "SecretStore",
+                      "name": "secret-store-name"
+                    },
+                    "target": {
+                      "creationPolicy": "Merge",
+                      "deletionPolicy": "Retain",
+                      "name": "my-secret",
+                      "template": {
+                        "data": {
+                          "config.yml": "endpoints:\n- https://{{ .data.user }}:{{ .data.password }}@api.exmaple.com\n"
+                        },
+                        "metadata": {
+                          "annotations": {},
+                          "labels": {}
+                        },
+                        "templateFrom": [
+                          {
+                            "configMap": {
+                              "items": [
+                                {
+                                  "key": "alertmanager.yaml"
+                                }
+                              ],
+                              "name": "alertmanager"
+                            }
+                          }
+                        ],
+                        "type": "kubernetes.io/dockerconfigjson"
+                      }
+                    }
+                  }
+                },
+                {
+                  "apiVersion": "external-secrets.io/v1beta1",
+                  "kind": "SecretStore",
+                  "metadata": {
+                    "name": "example",
+                    "namespace": "example-ns"
+                  },
+                  "spec": {
+                    "controller": "dev",
+                    "provider": {
+                      "aws": {
+                        "auth": {
+                          "secretRef": {
+                            "accessKeyIDSecretRef": {
+                              "key": "access-key",
+                              "name": "awssm-secret"
+                            },
+                            "secretAccessKeySecretRef": {
+                              "key": "secret-access-key",
+                              "name": "awssm-secret"
+                            }
+                          }
+                        },
+                        "region": "eu-central-1",
+                        "role": "iam-role",
+                        "service": "SecretsManager"
+                      },
+                      "gcpsm": {
+                        "auth": {
+                          "secretRef": {
+                            "secretAccessKeySecretRef": {
+                              "key": "secret-access-credentials",
+                              "name": "gcpsm-secret"
+                            }
+                          }
+                        },
+                        "projectID": "myproject"
+                      },
+                      "vault": {
+                        "auth": {
+                          "appRole": {
+                            "path": "approle",
+                            "roleId": "db02de05-fa39-4855-059b-67221c5c2f63",
+                            "secretRef": {
+                              "key": "vault-token",
+                              "name": "my-secret",
+                              "namespace": "secret-admin"
+                            }
+                          },
+                          "kubernetes": {
+                            "mountPath": "kubernetes",
+                            "role": "demo",
+                            "secretRef": {
+                              "key": "vault",
+                              "name": "my-secret",
+                              "namespace": "secret-admin"
+                            },
+                            "serviceAccountRef": {
+                              "name": "my-sa",
+                              "namespace": "secret-admin"
+                            }
+                          },
+                          "tokenSecretRef": {
+                            "key": "vault-token",
+                            "name": "my-secret",
+                            "namespace": "secret-admin"
+                          }
+                        },
+                        "caBundle": "...",
+                        "caProvider": {
+                          "key": "cert-key",
+                          "name": "my-cert-secret",
+                          "namespace": "my-cert-secret-namespace",
+                          "type": "Secret"
+                        },
+                        "namespace": "a-team",
+                        "path": "secret",
+                        "server": "https://vault.acme.org",
+                        "version": "v2"
+                      }
+                    }
+                  }
+                },
+                {
+                  "apiVersion": "operator.external-secrets.io/v1alpha1",
+                  "kind": "OperatorConfig",
+                  "metadata": {
+                    "name": "sample"
+                  },
+                  "spec": {
+                    "affinity": {},
+                    "certController": {
+                      "affinity": {},
+                      "create": true,
+                      "deploymentAnnotations": {},
+                      "extraArgs": {},
+                      "extraEnv": [],
+                      "fullnameOverride": "",
+                      "image": {
+                        "pullPolicy": "IfNotPresent",
+                        "repository": "ghcr.io/external-secrets/external-secrets",
+                        "tag": ""
+                      },
+                      "imagePullSecrets": [],
+                      "nameOverride": "",
+                      "nodeSelector": {},
+                      "podAnnotations": {},
+                      "podLabels": {},
+                      "podSecurityContext": {},
+                      "priorityClassName": "",
+                      "prometheus": {
+                        "enabled": false,
+                        "service": {
+                          "port": 8080
+                        }
+                      },
+                      "rbac": {
+                        "create": true
+                      },
+                      "requeueInterval": "5m",
+                      "resources": {},
+                      "securityContext": {},
+                      "serviceAccount": {
+                        "annotations": {},
+                        "create": true,
+                        "name": ""
+                      },
+                      "tolerations": []
+                    },
+                    "concurrent": 1,
+                    "controllerClass": "",
+                    "crds": {
+                      "createClusterExternalSecret": true,
+                      "createClusterSecretStore": true
+                    },
+                    "createOperator": true,
+                    "deploymentAnnotations": {},
+                    "extraArgs": {},
+                    "extraEnv": [],
+                    "fullnameOverride": "",
+                    "image": {
+                      "pullPolicy": "IfNotPresent",
+                      "repository": "ghcr.io/external-secrets/external-secrets",
+                      "tag": ""
+                    },
+                    "imagePullSecrets": [],
+                    "installCRDs": false,
+                    "leaderElect": false,
+                    "nameOverride": "",
+                    "nodeSelector": {},
+                    "podAnnotations": {},
+                    "podLabels": {},
+                    "podSecurityContext": {},
+                    "priorityClassName": "",
+                    "processClusterExternalSecret": true,
+                    "processClusterStore": true,
+                    "prometheus": {
+                      "enabled": false,
+                      "service": {
+                        "port": 8080
+                      }
+                    },
+                    "rbac": {
+                      "create": true
+                    },
+                    "replicaCount": 1,
+                    "resources": {},
+                    "scopedNamespace": "",
+                    "scopedRBAC": false,
+                    "securityContext": {},
+                    "serviceAccount": {
+                      "annotations": {},
+                      "create": true,
+                      "name": ""
+                    },
+                    "tolerations": [],
+                    "webhook": {
+                      "affinity": {},
+                      "certCheckInterval": "5m",
+                      "certDir": "/tmp/certs",
+                      "create": true,
+                      "deploymentAnnotations": {},
+                      "extraArgs": {},
+                      "extraEnv": [],
+                      "fullnameOverride": "",
+                      "image": {
+                        "pullPolicy": "IfNotPresent",
+                        "repository": "ghcr.io/external-secrets/external-secrets",
+                        "tag": ""
+                      },
+                      "imagePullSecrets": [],
+                      "nameOverride": "",
+                      "nodeSelector": {},
+                      "podAnnotations": {},
+                      "podLabels": {},
+                      "podSecurityContext": {},
+                      "priorityClassName": "",
+                      "prometheus": {
+                        "enabled": false,
+                        "service": {
+                          "port": 8080
+                        }
+                      },
+                      "rbac": {
+                        "create": true
+                      },
+                      "replicaCount": 1,
+                      "resources": {},
+                      "securityContext": {},
+                      "serviceAccount": {
+                        "annotations": {},
+                        "create": true,
+                        "name": ""
+                      },
+                      "tolerations": []
+                    }
+                  }
+                }
+              ]
+            capabilities: Deep Insights
+            categories: Security
+            certified: "false"
+            containerImage: ghcr.io/external-secrets/external-secrets-helm-operator@sha256:e7939e97e11e26d7368d9231c5dbf134139b29580badd1dcc7de0f621ff4e3b6
+            createdAt: "2024-12-03T10:44:19Z"
+            description: Operator to configure external-secrets helm-chart based operator
+            olm.operatorGroup: migration-e2e
+            olm.operatorNamespace: migration-e2e-external-secrets
+            olm.targetNamespaces: ""
+            operatorframework.io/cluster-monitoring: "true"
+            operatorframework.io/properties: '{"properties":[{"type":"olm.gvk","value":{"group":"external-secrets.io","kind":"ClusterExternalSecret","version":"v1beta1"}},{"type":"olm.gvk","value":{"group":"external-secrets.io","kind":"ClusterSecretStore","version":"v1alpha1"}},{"type":"olm.gvk","value":{"group":"external-secrets.io","kind":"ClusterSecretStore","version":"v1beta1"}},{"type":"olm.gvk","value":{"group":"external-secrets.io","kind":"ExternalSecret","version":"v1alpha1"}},{"type":"olm.gvk","value":{"group":"external-secrets.io","kind":"ExternalSecret","version":"v1beta1"}},{"type":"olm.gvk","value":{"group":"external-secrets.io","kind":"PushSecret","version":"v1alpha1"}},{"type":"olm.gvk","value":{"group":"external-secrets.io","kind":"SecretStore","version":"v1alpha1"}},{"type":"olm.gvk","value":{"group":"external-secrets.io","kind":"SecretStore","version":"v1beta1"}},{"type":"olm.gvk","value":{"group":"generators.external-secrets.io","kind":"ACRAccessToken","version":"v1alpha1"}},{"type":"olm.gvk","value":{"group":"generators.external-secrets.io","kind":"ClusterGenerator","version":"v1alpha1"}},{"type":"olm.gvk","value":{"group":"generators.external-secrets.io","kind":"ECRAuthorizationToken","version":"v1alpha1"}},{"type":"olm.gvk","value":{"group":"generators.external-secrets.io","kind":"Fake","version":"v1alpha1"}},{"type":"olm.gvk","value":{"group":"generators.external-secrets.io","kind":"GCRAccessToken","version":"v1alpha1"}},{"type":"olm.gvk","value":{"group":"generators.external-secrets.io","kind":"GithubAccessToken","version":"v1alpha1"}},{"type":"olm.gvk","value":{"group":"generators.external-secrets.io","kind":"Password","version":"v1alpha1"}},{"type":"olm.gvk","value":{"group":"generators.external-secrets.io","kind":"STSSessionToken","version":"v1alpha1"}},{"type":"olm.gvk","value":{"group":"generators.external-secrets.io","kind":"UUID","version":"v1alpha1"}},{"type":"olm.gvk","value":{"group":"generators.external-secrets.io","kind":"VaultDynamicSecret","version":"v1alpha1"}},{"type":"olm.gvk","value":{"group":"generators.external-secrets.io","kind":"Webhook","version":"v1alpha1"}},{"type":"olm.gvk","value":{"group":"operator.external-secrets.io","kind":"OperatorConfig","version":"v1alpha1"}},{"type":"olm.package","value":{"packageName":"external-secrets-operator","version":"0.11.0"}}]}'
+            operators.openshift.io/infrastructure-features: '["Disconnected"]'
+            operators.operatorframework.io/builder: operator-sdk-v1.32.0
+            operators.operatorframework.io/project_layout: helm.sdk.operatorframework.io/v1
+            repository: https://github.com/external-secrets/external-secrets-helm-operator
+            support: external-secrets
+          labels:
+            control-plane: controller-manager
+        spec:
+          containers:
+            - args:
+                - --health-probe-bind-address=:8081
+                - --metrics-bind-address=0.0.0.0:8080
+                - --leader-elect
+                - --leader-election-id=external-secrets-operator
+              env:
+                - name: WATCH_NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      apiVersion: v1
+                      fieldPath: metadata.annotations['olm.targetNamespaces']
+                - name: OPERATOR_CONDITION_NAME
+                  value: external-secrets-operator.v0.11.0
+              image: ghcr.io/external-secrets/external-secrets-helm-operator@sha256:e7939e97e11e26d7368d9231c5dbf134139b29580badd1dcc7de0f621ff4e3b6
+              imagePullPolicy: IfNotPresent
+              livenessProbe:
+                failureThreshold: 3
+                httpGet:
+                  path: /healthz
+                  port: 8081
+                  scheme: HTTP
+                initialDelaySeconds: 15
+                periodSeconds: 20
+                successThreshold: 1
+                timeoutSeconds: 5
+              name: manager
+              ports:
+                - containerPort: 8080
+                  name: metrics
+                  protocol: TCP
+              readinessProbe:
+                failureThreshold: 3
+                httpGet:
+                  path: /readyz
+                  port: 8081
+                  scheme: HTTP
+                initialDelaySeconds: 5
+                periodSeconds: 10
+                successThreshold: 1
+                timeoutSeconds: 5
+              resources: {}
+              securityContext:
+                allowPrivilegeEscalation: false
+              terminationMessagePath: /dev/termination-log
+              terminationMessagePolicy: File
+          dnsPolicy: ClusterFirst
+          restartPolicy: Always
+          schedulerName: default-scheduler
+          securityContext:
+            runAsNonRoot: true
+          serviceAccount: external-secrets-operator-controller-manager
+          serviceAccountName: external-secrets-operator-controller-manager
+          terminationGracePeriodSeconds: 10
+    status:
+      availableReplicas: 1
+      conditions:
+        - lastTransitionTime: "2026-09-09T15:14:36Z"
+          lastUpdateTime: "2026-09-09T15:14:36Z"
+          message: Deployment has minimum availability.
+          reason: MinimumReplicasAvailable
+          status: "True"
+          type: Available
+        - lastTransitionTime: "2026-09-09T15:14:20Z"
+          lastUpdateTime: "2026-09-09T15:14:36Z"
+          message: ReplicaSet "external-secrets-operator-controller-manager-dd5db6b4f" has successfully progressed.
+          reason: NewReplicaSetAvailable
+          status: "True"
+          type: Progressing
+      observedGeneration: 2
+      readyReplicas: 1
+      replicas: 1
+      terminatingReplicas: 0
+      updatedReplicas: 1
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
+      labels:
+        olm.managed: "true"
+        olm.owner: external-secrets-operator.v0.11.0
+        olm.owner.kind: ClusterServiceVersion
+        olm.owner.namespace: migration-e2e-external-secrets
+        olm.permissions.hash: jFynzryran0Td5CUgJ3rwrkK6ZdYd35f5iILp
+        operators.coreos.com/external-secrets-operator.migration-e2e-external-secrets: ""
+      name: external-secrets-operato-8zWqueSTB7I4jEogvdfl6jcQxjaqR4dB8Cv1p8
+      namespace: migration-e2e-external-secrets
+    rules:
+      - apiGroups:
+          - ""
+        resources:
+          - configmaps
+        verbs:
+          - get
+          - list
+          - watch
+          - create
+          - update
+          - patch
+          - delete
+      - apiGroups:
+          - coordination.k8s.io
+        resources:
+          - leases
+        verbs:
+          - get
+          - list
+          - watch
+          - create
+          - update
+          - patch
+          - delete
+      - apiGroups:
+          - ""
+        resources:
+          - events
+        verbs:
+          - create
+          - patch
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      labels:
+        olm.managed: "true"
+        olm.owner: external-secrets-operator.v0.11.0
+        olm.owner.kind: ClusterServiceVersion
+        olm.owner.namespace: migration-e2e-external-secrets
+        olm.permissions.hash: 7zC7KZyFL838wtaB3aTSLuXsvAPXCAd4tVKdva
+        operators.coreos.com/external-secrets-operator.migration-e2e-external-secrets: ""
+      name: external-secrets-operato-8zWqueSTB7I4jEogvdfl6jcQxjaqR4dB8Cv1p8
+      namespace: migration-e2e-external-secrets
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: external-secrets-operato-8zWqueSTB7I4jEogvdfl6jcQxjaqR4dB8Cv1p8
+    subjects:
+      - kind: ServiceAccount
+        name: external-secrets-operator-controller-manager
+        namespace: migration-e2e-external-secrets
+kind: List
+metadata: {}

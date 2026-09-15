@@ -1,0 +1,197 @@
+apiVersion: v1
+items:
+  - apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        controller-gen.kubebuilder.io/version: v0.21.0
+        operatorframework.io/installed-alongside-53811b136181d019: migration-e2e-ecr-secret/ecr-secret-operator.v0.6.0
+      labels:
+        olm.managed: "true"
+        operators.coreos.com/ecr-secret-operator.migration-e2e-ecr-secret: ""
+      name: argohelmreposecrets.ecr.mobb.redhat.com
+    spec:
+      conversion:
+        strategy: None
+      group: ecr.mobb.redhat.com
+      names:
+        kind: ArgoHelmRepoSecret
+        listKind: ArgoHelmRepoSecretList
+        plural: argohelmreposecrets
+        singular: argohelmreposecret
+      scope: Namespaced
+      versions:
+        - name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: ArgoHelmRepoSecret is the Schema for the argohelmreposecrets API
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: ArgoHelmRepoSecretSpec defines the desired state of ArgoHelmRepoSecret
+                  properties:
+                    frequency:
+                      type: string
+                    generated_secret_name:
+                      description: Foo is an example field of ArgoHelmRepoSecret. Edit argohelmreposecret_types.go to remove/update
+                      type: string
+                    region:
+                      type: string
+                    url:
+                      type: string
+                  required:
+                    - frequency
+                    - generated_secret_name
+                    - region
+                    - url
+                  type: object
+                status:
+                  description: ArgoHelmRepoSecretStatus defines the observed state of ArgoHelmRepoSecret
+                  properties:
+                    lastUpdatedTime:
+                      format: date-time
+                      type: string
+                    phase:
+                      description: |-
+                        INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
+                        Important: Run "make" to regenerate code after modifying this file
+                      type: string
+                  type: object
+              type: object
+          served: true
+          storage: true
+          subresources:
+            status: {}
+    status:
+      acceptedNames:
+        kind: ArgoHelmRepoSecret
+        listKind: ArgoHelmRepoSecretList
+        plural: argohelmreposecrets
+        singular: argohelmreposecret
+      conditions:
+        - lastTransitionTime: "2026-09-09T15:13:16Z"
+          message: no conflicts found
+          reason: NoConflicts
+          status: "True"
+          type: NamesAccepted
+        - lastTransitionTime: "2026-09-09T15:13:16Z"
+          message: the initial names have been accepted
+          reason: InitialNamesAccepted
+          status: "True"
+          type: Established
+      storedVersions:
+        - v1alpha1
+  - apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        controller-gen.kubebuilder.io/version: v0.21.0
+        operatorframework.io/installed-alongside-53811b136181d019: migration-e2e-ecr-secret/ecr-secret-operator.v0.6.0
+      labels:
+        olm.managed: "true"
+        operators.coreos.com/ecr-secret-operator.migration-e2e-ecr-secret: ""
+      name: secrets.ecr.mobb.redhat.com
+    spec:
+      conversion:
+        strategy: None
+      group: ecr.mobb.redhat.com
+      names:
+        kind: Secret
+        listKind: SecretList
+        plural: secrets
+        singular: secret
+      scope: Namespaced
+      versions:
+        - name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: Secret is the Schema for the secrets API
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: SecretSpec defines the desired state of Secret
+                  properties:
+                    ecr_registry:
+                      type: string
+                    frequency:
+                      type: string
+                    generated_secret_name:
+                      type: string
+                    region:
+                      type: string
+                  required:
+                    - ecr_registry
+                    - frequency
+                    - generated_secret_name
+                    - region
+                  type: object
+                status:
+                  description: SecretStatus defines the observed state of Secret
+                  properties:
+                    lastUpdatedTime:
+                      format: date-time
+                      type: string
+                    phase:
+                      description: |-
+                        INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
+                        Important: Run "make" to regenerate code after modifying this file
+                      type: string
+                  type: object
+              type: object
+          served: true
+          storage: true
+          subresources:
+            status: {}
+    status:
+      acceptedNames:
+        kind: Secret
+        listKind: SecretList
+        plural: secrets
+        singular: secret
+      conditions:
+        - lastTransitionTime: "2026-09-09T15:13:16Z"
+          message: no conflicts found
+          reason: NoConflicts
+          status: "True"
+          type: NamesAccepted
+        - lastTransitionTime: "2026-09-09T15:13:16Z"
+          message: the initial names have been accepted
+          reason: InitialNamesAccepted
+          status: "True"
+          type: Established
+      storedVersions:
+        - v1alpha1
+kind: List
+metadata: {}

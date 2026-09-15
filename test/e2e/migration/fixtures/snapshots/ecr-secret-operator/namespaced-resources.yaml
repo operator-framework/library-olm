@@ -1,0 +1,287 @@
+apiVersion: v1
+items:
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      annotations:
+        deployment.kubernetes.io/revision: "1"
+      labels:
+        control-plane: controller-manager
+        olm.deployment-spec-hash: 6p7ptK2g9mXc8C55LsqUi3znBkPB1WhYq5FrjH
+        olm.managed: "true"
+        olm.owner: ecr-secret-operator.v0.6.0
+        olm.owner.kind: ClusterServiceVersion
+        olm.owner.namespace: migration-e2e-ecr-secret
+        operators.coreos.com/ecr-secret-operator.migration-e2e-ecr-secret: ""
+      name: ecr-secret-operator-controller-manager
+      namespace: migration-e2e-ecr-secret
+    spec:
+      progressDeadlineSeconds: 600
+      replicas: 1
+      revisionHistoryLimit: 1
+      selector:
+        matchLabels:
+          control-plane: controller-manager
+      strategy:
+        rollingUpdate:
+          maxSurge: 25%
+          maxUnavailable: 25%
+        type: RollingUpdate
+      template:
+        metadata:
+          annotations:
+            alm-examples: |-
+              [
+                {
+                  "apiVersion": "ecr.mobb.redhat.com/v1alpha1",
+                  "kind": "Secret",
+                  "metadata": {
+                    "name": "ecr-secret-sample",
+                    "namespace": "test-ecr-secret-operator"
+                  },
+                  "spec": {
+                    "ecr_registry": "ACCOUNT_ID.dkr.ecr.us-east-2.amazonaws.com",
+                    "frequency": "10h",
+                    "generated_secret_name": "ecr-credentials",
+                    "region": "us-east-2"
+                  }
+                },
+                {
+                  "apiVersion": "ecr.mobb.redhat.com/v1alpha1",
+                  "kind": "ArgoHelmRepoSecret",
+                  "metadata": {
+                    "labels": {
+                      "app.kubernetes.io/created-by": "ecr-secret-operator",
+                      "app.kubernetes.io/instance": "argohelmreposecret-sample",
+                      "app.kubernetes.io/managed-by": "kustomize",
+                      "app.kubernetes.io/name": "argohelmreposecret",
+                      "app.kubernetes.io/part-of": "ecr-secret-operator"
+                    },
+                    "name": "argohelmreposecret-sample"
+                  },
+                  "spec": null
+                }
+              ]
+            capabilities: Basic Install
+            categories: Integration & Delivery
+            com.redhat.openshift.versions: v4.16
+            containerImage: quay.io/rh-mobb/ecr-secret-operator:v0.6.0
+            createdAt: "2026-07-08T18:17:43Z"
+            description: Automatically refreshes AWS ECR authentication tokens as Kubernetes image pull secrets before they expire.
+            kubectl.kubernetes.io/default-container: manager
+            olm.operatorGroup: migration-e2e
+            olm.operatorNamespace: migration-e2e-ecr-secret
+            olm.targetNamespaces: ""
+            operatorframework.io/properties: '{"properties":[{"type":"olm.gvk","value":{"group":"ecr.mobb.redhat.com","kind":"ArgoHelmRepoSecret","version":"v1alpha1"}},{"type":"olm.gvk","value":{"group":"ecr.mobb.redhat.com","kind":"Secret","version":"v1alpha1"}},{"type":"olm.package","value":{"packageName":"ecr-secret-operator","version":"0.6.0"}}]}'
+            operatorframework.io/suggested-namespace: ecr-secret-operator
+            operators.operatorframework.io/builder: operator-sdk-v1.42.0
+            operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
+            repository: https://github.com/rh-mobb/ecr-secret-operator
+            support: Community based
+          labels:
+            control-plane: controller-manager
+        spec:
+          containers:
+            - args:
+                - --secure-listen-address=0.0.0.0:8443
+                - --upstream=http://127.0.0.1:8080/
+                - --logtostderr=true
+                - --v=0
+              env:
+                - name: OPERATOR_CONDITION_NAME
+                  value: ecr-secret-operator.v0.6.0
+              image: quay.io/brancz/kube-rbac-proxy:v0.21.0@sha256:059a43ab03f230eedb7dde2eb0d910a41e9d7ee04efff0f5cdc7ee614111397a
+              imagePullPolicy: IfNotPresent
+              name: kube-rbac-proxy
+              ports:
+                - containerPort: 8443
+                  name: https
+                  protocol: TCP
+              resources:
+                limits:
+                  cpu: 500m
+                  memory: 128Mi
+                requests:
+                  cpu: 5m
+                  memory: 64Mi
+              terminationMessagePath: /dev/termination-log
+              terminationMessagePolicy: File
+            - args:
+                - --health-probe-bind-address=:8081
+                - --metrics-bind-address=127.0.0.1:8080
+                - --leader-elect
+              command:
+                - /manager
+              env:
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      key: aws_access_key_id
+                      name: aws-ecr-cloud-credentials
+                      optional: true
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      key: aws_secret_access_key
+                      name: aws-ecr-cloud-credentials
+                      optional: true
+                - name: AWS_SDK_LOAD_CONFIG
+                  value: "1"
+                - name: AWS_CONFIG_FILE
+                  value: /var/run/secrets/aws/credentials
+                - name: WATCH_NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      apiVersion: v1
+                      fieldPath: metadata.annotations['olm.targetNamespaces']
+                - name: OPERATOR_CONDITION_NAME
+                  value: ecr-secret-operator.v0.6.0
+              image: quay.io/rh-mobb/ecr-secret-operator@sha256:17b34ebf7bc92bd0c691d7ff6395e444f72116c98f75a13d042e1ad7f8ba866e
+              imagePullPolicy: IfNotPresent
+              livenessProbe:
+                failureThreshold: 3
+                httpGet:
+                  path: /healthz
+                  port: 8081
+                  scheme: HTTP
+                initialDelaySeconds: 15
+                periodSeconds: 20
+                successThreshold: 1
+                timeoutSeconds: 1
+              name: manager
+              readinessProbe:
+                failureThreshold: 3
+                httpGet:
+                  path: /readyz
+                  port: 8081
+                  scheme: HTTP
+                initialDelaySeconds: 5
+                periodSeconds: 10
+                successThreshold: 1
+                timeoutSeconds: 1
+              resources:
+                limits:
+                  cpu: 500m
+                  memory: 1000Mi
+                requests:
+                  cpu: 10m
+                  memory: 64Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+              terminationMessagePath: /dev/termination-log
+              terminationMessagePolicy: File
+              volumeMounts:
+                - mountPath: /var/run/secrets/aws
+                  name: aws-credentials
+                  readOnly: true
+                - mountPath: /var/run/secrets/openshift/serviceaccount
+                  name: bound-sa-token
+                  readOnly: true
+          dnsPolicy: ClusterFirst
+          restartPolicy: Always
+          schedulerName: default-scheduler
+          securityContext:
+            runAsNonRoot: true
+          serviceAccount: ecr-secret-operator-controller-manager
+          serviceAccountName: ecr-secret-operator-controller-manager
+          terminationGracePeriodSeconds: 10
+          volumes:
+            - name: aws-credentials
+              secret:
+                defaultMode: 420
+                optional: true
+                secretName: aws-ecr-cloud-credentials
+            - name: bound-sa-token
+              projected:
+                defaultMode: 420
+                sources:
+                  - serviceAccountToken:
+                      audience: openshift
+                      expirationSeconds: 3600
+                      path: token
+    status:
+      availableReplicas: 1
+      conditions:
+        - lastTransitionTime: "2026-09-09T15:13:36Z"
+          lastUpdateTime: "2026-09-09T15:13:36Z"
+          message: Deployment has minimum availability.
+          reason: MinimumReplicasAvailable
+          status: "True"
+          type: Available
+        - lastTransitionTime: "2026-09-09T15:13:18Z"
+          lastUpdateTime: "2026-09-09T15:13:36Z"
+          message: ReplicaSet "ecr-secret-operator-controller-manager-774c996fb4" has successfully progressed.
+          reason: NewReplicaSetAvailable
+          status: "True"
+          type: Progressing
+      observedGeneration: 1
+      readyReplicas: 1
+      replicas: 1
+      terminatingReplicas: 0
+      updatedReplicas: 1
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
+      labels:
+        olm.managed: "true"
+        olm.owner: ecr-secret-operator.v0.6.0
+        olm.owner.kind: ClusterServiceVersion
+        olm.owner.namespace: migration-e2e-ecr-secret
+        olm.permissions.hash: jFynzryran0Td5CUgJ3rwrkK6ZdYd35f5iILp
+        operators.coreos.com/ecr-secret-operator.migration-e2e-ecr-secret: ""
+      name: ecr-secret-operator.v0.6-2ChlGSRBTSfiR4iqRj14veftqoSMZp7C4uXdua
+      namespace: migration-e2e-ecr-secret
+    rules:
+      - apiGroups:
+          - ""
+        resources:
+          - configmaps
+        verbs:
+          - get
+          - list
+          - watch
+          - create
+          - update
+          - patch
+          - delete
+      - apiGroups:
+          - coordination.k8s.io
+        resources:
+          - leases
+        verbs:
+          - get
+          - list
+          - watch
+          - create
+          - update
+          - patch
+          - delete
+      - apiGroups:
+          - ""
+        resources:
+          - events
+        verbs:
+          - create
+          - patch
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      labels:
+        olm.managed: "true"
+        olm.owner: ecr-secret-operator.v0.6.0
+        olm.owner.kind: ClusterServiceVersion
+        olm.owner.namespace: migration-e2e-ecr-secret
+        olm.permissions.hash: 2Zppev5vrCD8KRiaceC8DqAFy5z3NtytRaF62c
+        operators.coreos.com/ecr-secret-operator.migration-e2e-ecr-secret: ""
+      name: ecr-secret-operator.v0.6-2ChlGSRBTSfiR4iqRj14veftqoSMZp7C4uXdua
+      namespace: migration-e2e-ecr-secret
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: ecr-secret-operator.v0.6-2ChlGSRBTSfiR4iqRj14veftqoSMZp7C4uXdua
+    subjects:
+      - kind: ServiceAccount
+        name: ecr-secret-operator-controller-manager
+        namespace: migration-e2e-ecr-secret
+kind: List
+metadata: {}

@@ -32,9 +32,35 @@ jobs:
           path: artifacts/coverage
           if-no-files-found: ignore
 
+  fixture:
+    name: migration fixture E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Set up fixture cluster
+        run: make migration/e2e-fixture-setup
+      - name: Run fixture migration tests
+        run: make migration/test-e2e-fixture-matrix
+      - name: Tear down fixture cluster
+        if: always()
+        run: E2E_CLUSTER_NAME=library-olm-fixture-e2e make migration/e2e-teardown
+      - name: Upload fixture diagnostics and coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: migration-fixture-e2e-artifacts
+          path: artifacts/e2e
+          if-no-files-found: ignore
+
   coverage:
     name: migration total coverage
-    needs: [unit-coverage, live]
+    needs: [unit-coverage, fixture, live]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -48,6 +74,11 @@ jobs:
         with:
           name: migration-unit-coverage
           path: artifacts/coverage
+      - name: Download fixture E2E coverage
+        uses: actions/download-artifact@v8
+        with:
+          name: migration-fixture-e2e-artifacts
+          path: artifacts/e2e
       - name: Download live E2E coverage
         uses: actions/download-artifact@v8
         with:
