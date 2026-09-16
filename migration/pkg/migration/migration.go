@@ -364,7 +364,10 @@ func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, inf
 	}
 
 	if err := m.WaitForCOSSucceeded(ctx, cosName); err != nil {
-		cleanupSecrets()
+		// The COS has been accepted by the API server and can still reconcile
+		// after this caller's bounded wait expires. Its Secret references must
+		// remain available; only failures before the successful apply are safe
+		// to clean up here.
 		return err
 	}
 	return nil

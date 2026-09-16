@@ -8,7 +8,7 @@ metadata:
   namespace: olm
 spec:
   sourceType: grpc
-  # Verified from the bootstrap operatorhubio ClusterCatalog on 2026-09-14.
+  # Verified from the bootstrap operatorhubio ClusterCatalog on 2026-09-16.
   # Keep this immutable reference available in Quay so fixture replay is
   # independent of OLMv0 and does not follow the mutable `latest` tag.
-  image: quay.io/operatorhubio/catalog@sha256:9d1e457f57cc73e57469f3cb622a92c311ce1fdcdb4aabfab4ead64218e89744
+  image: quay.io/operatorhubio/catalog@sha256:8551d422e0395247660e1f5090d93a5376a07514bf98d26c05431aa0ef5a42a3
