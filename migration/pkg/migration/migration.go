@@ -3,8 +3,10 @@ package migration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -295,20 +297,29 @@ func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, inf
 		return fmt.Errorf("failed to pack COS objects into Secrets: %w", err)
 	}
 	var createdSecrets []corev1.Secret
-	cleanupSecrets := func() {
+	cleanupSecrets := func() error {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		var errs []error
 		for i := range createdSecrets {
-			// These secrets are not useful without their COS. Keep the original
-			// creation or reconciliation failure as the actionable error.
-			_ = m.Client.Delete(ctx, &createdSecrets[i])
+			if err := m.Client.Delete(cleanupCtx, &createdSecrets[i]); err != nil && client.IgnoreNotFound(err) != nil {
+				errs = append(errs, fmt.Errorf("delete COS ref Secret %s: %w", createdSecrets[i].Name, err))
+			}
 		}
+		return errors.Join(errs...)
+	}
+	failWithSecretCleanup := func(err error) error {
+		if cleanupErr := cleanupSecrets(); cleanupErr != nil {
+			return errors.Join(err, fmt.Errorf("clean up COS ref Secrets: %w", cleanupErr))
+		}
+		return err
 	}
 
 	// Create ref Secrets before the COS so the COS controller can find them immediately.
 	for i := range packed.Secrets {
 		secret := &packed.Secrets[i]
 		if err := m.Client.Create(ctx, secret); err != nil {
-			cleanupSecrets()
-			return fmt.Errorf("failed to create COS ref Secret %s: %w", secret.Name, err)
+			return failWithSecretCleanup(fmt.Errorf("failed to create COS ref Secret %s: %w", secret.Name, err))
 		}
 		createdSecrets = append(createdSecrets, *secret)
 	}
@@ -349,26 +360,29 @@ func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, inf
 		}).
 		WithAnnotations(cosAnnotations)
 
-	cosObj := &ocv1.ClusterObjectSet{}
-	cosObj.Name = cosName
-
 	cosData, err := json.Marshal(cos)
 	if err != nil {
 		return fmt.Errorf("failed to marshal COS: %w", err)
 	}
+	cosObj := &ocv1.ClusterObjectSet{}
+	if err := json.Unmarshal(cosData, cosObj); err != nil {
+		return fmt.Errorf("failed to decode COS: %w", err)
+	}
 
-	if err := m.Client.Patch(ctx, cosObj, client.RawPatch(types.ApplyPatchType, cosData),
-		client.ForceOwnership, client.FieldOwner(fieldManager)); err != nil {
-		cleanupSecrets()
-		return fmt.Errorf("failed to apply ClusterObjectSet: %w", err)
+	// A migration owns only a newly created revision. Applying an existing COS
+	// can overwrite its ownership or fail on immutable phases, making recovery
+	// and Secret cleanup unsafe.
+	if err := m.Client.Create(ctx, cosObj); err != nil {
+		return failWithSecretCleanup(fmt.Errorf("failed to create ClusterObjectSet: %w", err))
 	}
 
 	if err := m.WaitForCOSSucceeded(ctx, cosName); err != nil {
-		// The COS has been accepted by the API server and can still reconcile
-		// after this caller's bounded wait expires. Its Secret references must
-		// remain available; only failures before the successful apply are safe
-		// to clean up here.
-		return err
+		// This invocation created the COS, so delete it before deleting its
+		// Secret references. RecoverBeforeCE then restores OLMv0 ownership.
+		if deleteErr := m.Client.Delete(context.WithoutCancel(ctx), cosObj, client.PropagationPolicy(metav1.DeletePropagationOrphan)); deleteErr != nil && client.IgnoreNotFound(deleteErr) != nil {
+			return errors.Join(err, fmt.Errorf("delete failed ClusterObjectSet: %w", deleteErr))
+		}
+		return failWithSecretCleanup(err)
 	}
 	return nil
 }

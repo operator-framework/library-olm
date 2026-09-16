@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
@@ -445,8 +446,11 @@ func (m *Migrator) CleanupConflict(ctx context.Context, ceName string) error {
 
 // splitSubRef splits a "namespace/name" subscription reference into its components.
 func splitSubRef(ref string) (string, string, error) {
+	if strings.Count(ref, "/") != 1 {
+		return "", "", fmt.Errorf("invalid namespace/name ref %q", ref)
+	}
 	parts := strings.SplitN(ref, "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	if len(validation.IsDNS1123Label(parts[0])) != 0 || len(validation.IsDNS1123Subdomain(parts[1])) != 0 {
 		return "", "", fmt.Errorf("invalid namespace/name ref %q", ref)
 	}
 	return parts[0], parts[1], nil

@@ -33,17 +33,17 @@ import (
 
 type failingMigrationClient struct {
 	client.Client
-	failCOSPatch bool
-	blockCOS     bool
+	failCOSCreate bool
+	blockCOS      bool
 }
 
-func (c failingMigrationClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-	if c.failCOSPatch {
+func (c failingMigrationClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if c.failCOSCreate {
 		if _, ok := obj.(*ocv1.ClusterObjectSet); ok {
 			return errors.New("simulated ClusterObjectSet collision")
 		}
 	}
-	return c.Client.Patch(ctx, obj, patch, opts...)
+	return c.Client.Create(ctx, obj, opts...)
 }
 
 func (c failingMigrationClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
@@ -554,7 +554,7 @@ func TestRollbackAndCleanupRejectInvalidInputWithoutMutation(t *testing.T) {
 func TestCreateClusterObjectSetCleansTemporarySecretsOnCollision(t *testing.T) {
 	ctx := context.Background()
 	m := migrationTestClient(t)
-	m.Client = failingMigrationClient{Client: m.Client, failCOSPatch: true}
+	m.Client = failingMigrationClient{Client: m.Client, failCOSCreate: true}
 	object := unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "operator-config", "namespace": "ns"},
 	}}
@@ -576,10 +576,11 @@ func TestCreateClusterObjectSetCleansTemporarySecretsOnCollision(t *testing.T) {
 	}
 }
 
-func TestCreateClusterObjectSetRetainsSecretsAfterReadinessFailure(t *testing.T) {
+func TestCreateClusterObjectSetCleansSecretsAfterReadinessFailure(t *testing.T) {
 	ctx := context.Background()
 	m := migrationTestClient(t)
-	m.Client = failingMigrationClient{Client: m.Client, blockCOS: true}
+	baseClient := m.Client
+	m.Client = failingMigrationClient{Client: baseClient, blockCOS: true}
 	object := unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "operator-config", "namespace": "ns"},
 	}}
@@ -589,15 +590,27 @@ func TestCreateClusterObjectSetRetainsSecretsAfterReadinessFailure(t *testing.T)
 	if err == nil {
 		t.Fatal("CreateClusterObjectSet() unexpectedly completed without COS status")
 	}
+	m.Client = baseClient
 	var secrets corev1.SecretList
 	if err := m.Client.List(ctx, &secrets, client.InNamespace("olmv1-system")); err != nil {
 		t.Fatal(err)
 	}
-	if len(secrets.Items) == 0 {
-		t.Fatal("COS readiness failure removed Secret references from an active ClusterObjectSet")
+	if len(secrets.Items) != 0 {
+		t.Fatalf("COS readiness failure left Secret references: %#v", secrets.Items)
 	}
-	if err := m.Client.Get(ctx, client.ObjectKey{Name: "sub-1"}, &ocv1.ClusterObjectSet{}); err != nil {
-		t.Fatalf("COS readiness failure removed ClusterObjectSet: %v", err)
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: "sub-1"}, &ocv1.ClusterObjectSet{}); err == nil {
+		t.Fatal("COS readiness failure left ClusterObjectSet")
+	}
+}
+
+func TestSplitSubRefRejectsMalformedReferences(t *testing.T) {
+	for _, ref := range []string{"", "ns", "ns/", "/sub", "ns/sub/extra", "invalid_namespace/sub", "ns/invalid_name"} {
+		if _, _, err := splitSubRef(ref); err == nil {
+			t.Fatalf("splitSubRef(%q) unexpectedly succeeded", ref)
+		}
+	}
+	if namespace, name, err := splitSubRef("valid-ns/valid.subscription"); err != nil || namespace != "valid-ns" || name != "valid.subscription" {
+		t.Fatalf("splitSubRef(valid) = %q, %q, %v", namespace, name, err)
 	}
 }
 
