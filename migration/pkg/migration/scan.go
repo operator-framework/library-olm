@@ -358,6 +358,9 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 	if err := unmarshalJSON(subBackupJSON, &subSpec); err != nil {
 		return fmt.Errorf("failed to unmarshal subscription backup: %w", err)
 	}
+	if subSpec.Package == "" || subSpec.CatalogSource == "" || subSpec.CatalogSourceNamespace == "" {
+		return fmt.Errorf("subscription backup is missing required package, source, or sourceNamespace")
+	}
 	ns, name, err := splitSubRef(subRef)
 	if err != nil {
 		return fmt.Errorf("invalid migrated-from-subscription annotation %q: %w", subRef, err)

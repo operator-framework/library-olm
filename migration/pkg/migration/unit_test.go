@@ -34,6 +34,7 @@ import (
 type failingMigrationClient struct {
 	client.Client
 	failCOSPatch bool
+	blockCOS     bool
 }
 
 func (c failingMigrationClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
@@ -43,6 +44,16 @@ func (c failingMigrationClient) Patch(ctx context.Context, obj client.Object, pa
 		}
 	}
 	return c.Client.Patch(ctx, obj, patch, opts...)
+}
+
+func (c failingMigrationClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if c.blockCOS {
+		if cos, ok := obj.(*ocv1.ClusterObjectSet); ok {
+			cos.Status.Conditions = []metav1.Condition{{Type: ocv1.ClusterObjectSetTypeSucceeded, Status: metav1.ConditionFalse, Reason: ocv1.ClusterObjectSetReasonBlocked}}
+			return nil
+		}
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
 }
 
 func migrationTestClient(t *testing.T, objects ...runtime.Object) *Migrator {
@@ -565,6 +576,31 @@ func TestCreateClusterObjectSetCleansTemporarySecretsOnCollision(t *testing.T) {
 	}
 }
 
+func TestCreateClusterObjectSetRetainsSecretsAfterReadinessFailure(t *testing.T) {
+	ctx := context.Background()
+	m := migrationTestClient(t)
+	m.Client = failingMigrationClient{Client: m.Client, blockCOS: true}
+	object := unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "operator-config", "namespace": "ns"},
+	}}
+	err := m.CreateClusterObjectSet(ctx, Options{SubscriptionName: "sub", SubscriptionNamespace: "ns"}, &MigrationInfo{
+		PackageName: "widgets", BundleName: "widgets.v1", Version: "1.0.0", CollectedObjects: []unstructured.Unstructured{object},
+	})
+	if err == nil {
+		t.Fatal("CreateClusterObjectSet() unexpectedly completed without COS status")
+	}
+	var secrets corev1.SecretList
+	if err := m.Client.List(ctx, &secrets, client.InNamespace("olmv1-system")); err != nil {
+		t.Fatal(err)
+	}
+	if len(secrets.Items) == 0 {
+		t.Fatal("COS readiness failure removed Secret references from an active ClusterObjectSet")
+	}
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: "sub-1"}, &ocv1.ClusterObjectSet{}); err != nil {
+		t.Fatalf("COS readiness failure removed ClusterObjectSet: %v", err)
+	}
+}
+
 func TestCreateClusterExtensionRejectsNameCollisionWithoutReplacement(t *testing.T) {
 	ctx := context.Background()
 	existing := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "sub", Annotations: map[string]string{"keep": "existing"}}}
@@ -584,6 +620,7 @@ func TestRollbackRejectsMissingAndMalformedBackupsWithoutMutation(t *testing.T) 
 	for name, annotations := range map[string]map[string]string{
 		"missing backup":     {MigratedFromSubscriptionAnnotation: "ns/sub"},
 		"malformed backup":   {MigratedFromSubscriptionAnnotation: "ns/sub", MigrationSubscriptionBackupAnnotation: "{"},
+		"empty backup":       {MigratedFromSubscriptionAnnotation: "ns/sub", MigrationSubscriptionBackupAnnotation: `{}`},
 		"missing source ref": {MigrationSubscriptionBackupAnnotation: `{}`},
 	} {
 		t.Run(name, func(t *testing.T) {
