@@ -603,6 +603,25 @@ func TestCreateClusterObjectSetCleansSecretsAfterReadinessFailure(t *testing.T) 
 	}
 }
 
+func TestRecoverBeforeCECleansReferenceSecrets(t *testing.T) {
+	ctx := context.Background()
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name: "sub-1-ref", Namespace: "olmv1-system",
+		Labels: map[string]string{LabelRevisionName: "sub-1", LabelOwnerName: "sub"},
+	}}
+	cos := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "sub-1"}}
+	m := migrationTestClient(t, secret, cos)
+	if err := m.RecoverBeforeCE(ctx, Options{ClusterExtensionName: "sub"}, nil); err == nil {
+		t.Fatal("RecoverBeforeCE() unexpectedly succeeded without a backup")
+	}
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(secret), &corev1.Secret{}); err == nil {
+		t.Fatal("RecoverBeforeCE() left a COS reference Secret")
+	}
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(cos), &ocv1.ClusterObjectSet{}); err == nil {
+		t.Fatal("RecoverBeforeCE() left the failed ClusterObjectSet")
+	}
+}
+
 func TestSplitSubRefRejectsMalformedReferences(t *testing.T) {
 	for _, ref := range []string{"", "ns", "ns/", "/sub", "ns/sub/extra", "invalid_namespace/sub", "ns/invalid_name"} {
 		if _, _, err := splitSubRef(ref); err == nil {
@@ -625,6 +644,33 @@ func TestCreateClusterExtensionRejectsNameCollisionWithoutReplacement(t *testing
 	var got ocv1.ClusterExtension
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: "sub"}, &got); err != nil || got.Annotations["keep"] != "existing" {
 		t.Fatalf("existing ClusterExtension changed after collision: %#v, err=%v", got, err)
+	}
+}
+
+func TestEnsureClusterExtensionAbsent(t *testing.T) {
+	ctx := context.Background()
+	m := migrationTestClient(t, &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "sub"}})
+	if err := m.ensureClusterExtensionAbsent(ctx, "sub"); err == nil {
+		t.Fatal("existing ClusterExtension passed pre-migration check")
+	}
+	if err := m.ensureClusterExtensionAbsent(ctx, "available"); err != nil {
+		t.Fatalf("absent ClusterExtension failed pre-migration check: %v", err)
+	}
+}
+
+func TestMigrateRejectsExistingClusterExtensionWithoutMutation(t *testing.T) {
+	ctx := context.Background()
+	sub, csv := healthySubscriptionFixtures()
+	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "sub"}}
+	m := migrationTestClient(t, sub, csv, ce)
+	if err := m.Migrate(ctx, Options{SubscriptionName: sub.Name, SubscriptionNamespace: sub.Namespace}); err == nil {
+		t.Fatal("Migrate() unexpectedly accepted an existing ClusterExtension")
+	}
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(sub), &operatorsv1alpha1.Subscription{}); err != nil {
+		t.Fatalf("existing ClusterExtension migration deleted Subscription: %v", err)
+	}
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(csv), &operatorsv1alpha1.ClusterServiceVersion{}); err != nil {
+		t.Fatalf("existing ClusterExtension migration deleted CSV: %v", err)
 	}
 }
 

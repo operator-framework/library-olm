@@ -47,6 +47,9 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("failed to profile operator: %w", err)
 	}
+	if err := m.ensureClusterExtensionAbsent(ctx, opts.ClusterExtensionName); err != nil {
+		return err
+	}
 
 	info, err := m.GetBundleInfo(ctx, opts, csv, ip)
 	if err != nil {
@@ -80,7 +83,6 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("failed to backup resources: %w", err)
 	}
-
 	// Populate CE backup annotations (R2.5) — must happen before PrepareForMigration deletes the Sub.
 	if backup.Subscription != nil {
 		if j, err := json.Marshal(backup.Subscription.Spec); err == nil {
@@ -128,7 +130,10 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	}
 
 	if err := m.CreateClusterExtension(ctx, opts, info); err != nil {
-		return fmt.Errorf("failed to create ClusterExtension: %w", err)
+		if recoverErr := m.RecoverBeforeCE(ctx, opts, backup); recoverErr != nil {
+			return fmt.Errorf("ClusterExtension creation failed: %w; recovery also failed: %v", err, recoverErr)
+		}
+		return fmt.Errorf("ClusterExtension creation failed (recovered): %w", err)
 	}
 
 	m.CleanupOLMv0Resources(ctx, opts, info.PackageName, csv.Name)
@@ -256,8 +261,44 @@ func (m *Migrator) RecoverBeforeCE(ctx context.Context, opts Options, backup *Ba
 			return fmt.Errorf("failed to delete COS during recovery: %w", err)
 		}
 	}
+	cleanupErr := m.cleanupClusterObjectSetSecrets(ctx, opts)
+	recoverErr := m.RecoverFromBackup(ctx, opts, backup)
+	return errors.Join(cleanupErr, recoverErr)
+}
 
-	return m.RecoverFromBackup(ctx, opts, backup)
+// cleanupClusterObjectSetSecrets removes ref Secrets only after recovery has
+// deleted the matching COS. Labels identify the exact migration revision.
+func (m *Migrator) cleanupClusterObjectSetSecrets(ctx context.Context, opts Options) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	var secrets corev1.SecretList
+	if err := m.Client.List(cleanupCtx, &secrets, client.InNamespace(opts.systemNamespace()), client.MatchingLabels{
+		LabelRevisionName: fmt.Sprintf("%s-1", opts.ClusterExtensionName),
+		LabelOwnerName:    opts.ClusterExtensionName,
+	}); err != nil {
+		return fmt.Errorf("list COS ref Secrets: %w", err)
+	}
+	var errs []error
+	for i := range secrets.Items {
+		if err := m.Client.Delete(cleanupCtx, &secrets.Items[i]); err != nil && client.IgnoreNotFound(err) != nil {
+			errs = append(errs, fmt.Errorf("delete COS ref Secret %s: %w", secrets.Items[i].Name, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// ensureClusterExtensionAbsent rejects a target name before OLMv0 resources
+// are removed. CreateClusterExtension remains the race-safe final check.
+func (m *Migrator) ensureClusterExtensionAbsent(ctx context.Context, name string) error {
+	var ce ocv1.ClusterExtension
+	err := m.Client.Get(ctx, client.ObjectKey{Name: name}, &ce)
+	if err == nil {
+		return fmt.Errorf("ClusterExtension %s already exists", name)
+	}
+	if client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("check ClusterExtension %s: %w", name, err)
+	}
+	return nil
 }
 
 // CreateClusterObjectSet builds and creates a COS from the collected resources.
