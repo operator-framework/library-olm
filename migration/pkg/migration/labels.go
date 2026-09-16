@@ -43,9 +43,6 @@ const (
 	// MigratedFromCatalogSourceAnnotation is set on ClusterCatalog by the catalog migration tool.
 	MigratedFromCatalogSourceAnnotation = "olm.operatorframework.io/migrated-from-catalogsource"
 
-	// fieldManager is the SSA field manager used for all apply operations.
-	fieldManager = "olm.operatorframework.io/migration"
-
 	// cosWaitPollInterval / cosWaitTimeout control how long to wait for a
 	// ClusterObjectSet to reach Succeeded=True.
 	cosWaitPollInterval = 5 * time.Second
