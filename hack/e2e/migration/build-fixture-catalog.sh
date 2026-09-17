@@ -11,7 +11,10 @@ root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 registry_namespace=migration-e2e-registry
 registry_service=fixture-registry
 registry_host="$registry_service.$registry_namespace.svc.cluster.local:5000"
-push_host=localhost:5001
+# Crane treats localhost registry references as HTTP. 127.0.0.2 is another
+# loopback address, but is treated as an HTTPS registry. It is included as an
+# IP SAN on the fixture registry certificate.
+push_host=127.0.0.2:5001
 work_dir=$(mktemp -d)
 port_forward_pid=
 cleanup() {
@@ -26,10 +29,13 @@ kubectl delete clustercatalog/operatorhubio-catalog --ignore-not-found --wait=tr
 kubectl apply -f "$root_dir/test/e2e/migration/fixtures/registry.yaml"
 kubectl -n "$registry_namespace" wait --for=condition=Ready certificate/fixture-registry-tls --timeout=3m
 kubectl -n "$registry_namespace" wait --for=condition=Available deployment/$registry_service --timeout=3m
-kubectl -n "$registry_namespace" port-forward deployment/$registry_service 5001:5000 >"$work_dir/port-forward.log" 2>&1 &
+registry_ca="$work_dir/olmv1-ca.crt"
+kubectl -n cert-manager get secret/olmv1-ca -o jsonpath='{.data.ca\.crt}' | base64 --decode >"$registry_ca"
+[[ -s $registry_ca ]] || { echo "OLMv1 CA certificate is empty" >&2; exit 1; }
+kubectl -n "$registry_namespace" port-forward --address 127.0.0.2 deployment/$registry_service 5001:5000 >"$work_dir/port-forward.log" 2>&1 &
 port_forward_pid=$!
 readiness_deadline=$((SECONDS + 60))
-until curl --insecure --fail --silent "https://$push_host/v2/" >/dev/null; do
+until curl --cacert "$registry_ca" --fail --silent "https://$push_host/v2/" >/dev/null; do
 	if ! kill -0 "$port_forward_pid" 2>/dev/null; then
 		echo "fixture registry port-forward exited unexpectedly:" >&2
 		cat "$work_dir/port-forward.log" >&2
@@ -77,7 +83,7 @@ EOF
 	image="$push_host/library-olm-fixture-$package:latest"
 	docker build -q -t "$image" "$bundle_dir"
 	docker save "$image" -o "$bundle_dir/image.tar"
-	"$CRANE" push --insecure "$bundle_dir/image.tar" "$image"
+	SSL_CERT_FILE="$registry_ca" "$CRANE" push "$bundle_dir/image.tar" "$image"
 	jq -n --arg package "$package" --arg channel "$channel" \
 		'{schema:"olm.package",name:$package,defaultChannel:$channel}' \
 		>"$catalog_dir/configs/$package-package.json"
@@ -96,4 +102,4 @@ EOF
 catalog_image="$push_host/library-olm-fixture-catalog:latest"
 docker build -q -t "$catalog_image" "$catalog_dir"
 docker save "$catalog_image" -o "$catalog_dir/image.tar"
-"$CRANE" push --insecure "$catalog_dir/image.tar" "$catalog_image"
+SSL_CERT_FILE="$registry_ca" "$CRANE" push "$catalog_dir/image.tar" "$catalog_image"

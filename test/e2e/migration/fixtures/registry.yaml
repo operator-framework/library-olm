@@ -13,6 +13,10 @@ spec:
   dnsNames:
     - fixture-registry.migration-e2e-registry.svc
     - fixture-registry.migration-e2e-registry.svc.cluster.local
+  # Crane treats localhost registries as HTTP. The test port-forwards to this
+  # alternate loopback address so it can publish to the TLS-only registry.
+  ipAddresses:
+    - 127.0.0.2
   issuerRef:
     name: olmv1-ca
     kind: ClusterIssuer
