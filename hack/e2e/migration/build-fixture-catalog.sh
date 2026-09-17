@@ -28,7 +28,20 @@ kubectl -n "$registry_namespace" wait --for=condition=Ready certificate/fixture-
 kubectl -n "$registry_namespace" wait --for=condition=Available deployment/$registry_service --timeout=3m
 kubectl -n "$registry_namespace" port-forward deployment/$registry_service 5001:5000 >"$work_dir/port-forward.log" 2>&1 &
 port_forward_pid=$!
-until curl --insecure --fail --silent "https://$push_host/v2/" >/dev/null; do sleep 1; done
+readiness_deadline=$((SECONDS + 60))
+until curl --insecure --fail --silent "https://$push_host/v2/" >/dev/null; do
+	if ! kill -0 "$port_forward_pid" 2>/dev/null; then
+		echo "fixture registry port-forward exited unexpectedly:" >&2
+		cat "$work_dir/port-forward.log" >&2
+		exit 1
+	fi
+	if ((SECONDS >= readiness_deadline)); then
+		echo "timed out waiting for fixture registry port-forward:" >&2
+		cat "$work_dir/port-forward.log" >&2
+		exit 1
+	fi
+	sleep 1
+done
 
 catalog_dir="$work_dir/catalog"
 mkdir -p "$catalog_dir/configs"
