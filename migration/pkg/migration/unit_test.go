@@ -603,7 +603,7 @@ func TestCreateClusterObjectSetCleansSecretsAfterReadinessFailure(t *testing.T) 
 	}
 }
 
-func TestRecoverBeforeCECleansReferenceSecrets(t *testing.T) {
+func TestRecoverBeforeCEPreservesResourcesItDidNotCreate(t *testing.T) {
 	ctx := context.Background()
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 		Name: "sub-1-ref", Namespace: "olmv1-system",
@@ -614,11 +614,40 @@ func TestRecoverBeforeCECleansReferenceSecrets(t *testing.T) {
 	if err := m.RecoverBeforeCE(ctx, Options{ClusterExtensionName: "sub"}, nil); err == nil {
 		t.Fatal("RecoverBeforeCE() unexpectedly succeeded without a backup")
 	}
-	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(secret), &corev1.Secret{}); err == nil {
-		t.Fatal("RecoverBeforeCE() left a COS reference Secret")
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(secret), &corev1.Secret{}); err != nil {
+		t.Fatalf("RecoverBeforeCE() deleted a pre-existing COS reference Secret: %v", err)
 	}
-	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(cos), &ocv1.ClusterObjectSet{}); err == nil {
-		t.Fatal("RecoverBeforeCE() left the failed ClusterObjectSet")
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(cos), &ocv1.ClusterObjectSet{}); err != nil {
+		t.Fatalf("RecoverBeforeCE() deleted a pre-existing ClusterObjectSet: %v", err)
+	}
+}
+
+func TestRecoverCreatedMigrationResourcesDeletesOnlyTrackedResources(t *testing.T) {
+	ctx := context.Background()
+	createdSecret := corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "created-ref", Namespace: "olmv1-system"}}
+	otherSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "other-ref", Namespace: "olmv1-system"}}
+	createdCOS := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "created-1"}}
+	otherCOS := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "other-1"}}
+	createdCE := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "created"}}
+	m := migrationTestClient(t, &createdSecret, otherSecret, createdCOS, otherCOS, createdCE)
+
+	err := m.recoverCreatedMigrationResources(ctx, Options{}, nil, &createdMigrationResources{
+		cos:     createdCOS,
+		secrets: []corev1.Secret{createdSecret},
+		ce:      createdCE,
+	})
+	if err == nil {
+		t.Fatal("recovery unexpectedly succeeded without a backup")
+	}
+	for _, object := range []client.Object{&createdSecret, createdCOS, createdCE} {
+		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(object), object); err == nil {
+			t.Fatalf("recovery left created %T %q", object, object.GetName())
+		}
+	}
+	for _, object := range []client.Object{otherSecret, otherCOS} {
+		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(object), object); err != nil {
+			t.Fatalf("recovery deleted untracked %T %q: %v", object, object.GetName(), err)
+		}
 	}
 }
 
