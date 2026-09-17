@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -33,10 +34,13 @@ var annotationPrefixesToStrip = []string{
 // Recovery must never infer ownership from predictable names or labels: another
 // migration may have created objects with the same values after this one started.
 type createdMigrationResources struct {
-	cos     *ocv1.ClusterObjectSet
-	secrets []corev1.Secret
-	ce      *ocv1.ClusterExtension
+	cos              *ocv1.ClusterObjectSet
+	secrets          []corev1.Secret
+	ce               *ocv1.ClusterExtension
+	ownershipUnknown bool
 }
+
+const migrationInvocationAnnotation = "olm.operatorframework.io/migration-invocation"
 
 // Migrate performs the full migration of an OLMv0-managed operator to OLMv1.
 // Steps:
@@ -139,10 +143,11 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 		return fmt.Errorf("COS creation failed (recovered): %w", err)
 	}
 
-	ce, err := m.createClusterExtension(ctx, opts, info)
+	ce, ownershipUnknown, err := m.createClusterExtension(ctx, opts, info)
 	if ce != nil {
 		resources.ce = ce
 	}
+	resources.ownershipUnknown = resources.ownershipUnknown || ownershipUnknown
 	if err != nil {
 		if recoverErr := m.recoverCreatedMigrationResources(ctx, opts, backup, resources); recoverErr != nil {
 			return fmt.Errorf("ClusterExtension creation failed: %w; recovery also failed: %v", err, recoverErr)
@@ -276,34 +281,54 @@ func (m *Migrator) RecoverBeforeCE(ctx context.Context, opts Options, backup *Ba
 // to delete a ClusterExtension or COS leaves the remaining resources intact and
 // prevents restoration, avoiding concurrent OLMv0 and OLMv1 ownership.
 func (m *Migrator) recoverCreatedMigrationResources(ctx context.Context, opts Options, backup *Backup, resources *createdMigrationResources) error {
-	if resources == nil {
-		return m.RecoverBeforeCE(ctx, opts, backup)
-	}
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), subWaitTimeout+30*time.Second)
 	defer cancel()
+	if resources == nil {
+		return m.RecoverBeforeCE(recoveryCtx, opts, backup)
+	}
+	if resources.ownershipUnknown {
+		return fmt.Errorf("migration resource creation outcome is unknown; refusing automatic recovery")
+	}
 	if resources.ce != nil {
-		if err := m.Client.Delete(cleanupCtx, resources.ce); err != nil && client.IgnoreNotFound(err) != nil {
+		if err := m.deleteTrackedResource(recoveryCtx, resources.ce); err != nil && client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("delete created ClusterExtension during recovery: %w", err)
 		}
 	}
 	if resources.cos != nil {
-		if err := m.Client.Delete(cleanupCtx, resources.cos, client.PropagationPolicy(metav1.DeletePropagationOrphan)); err != nil && client.IgnoreNotFound(err) != nil {
+		if err := m.deleteTrackedResource(recoveryCtx, resources.cos, client.PropagationPolicy(metav1.DeletePropagationOrphan)); err != nil && client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("delete created ClusterObjectSet during recovery: %w", err)
 		}
 	}
-	cleanupErr := m.cleanupCreatedSecrets(cleanupCtx, resources.secrets)
-	recoverErr := m.RecoverFromBackup(ctx, opts, backup)
+	cleanupErr := m.cleanupCreatedSecrets(recoveryCtx, resources.secrets)
+	recoverErr := m.RecoverFromBackup(recoveryCtx, opts, backup)
 	return errors.Join(cleanupErr, recoverErr)
 }
 
 func (m *Migrator) cleanupCreatedSecrets(ctx context.Context, secrets []corev1.Secret) error {
 	var errs []error
 	for i := range secrets {
-		if err := m.Client.Delete(ctx, &secrets[i]); err != nil && client.IgnoreNotFound(err) != nil {
+		if err := m.deleteTrackedResource(ctx, &secrets[i]); err != nil && client.IgnoreNotFound(err) != nil {
 			errs = append(errs, fmt.Errorf("delete COS ref Secret %s: %w", secrets[i].Name, err))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (m *Migrator) deleteTrackedResource(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	uid := obj.GetUID()
+	opts = append(opts, client.Preconditions{UID: &uid})
+	return m.Client.Delete(ctx, obj, opts...)
+}
+
+func createdByInvocation(obj client.Object, marker string) bool {
+	return obj.GetAnnotations()[migrationInvocationAnnotation] == marker
+}
+
+func (m *Migrator) resolveCreatedObject(ctx context.Context, obj client.Object, marker string) bool {
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+		return false
+	}
+	return createdByInvocation(obj, marker)
 }
 
 // ensureClusterExtensionAbsent rejects a target name before OLMv0 resources
@@ -340,6 +365,7 @@ func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, inf
 
 func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, info *MigrationInfo) (*createdMigrationResources, error) {
 	resources := &createdMigrationResources{}
+	invocationMarker := string(uuid.NewUUID())
 	cosName := fmt.Sprintf("%s-1", opts.ClusterExtensionName)
 	systemNS := opts.systemNamespace()
 
@@ -382,7 +408,16 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 	// Create ref Secrets before the COS so the COS controller can find them immediately.
 	for i := range packed.Secrets {
 		secret := &packed.Secrets[i]
+		if secret.Annotations == nil {
+			secret.Annotations = map[string]string{}
+		}
+		secret.Annotations[migrationInvocationAnnotation] = invocationMarker
 		if err := m.Client.Create(ctx, secret); err != nil {
+			if m.resolveCreatedObject(context.WithoutCancel(ctx), secret, invocationMarker) {
+				resources.secrets = append(resources.secrets, *secret)
+			} else {
+				resources.ownershipUnknown = true
+			}
 			return resources, failWithSecretCleanup(fmt.Errorf("failed to create COS ref Secret %s: %w", secret.Name, err))
 		}
 		resources.secrets = append(resources.secrets, *secret)
@@ -411,6 +446,7 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 		LabelPackageName:                   info.PackageName,
 		LabelBundleName:                    info.BundleName,
 		LabelBundleVersion:                 info.Version,
+		migrationInvocationAnnotation:      invocationMarker,
 	}
 	if info.BundleImage != "" {
 		cosAnnotations[LabelBundleReference] = info.BundleImage
@@ -437,6 +473,11 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 	// can overwrite its ownership or fail on immutable phases, making recovery
 	// and Secret cleanup unsafe.
 	if err := m.Client.Create(ctx, cosObj); err != nil {
+		if m.resolveCreatedObject(context.WithoutCancel(ctx), cosObj, invocationMarker) {
+			resources.cos = cosObj
+			return resources, fmt.Errorf("failed to create ClusterObjectSet: %w", err)
+		}
+		resources.ownershipUnknown = true
 		return resources, failWithSecretCleanup(fmt.Errorf("failed to create ClusterObjectSet: %w", err))
 	}
 	resources.cos = cosObj
@@ -454,7 +495,7 @@ func (m *Migrator) cleanupCreatedClusterObjectSet(ctx context.Context, resources
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	if resources.cos != nil {
-		if err := m.Client.Delete(cleanupCtx, resources.cos, client.PropagationPolicy(metav1.DeletePropagationOrphan)); err != nil && client.IgnoreNotFound(err) != nil {
+		if err := m.deleteTrackedResource(cleanupCtx, resources.cos, client.PropagationPolicy(metav1.DeletePropagationOrphan)); err != nil && client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("delete created ClusterObjectSet: %w", err)
 		}
 	}
@@ -488,19 +529,21 @@ func (m *Migrator) WaitForCOSSucceeded(ctx context.Context, cosName string) erro
 // spec.serviceAccount is NOT set — deprecated and ignored in OLMv1 (R2.5/R7).
 // Migration annotations (R2.5) are added for AlreadyMigrated/Conflict detection and rollback.
 func (m *Migrator) CreateClusterExtension(ctx context.Context, opts Options, info *MigrationInfo) error {
-	ce, err := m.createClusterExtension(ctx, opts, info)
+	ce, _, err := m.createClusterExtension(ctx, opts, info)
 	if err != nil && ce != nil {
-		if deleteErr := m.Client.Delete(context.WithoutCancel(ctx), ce); deleteErr != nil && client.IgnoreNotFound(deleteErr) != nil {
+		if deleteErr := m.deleteTrackedResource(context.WithoutCancel(ctx), ce); deleteErr != nil && client.IgnoreNotFound(deleteErr) != nil {
 			return errors.Join(err, fmt.Errorf("delete created ClusterExtension: %w", deleteErr))
 		}
 	}
 	return err
 }
 
-func (m *Migrator) createClusterExtension(ctx context.Context, opts Options, info *MigrationInfo) (*ocv1.ClusterExtension, error) {
+func (m *Migrator) createClusterExtension(ctx context.Context, opts Options, info *MigrationInfo) (*ocv1.ClusterExtension, bool, error) {
+	invocationMarker := string(uuid.NewUUID())
 	// Build annotations (R2.5).
 	annotations := map[string]string{
 		MigratedFromSubscriptionAnnotation: fmt.Sprintf("%s/%s", opts.SubscriptionNamespace, opts.SubscriptionName),
+		migrationInvocationAnnotation:      invocationMarker,
 	}
 	if info.SubscriptionBackupJSON != "" {
 		annotations[MigrationSubscriptionBackupAnnotation] = info.SubscriptionBackupJSON
@@ -582,11 +625,11 @@ func (m *Migrator) createClusterExtension(ctx context.Context, opts Options, inf
 	if info.SubscriptionConfig != nil {
 		cfgJSON, err := json.Marshal(info.SubscriptionConfig)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal SubscriptionConfig for CE: %w", err)
+			return nil, false, fmt.Errorf("failed to marshal SubscriptionConfig for CE: %w", err)
 		}
 		inlineJSON, err := json.Marshal(map[string]json.RawMessage{"deploymentConfig": cfgJSON})
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal CE inline config: %w", err)
+			return nil, false, fmt.Errorf("failed to marshal CE inline config: %w", err)
 		}
 		ce.Spec.Config = &ocv1.ClusterExtensionConfig{
 			ConfigType: ocv1.ClusterExtensionConfigTypeInline,
@@ -595,10 +638,13 @@ func (m *Migrator) createClusterExtension(ctx context.Context, opts Options, inf
 	}
 
 	if err := m.Client.Create(ctx, ce); err != nil {
-		return nil, fmt.Errorf("failed to create ClusterExtension: %w", err)
+		if m.resolveCreatedObject(context.WithoutCancel(ctx), ce, invocationMarker) {
+			return ce, false, fmt.Errorf("failed to create ClusterExtension: %w", err)
+		}
+		return nil, true, fmt.Errorf("failed to create ClusterExtension: %w", err)
 	}
 
-	return ce, m.WaitForClusterExtensionInstalled(ctx, opts.ClusterExtensionName)
+	return ce, false, m.WaitForClusterExtensionInstalled(ctx, opts.ClusterExtensionName)
 }
 
 // WaitForClusterExtensionInstalled waits for the CE to reach Installed=True.

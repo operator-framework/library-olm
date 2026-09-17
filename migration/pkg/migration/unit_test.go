@@ -651,6 +651,22 @@ func TestRecoverCreatedMigrationResourcesDeletesOnlyTrackedResources(t *testing.
 	}
 }
 
+func TestRecoverCreatedMigrationResourcesRefusesUnknownOwnership(t *testing.T) {
+	ctx := context.Background()
+	cos := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "possibly-foreign-1"}}
+	m := migrationTestClient(t, cos)
+	err := m.recoverCreatedMigrationResources(ctx, Options{}, nil, &createdMigrationResources{
+		cos:              cos,
+		ownershipUnknown: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "outcome is unknown") {
+		t.Fatalf("recovery error = %v, want unknown ownership", err)
+	}
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(cos), &ocv1.ClusterObjectSet{}); err != nil {
+		t.Fatalf("recovery deleted a resource with unknown ownership: %v", err)
+	}
+}
+
 func TestSplitSubRefRejectsMalformedReferences(t *testing.T) {
 	for _, ref := range []string{"", "ns", "ns/", "/sub", "ns/sub/extra", "invalid_namespace/sub", "ns/invalid_name"} {
 		if _, _, err := splitSubRef(ref); err == nil {
