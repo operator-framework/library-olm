@@ -20,7 +20,7 @@ import (
 const (
 	// MigratedFromCatalogSourceAnnotation is set on ClusterCatalog when first created or adopted.
 	MigratedFromCatalogSourceAnnotation = "olm.operatorframework.io/migrated-from-catalogsource"
-	clusterCatalogServingTimeout        = 10 * time.Minute
+	clusterCatalogServingTimeout        = 3 * time.Minute
 )
 
 // CatalogMigratorOptions configures the catalog migration.
