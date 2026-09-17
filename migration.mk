@@ -64,8 +64,9 @@ migration/e2e-setup: $(KIND) ## Create kind and install pinned OLMv0 and OLMv1 r
 	E2E_KUBECONFIG="$(E2E_KUBECONFIG)" E2E_CLUSTER_NAME="$(E2E_CLUSTER_NAME)" KIND="$(KIND)" OLM_V0_CRDS="$(OLM_V0_CRDS)" OLM_V0_MANIFEST="$(OLM_V0_MANIFEST)" OLM_V1_INSTALL="$(OLM_V1_INSTALL)" OLM_V1_INSTALL_SHA256="$(OLM_V1_INSTALL_SHA256)" ./hack/e2e/migration/setup.sh
 
 .PHONY: migration/e2e-fixture-setup
-migration/e2e-fixture-setup: $(KIND) ## Create fixture kind cluster with OLMv0 APIs but no OLMv0 controllers
+migration/e2e-fixture-setup: $(KIND) $(CRANE) ## Create fixture kind cluster with OLMv0 APIs but no OLMv0 controllers
 	E2E_KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" E2E_CLUSTER_NAME="$(E2E_FIXTURE_CLUSTER_NAME)" E2E_INSTALL_OLMV0=false KIND="$(KIND)" OLM_V0_CRDS="$(OLM_V0_CRDS)" OLM_V0_MANIFEST="$(OLM_V0_MANIFEST)" OLM_V1_INSTALL="$(OLM_V1_INSTALL)" OLM_V1_INSTALL_SHA256="$(OLM_V1_INSTALL_SHA256)" ./hack/e2e/migration/setup.sh
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" CRANE="$(CRANE)" ./hack/e2e/migration/build-fixture-catalog.sh
 
 .PHONY: migration/e2e-teardown
 migration/e2e-teardown: $(KIND) ## Delete the dedicated migration kind cluster

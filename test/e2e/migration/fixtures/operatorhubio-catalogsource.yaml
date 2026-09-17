@@ -8,7 +8,7 @@ metadata:
   namespace: olm
 spec:
   sourceType: grpc
-  # Verified from the bootstrap operatorhubio ClusterCatalog on 2026-09-14.
-  # Keep this immutable reference available in Quay so fixture replay is
-  # independent of OLMv0 and does not follow the mutable `latest` tag.
-  image: quay.io/operatorhubio/catalog@sha256:9d1e457f57cc73e57469f3cb622a92c311ce1fdcdb4aabfab4ead64218e89744
+  # This image is built from the committed operator snapshots during fixture
+  # setup and served by the in-cluster fixture registry. It deliberately does
+  # not depend on an OperatorHub image or a retained Quay digest.
+  image: fixture-registry.migration-e2e-registry.svc.cluster.local:5000/library-olm-fixture-catalog:latest
