@@ -39,7 +39,8 @@ type secretPacker struct {
 	RevisionName string
 	// OwnerName is the CE name — recorded as a label on each Secret.
 	OwnerName string
-	// SystemNamespace is where Secrets are created (e.g. "olmv1-system").
+	// SystemNamespace is where Secrets are created (the discovered
+	// operator-controller namespace, unless explicitly overridden).
 	SystemNamespace string
 }
 

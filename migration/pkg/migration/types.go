@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
@@ -51,16 +52,9 @@ type Options struct {
 	DeleteOperatorGroup bool
 
 	// SystemNamespace is the namespace where COS ref Secrets are created (R2.4).
-	// Defaults to "olmv1-system" when empty.
+	// When empty, migration discovers the operator-controller Deployment namespace.
+	// It is an override for unusual installations, not a production default.
 	SystemNamespace string
-}
-
-// systemNamespace returns the effective system namespace.
-func (o Options) systemNamespace() string {
-	if o.SystemNamespace != "" {
-		return o.SystemNamespace
-	}
-	return "olmv1-system"
 }
 
 // ApplyDefaults fills in default values for any unset optional fields.
@@ -131,15 +125,21 @@ func (b *Backup) SaveToDisk(dir string) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("failed to create backup directory: %w", err)
 	}
-	if err := writeYAMLFile(filepath.Join(dir, "subscription.yaml"), b.Subscription); err != nil {
+	subscription := b.Subscription.DeepCopy()
+	subscription.TypeMeta = metav1.TypeMeta{APIVersion: "operators.coreos.com/v1alpha1", Kind: "Subscription"}
+	if err := writeYAMLFile(filepath.Join(dir, "subscription.yaml"), subscription); err != nil {
 		return fmt.Errorf("failed to write subscription.yaml: %w", err)
 	}
 	if b.OperatorGroup != nil {
-		if err := writeYAMLFile(filepath.Join(dir, "operatorgroup.yaml"), b.OperatorGroup); err != nil {
+		operatorGroup := b.OperatorGroup.DeepCopy()
+		operatorGroup.TypeMeta = metav1.TypeMeta{APIVersion: "operators.coreos.com/v1", Kind: "OperatorGroup"}
+		if err := writeYAMLFile(filepath.Join(dir, "operatorgroup.yaml"), operatorGroup); err != nil {
 			return fmt.Errorf("failed to write operatorgroup.yaml: %w", err)
 		}
 	}
-	if err := writeYAMLFile(filepath.Join(dir, "clusterserviceversion.yaml"), b.ClusterServiceVersion); err != nil {
+	csv := b.ClusterServiceVersion.DeepCopy()
+	csv.TypeMeta = metav1.TypeMeta{APIVersion: "operators.coreos.com/v1alpha1", Kind: "ClusterServiceVersion"}
+	if err := writeYAMLFile(filepath.Join(dir, "clusterserviceversion.yaml"), csv); err != nil {
 		return fmt.Errorf("failed to write clusterserviceversion.yaml: %w", err)
 	}
 	if b.InstallPlan != nil {
@@ -147,7 +147,9 @@ func (b *Backup) SaveToDisk(dir string) error {
 		if err := os.MkdirAll(ipDir, 0o750); err != nil {
 			return fmt.Errorf("failed to create installplans directory: %w", err)
 		}
-		if err := writeYAMLFile(filepath.Join(ipDir, b.InstallPlan.Name+".yaml"), b.InstallPlan); err != nil {
+		installPlan := b.InstallPlan.DeepCopy()
+		installPlan.TypeMeta = metav1.TypeMeta{APIVersion: "operators.coreos.com/v1alpha1", Kind: "InstallPlan"}
+		if err := writeYAMLFile(filepath.Join(ipDir, b.InstallPlan.Name+".yaml"), installPlan); err != nil {
 			return fmt.Errorf("failed to write installplan: %w", err)
 		}
 	}

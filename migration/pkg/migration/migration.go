@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -22,6 +23,11 @@ import (
 	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	ocv1 "github.com/operator-framework/operator-controller/api/v1"
 	ocv1ac "github.com/operator-framework/operator-controller/applyconfigurations/api/v1"
+)
+
+const (
+	clusterObjectSetCRDName      = "clusterobjectsets.olm.operatorframework.io"
+	operatorControllerDeployName = "operator-controller-controller-manager"
 )
 
 // annotationPrefixesToStrip are annotation prefixes that should be removed from migrated resources.
@@ -93,6 +99,13 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	}
 	info.ResolvedCatalogName = catalogName
 
+	// Fail before taking OLMv0 out of management if the target API or its
+	// SecretPacker namespace is not available on this cluster.
+	opts, err = m.PrepareClusterObjectSet(ctx, opts)
+	if err != nil {
+		return err
+	}
+
 	backup, err := m.BackupResources(ctx, opts, csv, ip)
 	if err != nil {
 		return fmt.Errorf("failed to backup resources: %w", err)
@@ -159,6 +172,59 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	m.CleanupOLMv0Resources(ctx, opts, info.PackageName, csv.Name)
 
 	return nil
+}
+
+// PrepareClusterObjectSet validates that this cluster can accept the OLMv1
+// objects migration creates and resolves where SecretPacker data belongs. It
+// must run before PrepareForMigration, which deletes OLMv0 management objects.
+func (m *Migrator) PrepareClusterObjectSet(ctx context.Context, opts Options) (Options, error) {
+	opts.ApplyDefaults()
+	if err := m.ensureClusterObjectSetCRD(ctx); err != nil {
+		return opts, err
+	}
+	if opts.SystemNamespace != "" {
+		return opts, nil
+	}
+	namespace, err := m.operatorControllerNamespace(ctx)
+	if err != nil {
+		return opts, err
+	}
+	opts.SystemNamespace = namespace
+	return opts, nil
+}
+
+func (m *Migrator) ensureClusterObjectSetCRD(ctx context.Context) error {
+	var crd apiextensionsv1.CustomResourceDefinition
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: clusterObjectSetCRDName}, &crd); err != nil {
+		return fmt.Errorf("ClusterObjectSet CRD %q is required before migration: %w", clusterObjectSetCRDName, err)
+	}
+	for _, condition := range crd.Status.Conditions {
+		if condition.Type == apiextensionsv1.Established && condition.Status == apiextensionsv1.ConditionTrue {
+			return nil
+		}
+	}
+	return fmt.Errorf("ClusterObjectSet CRD %q is not established", clusterObjectSetCRDName)
+}
+
+func (m *Migrator) operatorControllerNamespace(ctx context.Context) (string, error) {
+	var deployments appsv1.DeploymentList
+	if err := m.Client.List(ctx, &deployments, client.MatchingLabels{"app.kubernetes.io/name": "operator-controller"}); err != nil {
+		return "", fmt.Errorf("list operator-controller Deployments: %w", err)
+	}
+	var matches []string
+	for _, deployment := range deployments.Items {
+		if deployment.Name == operatorControllerDeployName {
+			matches = append(matches, deployment.Namespace)
+		}
+	}
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return "", fmt.Errorf("operator-controller Deployment %q was not found; set Options.SystemNamespace only after installing a compatible operator-controller", operatorControllerDeployName)
+	default:
+		return "", fmt.Errorf("found operator-controller Deployment %q in multiple namespaces %v; set Options.SystemNamespace", operatorControllerDeployName, matches)
+	}
 }
 
 // EnsurePrerequisites verifies that all prerequisites for migration are met.
@@ -355,6 +421,11 @@ func (m *Migrator) ensureClusterExtensionAbsent(ctx context.Context, name string
 // OLMv1 revision object(s) are appropriate. Track upstream progress at OPRUN-4716 and the
 // boxcutter ClusterObjectDeployment design.
 func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, info *MigrationInfo) error {
+	var err error
+	opts, err = m.PrepareClusterObjectSet(ctx, opts)
+	if err != nil {
+		return err
+	}
 	resources, err := m.createClusterObjectSet(ctx, opts, info)
 	if err != nil {
 		if cleanupErr := m.cleanupCreatedClusterObjectSet(ctx, resources); cleanupErr != nil {
@@ -368,7 +439,6 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 	resources := &createdMigrationResources{}
 	invocationMarker := string(uuid.NewUUID())
 	cosName := fmt.Sprintf("%s-1", opts.ClusterExtensionName)
-	systemNS := opts.systemNamespace()
 
 	cosObjects := make([]ocv1ac.ClusterObjectSetObjectApplyConfiguration, 0, len(info.CollectedObjects))
 	for _, obj := range info.CollectedObjects {
@@ -388,7 +458,7 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 	packer := &secretPacker{
 		RevisionName:    cosName,
 		OwnerName:       opts.ClusterExtensionName,
-		SystemNamespace: systemNS,
+		SystemNamespace: opts.SystemNamespace,
 	}
 	packed, err := packer.pack(phases)
 	if err != nil {

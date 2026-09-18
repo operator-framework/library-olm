@@ -211,6 +211,14 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	bundleInfo.ResolvedCatalogName = catalogName
 	success(fmt.Sprintf("Selected ClusterCatalog: %s", catalogName))
 
+	// Verify every OLMv1 prerequisite before deleting the Subscription or CSV.
+	// This also discovers the operator-controller namespace used by SecretPacker.
+	opts, err = m.PrepareClusterObjectSet(ctx, opts)
+	if err != nil {
+		return fmt.Errorf("ClusterObjectSet prerequisite check failed: %w", err)
+	}
+	success(fmt.Sprintf("ClusterObjectSet API established; using operator-controller namespace %s", opts.SystemNamespace))
+
 	stepHeader(4, "Collecting operator resources")
 	objects, err := m.CollectResources(ctx, opts, csv, ip, bundleInfo.PackageName)
 	if err != nil {
@@ -261,7 +269,10 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	startProgress()
 	if err := m.CreateClusterObjectSet(ctx, opts, bundleInfo); err != nil {
 		clearProgress()
-		return fmt.Errorf("COS creation failed: %w", err)
+		if recoverErr := m.RecoverBeforeCE(ctx, opts, backup); recoverErr != nil {
+			return fmt.Errorf("COS creation failed: %w; recovery also failed: %v", err, recoverErr)
+		}
+		return fmt.Errorf("COS creation failed (recovered): %w", err)
 	}
 	clearProgress()
 	success(fmt.Sprintf("ClusterObjectSet %s-1 reached Succeeded=True", opts.ClusterExtensionName))

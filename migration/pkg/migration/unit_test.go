@@ -14,8 +14,10 @@ import (
 	"strings"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -87,6 +89,12 @@ func migrationTestClient(t *testing.T, objects ...runtime.Object) *Migrator {
 	if err := ocv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := apiextensionsv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
 	return NewMigrator(fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(objects...).Build(), nil)
 }
 
@@ -96,9 +104,19 @@ func healthySubscriptionFixtures() (*operatorsv1alpha1.Subscription, *operatorsv
 	return sub, csv
 }
 
+func establishedClusterObjectSetCRD() *apiextensionsv1.CustomResourceDefinition {
+	return &apiextensionsv1.CustomResourceDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
+		Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{
+			Type:   apiextensionsv1.Established,
+			Status: apiextensionsv1.ConditionTrue,
+		}}},
+	}
+}
+
 func TestCheckReadiness(t *testing.T) {
 	sub, csv := healthySubscriptionFixtures()
-	m := migrationTestClient(t, sub, csv)
+	m := migrationTestClient(t, sub, csv, establishedClusterObjectSetCRD())
 	report, err := m.CheckReadiness(context.Background(), Options{SubscriptionName: "sub", SubscriptionNamespace: "ns"})
 	if err != nil || !report.Passed() {
 		t.Fatalf("healthy report=%#v err=%v", report, err)
@@ -107,7 +125,7 @@ func TestCheckReadiness(t *testing.T) {
 	busySub, busyCSV := healthySubscriptionFixtures()
 	busySub.Status.State = operatorsv1alpha1.SubscriptionStateUpgradeAvailable
 	busyCSV.Status.Phase = operatorsv1alpha1.CSVPhaseFailed
-	m = migrationTestClient(t, busySub, busyCSV)
+	m = migrationTestClient(t, busySub, busyCSV, establishedClusterObjectSetCRD())
 	report, err = m.CheckReadiness(context.Background(), Options{SubscriptionName: "sub", SubscriptionNamespace: "ns"})
 	if err != nil || report.Passed() || len(report.FailedChecks()) != 2 {
 		t.Fatalf("unacknowledged report=%#v err=%v", report, err)
@@ -119,11 +137,29 @@ func TestCheckReadiness(t *testing.T) {
 
 	depSub, depCSV := healthySubscriptionFixtures()
 	depSub.Annotations = map[string]string{"olm.generated-by": "parent"}
-	m = migrationTestClient(t, depSub, depCSV, &operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "other"}, Spec: &operatorsv1alpha1.SubscriptionSpec{Package: "widgets"}})
+	m = migrationTestClient(t, depSub, depCSV, establishedClusterObjectSetCRD(), &operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "other"}, Spec: &operatorsv1alpha1.SubscriptionSpec{Package: "widgets"}})
 	report, err = m.CheckReadiness(context.Background(), Options{SubscriptionName: "sub", SubscriptionNamespace: "ns"})
 	if err != nil || report.Passed() || len(report.FailedChecks()) != 2 {
 		t.Fatalf("dependency/duplicate report=%#v err=%v", report, err)
 	}
+}
+
+func TestCheckReadinessRequiresClusterObjectSetCRD(t *testing.T) {
+	sub, csv := healthySubscriptionFixtures()
+	m := migrationTestClient(t, sub, csv)
+	report, err := m.CheckReadiness(context.Background(), Options{SubscriptionName: "sub", SubscriptionNamespace: "ns"})
+	if err != nil {
+		t.Fatalf("CheckReadiness() error = %v", err)
+	}
+	for _, check := range report.Checks {
+		if check.Name == "ClusterObjectSet API" {
+			if check.Passed || !strings.Contains(check.Message, clusterObjectSetCRDName) {
+				t.Fatalf("ClusterObjectSet API check = %#v, want failed missing-CRD check", check)
+			}
+			return
+		}
+	}
+	t.Fatal("CheckReadiness() did not report the ClusterObjectSet API check")
 }
 
 func TestCompatibilityOperatorGroupAndConditionOverrides(t *testing.T) {
@@ -296,7 +332,7 @@ func TestSecretPacker(t *testing.T) {
 func TestOptionsReportsAndAnnotationFiltering(t *testing.T) {
 	opts := Options{SubscriptionName: "sub", SubscriptionNamespace: "ns"}
 	opts.ApplyDefaults()
-	if opts.ClusterExtensionName != "sub" || opts.InstallNamespace != "ns" || opts.systemNamespace() != "olmv1-system" {
+	if opts.ClusterExtensionName != "sub" || opts.InstallNamespace != "ns" || opts.SystemNamespace != "" {
 		t.Fatalf("defaults: %#v", opts)
 	}
 	report := &PreMigrationReport{Checks: []CheckResult{{Passed: true}, {Name: "bad", Passed: false}}}
@@ -306,6 +342,54 @@ func TestOptionsReportsAndAnnotationFiltering(t *testing.T) {
 	filtered := filterAnnotations(map[string]string{"keep": "x", "olm.operatorframework.io/managed": "yes", "kubectl.kubernetes.io/last-applied-configuration": "x"})
 	if len(filtered) != 2 || filtered["keep"] != "x" || filtered["olm.operatorframework.io/managed"] != "yes" {
 		t.Fatalf("annotations not stripped: %#v", filtered)
+	}
+}
+
+func TestPrepareClusterObjectSet(t *testing.T) {
+	establishedCRD := &apiextensionsv1.CustomResourceDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
+		Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{
+			Type:   apiextensionsv1.Established,
+			Status: apiextensionsv1.ConditionTrue,
+		}}},
+	}
+	controller := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      operatorControllerDeployName,
+			Namespace: "openshift-operator-controller",
+			Labels:    map[string]string{"app.kubernetes.io/name": "operator-controller"},
+		},
+	}
+	m := migrationTestClient(t, establishedCRD, controller)
+
+	got, err := m.PrepareClusterObjectSet(context.Background(), Options{SubscriptionName: "sub", SubscriptionNamespace: "operators"})
+	if err != nil {
+		t.Fatalf("PrepareClusterObjectSet() error = %v", err)
+	}
+	if got.SystemNamespace != "openshift-operator-controller" {
+		t.Fatalf("SystemNamespace = %q, want discovered operator-controller namespace", got.SystemNamespace)
+	}
+
+	got, err = m.PrepareClusterObjectSet(context.Background(), Options{SystemNamespace: "chosen"})
+	if err != nil {
+		t.Fatalf("PrepareClusterObjectSet() with override error = %v", err)
+	}
+	if got.SystemNamespace != "chosen" {
+		t.Fatalf("SystemNamespace override = %q, want chosen", got.SystemNamespace)
+	}
+}
+
+func TestPrepareClusterObjectSetRequiresEstablishedCRD(t *testing.T) {
+	m := migrationTestClient(t)
+	if _, err := m.PrepareClusterObjectSet(context.Background(), Options{}); err == nil || !strings.Contains(err.Error(), clusterObjectSetCRDName) {
+		t.Fatalf("PrepareClusterObjectSet() error = %v, want missing CRD error", err)
+	}
+
+	m = migrationTestClient(t, &apiextensionsv1.CustomResourceDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
+	})
+	if _, err := m.PrepareClusterObjectSet(context.Background(), Options{}); err == nil || !strings.Contains(err.Error(), "not established") {
+		t.Fatalf("PrepareClusterObjectSet() error = %v, want unestablished CRD error", err)
 	}
 }
 
@@ -359,6 +443,9 @@ func TestBackupSaveToDisk(t *testing.T) {
 		data, err := os.ReadFile(filepath.Join(dir, file))
 		if err != nil || !strings.Contains(string(data), name) {
 			t.Errorf("backup %s = %q, err=%v", file, data, err)
+		}
+		if !strings.Contains(string(data), "apiVersion: operators.coreos.com/") || !strings.Contains(string(data), "kind:") {
+			t.Errorf("backup %s is not an applyable Kubernetes manifest: %q", file, data)
 		}
 	}
 }
@@ -480,7 +567,7 @@ func TestScanAllKeepsMixedUnsafeOperatorsOutOfEligibleResults(t *testing.T) {
 func TestPrerequisitesAndRecoveryErrors(t *testing.T) {
 	ctx := context.Background()
 	sub, csv := healthySubscriptionFixtures()
-	m := migrationTestClient(t, sub, csv)
+	m := migrationTestClient(t, sub, csv, establishedClusterObjectSetCRD())
 	gotCSV, ip, readiness, compatibility, err := m.EnsurePrerequisites(ctx, Options{SubscriptionName: "sub", SubscriptionNamespace: "ns"})
 	if err != nil || gotCSV.Name != csv.Name || ip != nil || !readiness.Passed() || compatibility == nil {
 		t.Fatalf("EnsurePrerequisites() = csv=%#v ip=%#v readiness=%#v compatibility=%#v err=%v", gotCSV, ip, readiness, compatibility, err)
