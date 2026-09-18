@@ -46,18 +46,14 @@ migration/build-catalogs: ## Build migrate-catalogs-v0-to-v1 into bin/
 	go build -cover -covermode=count -o $(MIGRATE_CATALOGS_BIN) ./migration/examples/cmd/migrate-catalogs-v0-to-v1
 
 .PHONY: migration/test-unit
-migration/test-unit: ## Run migration unit tests
-	go test ./migration/... -count=1
+migration/test-unit: ## Run migration unit tests and write a coverage profile
+	@mkdir -p $(COVERAGE_DIR)
+	go test ./migration/... -count=1 -covermode=count -coverprofile=$(UNIT_COVERAGE_PROFILE)
+	go tool cover -func=$(UNIT_COVERAGE_PROFILE) | tee $(UNIT_COVERAGE_REPORT)
 
 .PHONY: migration/test-verbose
 migration/test-verbose: ## Run migration unit tests with verbose output
 	go test ./migration/... -v -count=1
-
-.PHONY: migration/test-coverage
-migration/test-coverage: ## Run migration unit tests and display coverage
-	@mkdir -p $(COVERAGE_DIR)
-	go test ./migration/... -count=1 -covermode=count -coverprofile=$(UNIT_COVERAGE_PROFILE)
-	go tool cover -func=$(UNIT_COVERAGE_PROFILE) | tee $(UNIT_COVERAGE_REPORT)
 
 .PHONY: migration/e2e-setup
 migration/e2e-setup: $(KIND) ## Create kind and install pinned OLMv0 and OLMv1 releases
@@ -115,10 +111,12 @@ migration/test-e2e-real-operator: migration/build ## Run real-operator migration
 
 .PHONY: migration/report-coverage-all
 migration/report-coverage-all: ## Display coverage from existing unit and collected E2E CLI profiles
-	@coverage_dirs="$$(find "$(E2E_COVERAGE_DIR)" -type f -name 'covmeta.*' -printf '%h\n' 2>/dev/null | sort -u | paste -sd, -)"; test -n "$$coverage_dirs" || { echo "no E2E CLI coverage found; run both E2E matrices before migration/test-coverage-all" >&2; exit 2; }; go tool covdata textfmt -i="$$coverage_dirs" -o="$(E2E_COVERAGE_PROFILE)"; awk 'FNR == 1 { next } { key = $$1 " " $$2; if (!(key in count)) order[++n] = key; count[key] += $$3 } END { print "mode: count"; for (i = 1; i <= n; i++) print order[i] " " count[order[i]] }' "$(UNIT_COVERAGE_PROFILE)" "$(E2E_COVERAGE_PROFILE)" > "$(ALL_COVERAGE_PROFILE)"; go tool cover -func="$(ALL_COVERAGE_PROFILE)"
+	@mkdir -p $(COVERAGE_DIR)
+	@test -f "$(UNIT_COVERAGE_PROFILE)" || { echo "unit coverage is missing; run make migration/test-unit first" >&2; exit 2; }
+	@coverage_dirs="$$(find "$(E2E_COVERAGE_DIR)" -type f -name 'covmeta.*' -printf '%h\n' 2>/dev/null | sort -u | paste -sd, -)"; test -n "$$coverage_dirs" || { echo "no E2E CLI coverage found; run both E2E matrices before migration/report-coverage-all" >&2; exit 2; }; go tool covdata textfmt -i="$$coverage_dirs" -o="$(E2E_COVERAGE_PROFILE)"; awk 'FNR == 1 { next } { key = $$1 " " $$2; if (!(key in count)) order[++n] = key; count[key] += $$3 } END { print "mode: count"; for (i = 1; i <= n; i++) print order[i] " " count[order[i]] }' "$(UNIT_COVERAGE_PROFILE)" "$(E2E_COVERAGE_PROFILE)" > "$(ALL_COVERAGE_PROFILE)"; go tool cover -func="$(ALL_COVERAGE_PROFILE)"
 
 .PHONY: migration/test-coverage-all
-migration/test-coverage-all: migration/test-coverage migration/report-coverage-all ## Run unit tests and display combined unit and collected E2E CLI coverage
+migration/test-coverage-all: migration/test-unit migration/report-coverage-all ## Run unit tests and display combined unit and collected E2E CLI coverage
 
 .PHONY: migration/clean
 migration/clean: ## Remove compiled migration CLI binaries from bin/

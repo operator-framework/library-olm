@@ -96,9 +96,11 @@ write diagnostics below `E2E_ARTIFACTS` (default: `artifacts/e2e`).
 
 Coverage is optional because the migration binaries run outside the Go test process. E2E CLI
 binaries are always built with `go build -cover`, and the E2E targets collect their coverage
-under `artifacts/e2e/coverage`. After both E2E matrices have run, `make migration/test-coverage-all`
-merges that CLI data with a fresh unit-test profile and displays the combined result. It fails
-if E2E coverage is absent, preventing a misleading unit-only report. Upload the merged profile
+under `artifacts/e2e/coverage`. `make migration/test-unit` always writes the unit profile under
+`artifacts/coverage`; after both E2E matrices have run, `make migration/report-coverage-all`
+merges the existing profiles and displays the combined result. `make migration/test-coverage-all`
+reruns the unit suite before displaying that report. The report fails if unit or E2E coverage is
+absent, preventing a misleading partial result. Upload the merged profile
 and failure artifacts, but do not impose an E2E percentage threshold; the unit suite owns the
 ≥80% gate. This avoids treating controller waits and external command plumbing as unit
 coverage while still showing which migration paths the E2E suite executes.
