@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: migration-e2e-registry
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: fixture-registry-tls
+  namespace: migration-e2e-registry
+spec:
+  secretName: fixture-registry-tls
+  dnsNames:
+    - fixture-registry.migration-e2e-registry.svc
+    - fixture-registry.migration-e2e-registry.svc.cluster.local
+  # Crane treats localhost registries as HTTP. The test port-forwards to this
+  # alternate loopback address so it can publish to the TLS-only registry.
+  ipAddresses:
+    - 127.0.0.2
+  issuerRef:
+    name: olmv1-ca
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fixture-registry
+  namespace: migration-e2e-registry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fixture-registry
+  template:
+    metadata:
+      labels:
+        app: fixture-registry
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: registry
+          image: registry@sha256:1be55279f18a2fe1a74edf2664cac61c1bea305b7b4642dab412e7affdcb3e33
+          env:
+            - name: REGISTRY_HTTP_TLS_CERTIFICATE
+              value: /certs/tls.crt
+            - name: REGISTRY_HTTP_TLS_KEY
+              value: /certs/tls.key
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - containerPort: 5000
+          volumeMounts:
+            - name: storage
+              mountPath: /var/lib/registry
+            - name: certs
+              mountPath: /certs
+              readOnly: true
+      volumes:
+        - name: storage
+          emptyDir: {}
+        - name: certs
+          secret:
+            secretName: fixture-registry-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fixture-registry
+  namespace: migration-e2e-registry
+spec:
+  selector:
+    app: fixture-registry
+  ports:
+    - name: https
+      port: 5000
+      targetPort: 5000
