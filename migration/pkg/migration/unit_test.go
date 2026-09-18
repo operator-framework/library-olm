@@ -161,7 +161,7 @@ not-json
 	}
 }
 
-func TestCatalogdTLSConfigUsesCatalogCAWithoutAPIServerTransportSettings(t *testing.T) {
+func TestCatalogdTLSConfigUsesServingCertificateWithoutAPIServerTransportSettings(t *testing.T) {
 	ca := []byte("catalogd-ca")
 	config := &rest.Config{
 		TLSClientConfig: rest.TLSClientConfig{CAData: []byte("api-server-ca"), Insecure: true},
@@ -169,17 +169,40 @@ func TestCatalogdTLSConfigUsesCatalogCAWithoutAPIServerTransportSettings(t *test
 			return &url.URL{Scheme: "https", Host: "proxy.example"}, nil
 		},
 	}
-	clientset := k8sfake.NewSimpleClientset(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "olmv1-ca", Namespace: "cert-manager"},
+	clientset := k8sfake.NewSimpleClientset(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "catalogd", Namespace: "catalogd-ns"},
+		Spec: corev1.PodSpec{Volumes: []corev1.Volume{{
+			Name:         "catalogserver-certs",
+			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "catalogserver-cert"}},
+		}}},
+	}, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "catalogserver-cert", Namespace: "catalogd-ns"},
 		Data:       map[string][]byte{"ca.crt": ca},
 	})
 
-	got, err := catalogdTLSConfig(context.Background(), clientset, config)
+	got, err := catalogdTLSConfig(context.Background(), clientset, config, "catalogd-ns", "catalogd")
 	if err != nil {
 		t.Fatalf("catalogdTLSConfig() error = %v", err)
 	}
 	if got == config || got.Insecure || got.Proxy != nil || got.CAFile != "" || !bytes.Equal(got.CAData, ca) {
 		t.Fatalf("catalog transport config = %#v, want copied config with catalog CA, TLS verification, and no proxy", got)
+	}
+}
+
+func TestCatalogdServiceLocation(t *testing.T) {
+	catalog := &ocv1.ClusterCatalog{ObjectMeta: metav1.ObjectMeta{Name: "catalog"}}
+	catalog.Status.URLs = &ocv1.ClusterCatalogURLs{Base: "https://catalogd-service.openshift-catalogd.svc/catalogs/catalog"}
+	namespace, serverName, err := catalogdServiceLocation(catalog)
+	if err != nil {
+		t.Fatalf("catalogdServiceLocation() error = %v", err)
+	}
+	if namespace != "openshift-catalogd" || serverName != "catalogd-service.openshift-catalogd.svc" {
+		t.Fatalf("catalogdServiceLocation() = %q, %q, want openshift-catalogd and service DNS name", namespace, serverName)
+	}
+
+	catalog.Status.URLs.Base = "https://catalog.example.test/catalogs/catalog"
+	if _, _, err := catalogdServiceLocation(catalog); err == nil {
+		t.Fatal("catalogdServiceLocation() accepted a non-service hostname")
 	}
 }
 
