@@ -20,6 +20,7 @@ import (
 const (
 	// MigratedFromCatalogSourceAnnotation is set on ClusterCatalog when first created or adopted.
 	MigratedFromCatalogSourceAnnotation = "olm.operatorframework.io/migrated-from-catalogsource"
+	clusterCatalogServingTimeout        = 10 * time.Minute
 )
 
 // CatalogMigratorOptions configures the catalog migration.
@@ -346,7 +347,7 @@ func (cm *CatalogMigrator) annotateIfNotPresent(ctx context.Context, cc *ocv1.Cl
 
 // waitForServing polls until the ClusterCatalog has Serving=True.
 func (cm *CatalogMigrator) waitForServing(ctx context.Context, ccName string) error {
-	return wait.PollUntilContextTimeout(ctx, 5*time.Second, 3*time.Minute, true, func(ctx context.Context) (bool, error) {
+	return wait.PollUntilContextTimeout(ctx, 5*time.Second, clusterCatalogServingTimeout, true, func(ctx context.Context) (bool, error) {
 		var cc ocv1.ClusterCatalog
 		if err := cm.Client.Get(ctx, client.ObjectKey{Name: ccName}, &cc); err != nil {
 			return false, err
