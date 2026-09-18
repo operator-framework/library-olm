@@ -303,6 +303,8 @@ func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.
 	}
 
 	success(fmt.Sprintf("Package: %s  Version: %s  Channel: %s", info.PackageName, info.Version, valueOrDefault(info.Channel, "(default)")))
+	fmt.Printf("\n  Resources that would be created:\n")
+	detail("ClusterObjectSet:", fmt.Sprintf("%s-1 (wait for Succeeded=True before creating the ClusterExtension)", opts.ClusterExtensionName))
 	fmt.Printf("\n  Resources that would be placed into ClusterObjectSet %s-1:\n", opts.ClusterExtensionName)
 
 	kindCounts := make(map[string]int)
@@ -325,9 +327,39 @@ func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.
 	detail("Channel:", valueOrDefault(info.Channel, "(none set)"))
 	detail("CollisionProtection:", "IfNoController")
 
+	fmt.Printf("\n  OLMv0 resources that would be deleted or changed:\n")
+	for _, line := range dryRunCleanupPlan(opts, info) {
+		info2(line)
+	}
+
+	fmt.Printf("\n  Backup plan:\n")
+	info2("Store Subscription and OperatorGroup specifications in ClusterExtension annotations before deletion.")
+	if opts.BackupDirectory != "" {
+		info2(fmt.Sprintf("Write Subscription, OperatorGroup, CSV, and InstallPlan YAML to %s before deletion (not written during dry run).", opts.BackupDirectory))
+	}
+
 	fmt.Println()
 	info2("No cluster resources were modified (dry run).")
 	return nil
+}
+
+// dryRunCleanupPlan describes all OLMv0 cleanup actions performed by a normal
+// conversion. It intentionally calls no API: dry-run must remain non-mutating.
+func dryRunCleanupPlan(opts migration.Options, info *migration.MigrationInfo) []string {
+	lines := []string{
+		fmt.Sprintf("Delete Subscription %s/%s with orphan propagation (operator workloads remain).", opts.SubscriptionNamespace, opts.SubscriptionName),
+		fmt.Sprintf("Delete ClusterServiceVersion %s/%s with orphan propagation (operator workloads remain).", opts.SubscriptionNamespace, info.BundleName),
+		fmt.Sprintf("Delete Operator CR %s.%s.", info.PackageName, opts.SubscriptionNamespace),
+		fmt.Sprintf("Delete OperatorCondition %s/%s if present.", opts.SubscriptionNamespace, info.BundleName),
+		fmt.Sprintf("Delete copied ClusterServiceVersions derived from %s if present, with orphan propagation.", info.BundleName),
+		"Retain InstallPlan resources; conversion does not delete them.",
+	}
+	if opts.DeleteOperatorGroup {
+		lines = append(lines, "Delete OperatorGroup(s) only when no Subscriptions remain; strip OLM ownership labels from their aggregation ClusterRoles first.")
+	} else {
+		lines = append(lines, "Retain OperatorGroup(s); --delete-operatorgroup was not specified.")
+	}
+	return lines
 }
 
 func info2(msg string) {
