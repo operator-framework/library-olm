@@ -10,6 +10,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -399,6 +400,9 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 		return m.cleanupCreatedSecrets(cleanupCtx, resources.secrets)
 	}
 	failWithSecretCleanup := func(err error) error {
+		if resources.ownershipUnknown {
+			return err
+		}
 		if cleanupErr := cleanupSecrets(); cleanupErr != nil {
 			return errors.Join(err, fmt.Errorf("clean up COS ref Secrets: %w", cleanupErr))
 		}
@@ -413,6 +417,9 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 		}
 		secret.Annotations[migrationInvocationAnnotation] = invocationMarker
 		if err := m.Client.Create(ctx, secret); err != nil {
+			if apierrors.IsAlreadyExists(err) {
+				return resources, fmt.Errorf("failed to create COS ref Secret %s: %w", secret.Name, err)
+			}
 			if m.resolveCreatedObject(context.WithoutCancel(ctx), secret, invocationMarker) {
 				resources.secrets = append(resources.secrets, *secret)
 			} else {
@@ -473,12 +480,15 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 	// can overwrite its ownership or fail on immutable phases, making recovery
 	// and Secret cleanup unsafe.
 	if err := m.Client.Create(ctx, cosObj); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return resources, failWithSecretCleanup(fmt.Errorf("failed to create ClusterObjectSet: %w", err))
+		}
 		if m.resolveCreatedObject(context.WithoutCancel(ctx), cosObj, invocationMarker) {
 			resources.cos = cosObj
 			return resources, fmt.Errorf("failed to create ClusterObjectSet: %w", err)
 		}
 		resources.ownershipUnknown = true
-		return resources, failWithSecretCleanup(fmt.Errorf("failed to create ClusterObjectSet: %w", err))
+		return resources, fmt.Errorf("failed to create ClusterObjectSet: %w", err)
 	}
 	resources.cos = cosObj
 
@@ -491,6 +501,9 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 func (m *Migrator) cleanupCreatedClusterObjectSet(ctx context.Context, resources *createdMigrationResources) error {
 	if resources == nil {
 		return nil
+	}
+	if resources.ownershipUnknown {
+		return fmt.Errorf("ClusterObjectSet creation outcome is unknown; refusing automatic cleanup")
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
@@ -638,6 +651,9 @@ func (m *Migrator) createClusterExtension(ctx context.Context, opts Options, inf
 	}
 
 	if err := m.Client.Create(ctx, ce); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return nil, false, fmt.Errorf("failed to create ClusterExtension: %w", err)
+		}
 		if m.resolveCreatedObject(context.WithoutCancel(ctx), ce, invocationMarker) {
 			return ce, false, fmt.Errorf("failed to create ClusterExtension: %w", err)
 		}

@@ -16,6 +16,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -33,14 +34,26 @@ import (
 
 type failingMigrationClient struct {
 	client.Client
-	failCOSCreate bool
-	blockCOS      bool
+	failCOSCreate    bool
+	unknownCOSCreate bool
+	failCECreate     bool
+	blockCOS         bool
 }
 
 func (c failingMigrationClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
 	if c.failCOSCreate {
 		if _, ok := obj.(*ocv1.ClusterObjectSet); ok {
-			return errors.New("simulated ClusterObjectSet collision")
+			return apierrors.NewAlreadyExists(ocv1.GroupVersion.WithResource("clusterobjectsets").GroupResource(), obj.GetName())
+		}
+	}
+	if c.unknownCOSCreate {
+		if _, ok := obj.(*ocv1.ClusterObjectSet); ok {
+			return errors.New("simulated ClusterObjectSet create transport failure")
+		}
+	}
+	if c.failCECreate {
+		if _, ok := obj.(*ocv1.ClusterExtension); ok {
+			return apierrors.NewAlreadyExists(ocv1.GroupVersion.WithResource("clusterextensions").GroupResource(), obj.GetName())
 		}
 	}
 	return c.Client.Create(ctx, obj, opts...)
@@ -561,7 +574,7 @@ func TestCreateClusterObjectSetCleansTemporarySecretsOnCollision(t *testing.T) {
 	err := m.CreateClusterObjectSet(ctx, Options{SubscriptionName: "sub", SubscriptionNamespace: "ns"}, &MigrationInfo{
 		PackageName: "widgets", BundleName: "widgets.v1", Version: "1.0.0", CollectedObjects: []unstructured.Unstructured{object},
 	})
-	if err == nil || !strings.Contains(err.Error(), "simulated ClusterObjectSet collision") {
+	if err == nil || !apierrors.IsAlreadyExists(err) {
 		t.Fatalf("CreateClusterObjectSet() error = %v, want collision", err)
 	}
 	var secrets corev1.SecretList
@@ -573,6 +586,41 @@ func TestCreateClusterObjectSetCleansTemporarySecretsOnCollision(t *testing.T) {
 	}
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: "sub-1"}, &ocv1.ClusterObjectSet{}); err == nil {
 		t.Fatal("COS collision created a ClusterObjectSet")
+	}
+}
+
+func TestCreateClusterObjectSetPreservesSecretsAfterUnknownCreateOutcome(t *testing.T) {
+	ctx := context.Background()
+	m := migrationTestClient(t)
+	m.Client = failingMigrationClient{Client: m.Client, unknownCOSCreate: true}
+	object := unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "operator-config", "namespace": "ns"},
+	}}
+	err := m.CreateClusterObjectSet(ctx, Options{SubscriptionName: "sub", SubscriptionNamespace: "ns"}, &MigrationInfo{
+		PackageName: "widgets", BundleName: "widgets.v1", Version: "1.0.0", CollectedObjects: []unstructured.Unstructured{object},
+	})
+	if err == nil || !strings.Contains(err.Error(), "refusing automatic cleanup") {
+		t.Fatalf("CreateClusterObjectSet() error = %v, want unknown ownership cleanup refusal", err)
+	}
+	var secrets corev1.SecretList
+	if err := m.Client.List(ctx, &secrets, client.InNamespace("olmv1-system")); err != nil {
+		t.Fatal(err)
+	}
+	if len(secrets.Items) == 0 {
+		t.Fatal("unknown COS creation outcome removed Secret references")
+	}
+}
+
+func TestCreateClusterExtensionAlreadyExistsIsKnownOutcome(t *testing.T) {
+	ctx := context.Background()
+	m := migrationTestClient(t)
+	m.Client = failingMigrationClient{Client: m.Client, failCECreate: true}
+	ce, ownershipUnknown, err := m.createClusterExtension(ctx, Options{SubscriptionName: "sub", SubscriptionNamespace: "ns", ClusterExtensionName: "sub"}, &MigrationInfo{PackageName: "widgets"})
+	if err == nil || !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("createClusterExtension() error = %v, want already exists", err)
+	}
+	if ce != nil || ownershipUnknown {
+		t.Fatalf("createClusterExtension() = ce=%#v, ownershipUnknown=%t, want known non-created outcome", ce, ownershipUnknown)
 	}
 }
 

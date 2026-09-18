@@ -143,6 +143,12 @@ func TestFixtureNegativeGuards(t *testing.T) {
 
 	// A non-steady Subscription is unsafe to migrate. Both check and convert
 	// must reject it before they remove OLMv0 resources or create OLMv1 ones.
+	t.Cleanup(func() {
+		if out, err := output("kubectl", "patch", "subscription/"+subscription, "-n", namespace,
+			"--subresource=status", "--type=merge", "--patch", `{"status":{"state":"AtLatestKnown"}}`); err != nil {
+			t.Errorf("restore Subscription state: %v\n%s", err, out)
+		}
+	})
 	run(t, "kubectl", "patch", "subscription/"+subscription, "-n", namespace,
 		"--subresource=status", "--type=merge", "--patch", `{"status":{"state":"UpgradeAvailable"}}`)
 	expectCheckFailure(t, "Subscription state", binary(t, "migrate-operators-v0-to-v1"), "check", subscription, "-n", namespace, "--kubeconfig", os.Getenv("KUBECONFIG"))
@@ -160,6 +166,13 @@ func TestFixtureNegativeGuards(t *testing.T) {
 	if err != nil || strings.TrimSpace(packageName) == "" {
 		t.Fatalf("get source package: %v (%s)", err, packageName)
 	}
+	t.Cleanup(func() {
+		patch := fmt.Sprintf(`{"spec":{"name":%q}}`, strings.TrimSpace(packageName))
+		if out, err := output("kubectl", "patch", "subscription/"+subscription, "-n", namespace,
+			"--type=merge", "--patch", patch); err != nil {
+			t.Errorf("restore Subscription package: %v\n%s", err, out)
+		}
+	})
 	run(t, "kubectl", "patch", "subscription/"+subscription, "-n", namespace,
 		"--type=merge", "--patch", `{"spec":{"name":"migration-fixture-package-that-does-not-exist"}}`)
 	expectCheckFailure(t, "No ClusterCatalog found", binary(t, "migrate-operators-v0-to-v1"), "check", subscription, "-n", namespace, "--kubeconfig", os.Getenv("KUBECONFIG"))
