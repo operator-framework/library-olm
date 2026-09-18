@@ -3,13 +3,18 @@ package migration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -25,6 +30,18 @@ var annotationPrefixesToStrip = []string{
 	"olm.operatorframework.io/installed-alongside",
 	"deployment.kubernetes.io/",
 }
+
+// createdMigrationResources records only objects created by this invocation.
+// Recovery must never infer ownership from predictable names or labels: another
+// migration may have created objects with the same values after this one started.
+type createdMigrationResources struct {
+	cos              *ocv1.ClusterObjectSet
+	secrets          []corev1.Secret
+	ce               *ocv1.ClusterExtension
+	ownershipUnknown bool
+}
+
+const migrationInvocationAnnotation = "olm.operatorframework.io/migration-invocation"
 
 // Migrate performs the full migration of an OLMv0-managed operator to OLMv1.
 // Steps:
@@ -43,6 +60,9 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	_, csv, ip, err := m.GetCSVAndInstallPlan(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("failed to profile operator: %w", err)
+	}
+	if err := m.ensureClusterExtensionAbsent(ctx, opts.ClusterExtensionName); err != nil {
+		return err
 	}
 
 	info, err := m.GetBundleInfo(ctx, opts, csv, ip)
@@ -77,7 +97,6 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("failed to backup resources: %w", err)
 	}
-
 	// Populate CE backup annotations (R2.5) — must happen before PrepareForMigration deletes the Sub.
 	if backup.Subscription != nil {
 		if j, err := json.Marshal(backup.Subscription.Spec); err == nil {
@@ -117,15 +136,24 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	m.progress("Note: TLS certificate management will transfer from OLMv0 to cert-manager/service-ca; " +
 		"expect pod restarts while new cert secrets are provisioned")
 
-	if err := m.CreateClusterObjectSet(ctx, opts, info); err != nil {
-		if recoverErr := m.RecoverBeforeCE(ctx, opts, backup); recoverErr != nil {
+	resources, err := m.createClusterObjectSet(ctx, opts, info)
+	if err != nil {
+		if recoverErr := m.recoverCreatedMigrationResources(ctx, opts, backup, resources); recoverErr != nil {
 			return fmt.Errorf("COS creation failed: %w; recovery also failed: %v", err, recoverErr)
 		}
 		return fmt.Errorf("COS creation failed (recovered): %w", err)
 	}
 
-	if err := m.CreateClusterExtension(ctx, opts, info); err != nil {
-		return fmt.Errorf("failed to create ClusterExtension: %w", err)
+	ce, ownershipUnknown, err := m.createClusterExtension(ctx, opts, info)
+	if ce != nil {
+		resources.ce = ce
+	}
+	resources.ownershipUnknown = resources.ownershipUnknown || ownershipUnknown
+	if err != nil {
+		if recoverErr := m.recoverCreatedMigrationResources(ctx, opts, backup, resources); recoverErr != nil {
+			return fmt.Errorf("ClusterExtension creation failed: %w; recovery also failed: %v", err, recoverErr)
+		}
+		return fmt.Errorf("ClusterExtension creation failed (recovered): %w", err)
 	}
 
 	m.CleanupOLMv0Resources(ctx, opts, info.PackageName, csv.Name)
@@ -242,19 +270,80 @@ func (m *Migrator) RecoverFromBackup(ctx context.Context, opts Options, backup *
 	})
 }
 
-// RecoverBeforeCE implements recovery when COS creation fails.
-// Deletes the failed COS with orphan cascade, then restores the Subscription.
+// RecoverBeforeCE restores the Subscription after a failure before a migration
+// resource was created. It deliberately does not delete a predictably named COS
+// or Secret because this invocation cannot establish ownership of such objects.
 func (m *Migrator) RecoverBeforeCE(ctx context.Context, opts Options, backup *Backup) error {
-	cosName := fmt.Sprintf("%s-1", opts.ClusterExtensionName)
-	cos := &ocv1.ClusterObjectSet{}
-	cos.Name = cosName
-	if err := m.Client.Delete(ctx, cos, client.PropagationPolicy(metav1.DeletePropagationOrphan)); err != nil {
-		if client.IgnoreNotFound(err) != nil {
-			return fmt.Errorf("failed to delete COS during recovery: %w", err)
+	return m.RecoverFromBackup(ctx, opts, backup)
+}
+
+// recoverCreatedMigrationResources removes objects created by this invocation
+// in reverse dependency order, then restores the OLMv0 Subscription. A failure
+// to delete a ClusterExtension or COS leaves the remaining resources intact and
+// prevents restoration, avoiding concurrent OLMv0 and OLMv1 ownership.
+func (m *Migrator) recoverCreatedMigrationResources(ctx context.Context, opts Options, backup *Backup, resources *createdMigrationResources) error {
+	recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), subWaitTimeout+30*time.Second)
+	defer cancel()
+	if resources == nil {
+		return m.RecoverBeforeCE(recoveryCtx, opts, backup)
+	}
+	if resources.ownershipUnknown {
+		return fmt.Errorf("migration resource creation outcome is unknown; refusing automatic recovery")
+	}
+	if resources.ce != nil {
+		if err := m.deleteTrackedResource(recoveryCtx, resources.ce); err != nil && client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("delete created ClusterExtension during recovery: %w", err)
 		}
 	}
+	if resources.cos != nil {
+		if err := m.deleteTrackedResource(recoveryCtx, resources.cos, client.PropagationPolicy(metav1.DeletePropagationOrphan)); err != nil && client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("delete created ClusterObjectSet during recovery: %w", err)
+		}
+	}
+	cleanupErr := m.cleanupCreatedSecrets(recoveryCtx, resources.secrets)
+	recoverErr := m.RecoverFromBackup(recoveryCtx, opts, backup)
+	return errors.Join(cleanupErr, recoverErr)
+}
 
-	return m.RecoverFromBackup(ctx, opts, backup)
+func (m *Migrator) cleanupCreatedSecrets(ctx context.Context, secrets []corev1.Secret) error {
+	var errs []error
+	for i := range secrets {
+		if err := m.deleteTrackedResource(ctx, &secrets[i]); err != nil && client.IgnoreNotFound(err) != nil {
+			errs = append(errs, fmt.Errorf("delete COS ref Secret %s: %w", secrets[i].Name, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (m *Migrator) deleteTrackedResource(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	uid := obj.GetUID()
+	opts = append(opts, client.Preconditions{UID: &uid})
+	return m.Client.Delete(ctx, obj, opts...)
+}
+
+func createdByInvocation(obj client.Object, marker string) bool {
+	return obj.GetAnnotations()[migrationInvocationAnnotation] == marker
+}
+
+func (m *Migrator) resolveCreatedObject(ctx context.Context, obj client.Object, marker string) bool {
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+		return false
+	}
+	return createdByInvocation(obj, marker)
+}
+
+// ensureClusterExtensionAbsent rejects a target name before OLMv0 resources
+// are removed. CreateClusterExtension remains the race-safe final check.
+func (m *Migrator) ensureClusterExtensionAbsent(ctx context.Context, name string) error {
+	var ce ocv1.ClusterExtension
+	err := m.Client.Get(ctx, client.ObjectKey{Name: name}, &ce)
+	if err == nil {
+		return fmt.Errorf("ClusterExtension %s already exists", name)
+	}
+	if client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("check ClusterExtension %s: %w", name, err)
+	}
+	return nil
 }
 
 // CreateClusterObjectSet builds and creates a COS from the collected resources.
@@ -266,6 +355,18 @@ func (m *Migrator) RecoverBeforeCE(ctx context.Context, opts Options, backup *Ba
 // OLMv1 revision object(s) are appropriate. Track upstream progress at OPRUN-4716 and the
 // boxcutter ClusterObjectDeployment design.
 func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, info *MigrationInfo) error {
+	resources, err := m.createClusterObjectSet(ctx, opts, info)
+	if err != nil {
+		if cleanupErr := m.cleanupCreatedClusterObjectSet(ctx, resources); cleanupErr != nil {
+			return errors.Join(err, cleanupErr)
+		}
+	}
+	return err
+}
+
+func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, info *MigrationInfo) (*createdMigrationResources, error) {
+	resources := &createdMigrationResources{}
+	invocationMarker := string(uuid.NewUUID())
 	cosName := fmt.Sprintf("%s-1", opts.ClusterExtensionName)
 	systemNS := opts.systemNamespace()
 
@@ -291,15 +392,42 @@ func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, inf
 	}
 	packed, err := packer.pack(phases)
 	if err != nil {
-		return fmt.Errorf("failed to pack COS objects into Secrets: %w", err)
+		return resources, fmt.Errorf("failed to pack COS objects into Secrets: %w", err)
+	}
+	cleanupSecrets := func() error {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		return m.cleanupCreatedSecrets(cleanupCtx, resources.secrets)
+	}
+	failWithSecretCleanup := func(err error) error {
+		if resources.ownershipUnknown {
+			return err
+		}
+		if cleanupErr := cleanupSecrets(); cleanupErr != nil {
+			return errors.Join(err, fmt.Errorf("clean up COS ref Secrets: %w", cleanupErr))
+		}
+		return err
 	}
 
 	// Create ref Secrets before the COS so the COS controller can find them immediately.
 	for i := range packed.Secrets {
 		secret := &packed.Secrets[i]
-		if err := m.Client.Create(ctx, secret); err != nil {
-			return fmt.Errorf("failed to create COS ref Secret %s: %w", secret.Name, err)
+		if secret.Annotations == nil {
+			secret.Annotations = map[string]string{}
 		}
+		secret.Annotations[migrationInvocationAnnotation] = invocationMarker
+		if err := m.Client.Create(ctx, secret); err != nil {
+			if apierrors.IsAlreadyExists(err) {
+				return resources, fmt.Errorf("failed to create COS ref Secret %s: %w", secret.Name, err)
+			}
+			if m.resolveCreatedObject(context.WithoutCancel(ctx), secret, invocationMarker) {
+				resources.secrets = append(resources.secrets, *secret)
+			} else {
+				resources.ownershipUnknown = true
+			}
+			return resources, failWithSecretCleanup(fmt.Errorf("failed to create COS ref Secret %s: %w", secret.Name, err))
+		}
+		resources.secrets = append(resources.secrets, *secret)
 	}
 
 	// Replace inline objects with Secret refs in the phases.
@@ -325,6 +453,7 @@ func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, inf
 		LabelPackageName:                   info.PackageName,
 		LabelBundleName:                    info.BundleName,
 		LabelBundleVersion:                 info.Version,
+		migrationInvocationAnnotation:      invocationMarker,
 	}
 	if info.BundleImage != "" {
 		cosAnnotations[LabelBundleReference] = info.BundleImage
@@ -338,20 +467,52 @@ func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, inf
 		}).
 		WithAnnotations(cosAnnotations)
 
-	cosObj := &ocv1.ClusterObjectSet{}
-	cosObj.Name = cosName
-
 	cosData, err := json.Marshal(cos)
 	if err != nil {
-		return fmt.Errorf("failed to marshal COS: %w", err)
+		return resources, failWithSecretCleanup(fmt.Errorf("failed to marshal COS: %w", err))
+	}
+	cosObj := &ocv1.ClusterObjectSet{}
+	if err := json.Unmarshal(cosData, cosObj); err != nil {
+		return resources, failWithSecretCleanup(fmt.Errorf("failed to decode COS: %w", err))
 	}
 
-	if err := m.Client.Patch(ctx, cosObj, client.RawPatch(types.ApplyPatchType, cosData),
-		client.ForceOwnership, client.FieldOwner(fieldManager)); err != nil {
-		return fmt.Errorf("failed to apply ClusterObjectSet: %w", err)
+	// A migration owns only a newly created revision. Applying an existing COS
+	// can overwrite its ownership or fail on immutable phases, making recovery
+	// and Secret cleanup unsafe.
+	if err := m.Client.Create(ctx, cosObj); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return resources, failWithSecretCleanup(fmt.Errorf("failed to create ClusterObjectSet: %w", err))
+		}
+		if m.resolveCreatedObject(context.WithoutCancel(ctx), cosObj, invocationMarker) {
+			resources.cos = cosObj
+			return resources, fmt.Errorf("failed to create ClusterObjectSet: %w", err)
+		}
+		resources.ownershipUnknown = true
+		return resources, fmt.Errorf("failed to create ClusterObjectSet: %w", err)
 	}
+	resources.cos = cosObj
 
-	return m.WaitForCOSSucceeded(ctx, cosName)
+	if err := m.WaitForCOSSucceeded(ctx, cosName); err != nil {
+		return resources, err
+	}
+	return resources, nil
+}
+
+func (m *Migrator) cleanupCreatedClusterObjectSet(ctx context.Context, resources *createdMigrationResources) error {
+	if resources == nil {
+		return nil
+	}
+	if resources.ownershipUnknown {
+		return fmt.Errorf("ClusterObjectSet creation outcome is unknown; refusing automatic cleanup")
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if resources.cos != nil {
+		if err := m.deleteTrackedResource(cleanupCtx, resources.cos, client.PropagationPolicy(metav1.DeletePropagationOrphan)); err != nil && client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("delete created ClusterObjectSet: %w", err)
+		}
+	}
+	return m.cleanupCreatedSecrets(cleanupCtx, resources.secrets)
 }
 
 // WaitForCOSSucceeded waits for the COS to reach Succeeded=True.
@@ -381,9 +542,21 @@ func (m *Migrator) WaitForCOSSucceeded(ctx context.Context, cosName string) erro
 // spec.serviceAccount is NOT set — deprecated and ignored in OLMv1 (R2.5/R7).
 // Migration annotations (R2.5) are added for AlreadyMigrated/Conflict detection and rollback.
 func (m *Migrator) CreateClusterExtension(ctx context.Context, opts Options, info *MigrationInfo) error {
+	ce, _, err := m.createClusterExtension(ctx, opts, info)
+	if err != nil && ce != nil {
+		if deleteErr := m.deleteTrackedResource(context.WithoutCancel(ctx), ce); deleteErr != nil && client.IgnoreNotFound(deleteErr) != nil {
+			return errors.Join(err, fmt.Errorf("delete created ClusterExtension: %w", deleteErr))
+		}
+	}
+	return err
+}
+
+func (m *Migrator) createClusterExtension(ctx context.Context, opts Options, info *MigrationInfo) (*ocv1.ClusterExtension, bool, error) {
+	invocationMarker := string(uuid.NewUUID())
 	// Build annotations (R2.5).
 	annotations := map[string]string{
 		MigratedFromSubscriptionAnnotation: fmt.Sprintf("%s/%s", opts.SubscriptionNamespace, opts.SubscriptionName),
+		migrationInvocationAnnotation:      invocationMarker,
 	}
 	if info.SubscriptionBackupJSON != "" {
 		annotations[MigrationSubscriptionBackupAnnotation] = info.SubscriptionBackupJSON
@@ -465,11 +638,11 @@ func (m *Migrator) CreateClusterExtension(ctx context.Context, opts Options, inf
 	if info.SubscriptionConfig != nil {
 		cfgJSON, err := json.Marshal(info.SubscriptionConfig)
 		if err != nil {
-			return fmt.Errorf("failed to marshal SubscriptionConfig for CE: %w", err)
+			return nil, false, fmt.Errorf("failed to marshal SubscriptionConfig for CE: %w", err)
 		}
 		inlineJSON, err := json.Marshal(map[string]json.RawMessage{"deploymentConfig": cfgJSON})
 		if err != nil {
-			return fmt.Errorf("failed to marshal CE inline config: %w", err)
+			return nil, false, fmt.Errorf("failed to marshal CE inline config: %w", err)
 		}
 		ce.Spec.Config = &ocv1.ClusterExtensionConfig{
 			ConfigType: ocv1.ClusterExtensionConfigTypeInline,
@@ -478,10 +651,16 @@ func (m *Migrator) CreateClusterExtension(ctx context.Context, opts Options, inf
 	}
 
 	if err := m.Client.Create(ctx, ce); err != nil {
-		return fmt.Errorf("failed to create ClusterExtension: %w", err)
+		if apierrors.IsAlreadyExists(err) {
+			return nil, false, fmt.Errorf("failed to create ClusterExtension: %w", err)
+		}
+		if m.resolveCreatedObject(context.WithoutCancel(ctx), ce, invocationMarker) {
+			return ce, false, fmt.Errorf("failed to create ClusterExtension: %w", err)
+		}
+		return nil, true, fmt.Errorf("failed to create ClusterExtension: %w", err)
 	}
 
-	return m.WaitForClusterExtensionInstalled(ctx, opts.ClusterExtensionName)
+	return ce, false, m.WaitForClusterExtensionInstalled(ctx, opts.ClusterExtensionName)
 }
 
 // WaitForClusterExtensionInstalled waits for the CE to reach Installed=True.
