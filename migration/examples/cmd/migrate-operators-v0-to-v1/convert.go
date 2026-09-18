@@ -308,6 +308,15 @@ func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.
 	ctx := cmd.Context()
 	fmt.Printf("\n%s%s🔍 Dry run: %s/%s%s\n", colorBold, colorCyan, opts.SubscriptionNamespace, opts.SubscriptionName, colorReset)
 
+	// Dry-run must reject a target that cannot create a COS, just as a real
+	// conversion would. This is read-only and runs before gathering the preview.
+	var err error
+	opts, err = m.PrepareClusterObjectSet(ctx, opts)
+	if err != nil {
+		return fmt.Errorf("ClusterObjectSet prerequisite check failed: %w", err)
+	}
+	success(fmt.Sprintf("ClusterObjectSet API established; using operator-controller namespace %s", opts.SystemNamespace))
+
 	info, err := m.GatherMigrationInfo(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("failed to gather migration info: %w", err)
