@@ -144,3 +144,35 @@ func TestWaitForServing(t *testing.T) {
 		t.Fatal("waitForServing(missing) unexpectedly succeeded")
 	}
 }
+
+func TestMigrateCatalogsSkipsUnsupportedSourcesWithoutMutation(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := operatorsv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := ocv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	sources := []runtime.Object{
+		&operatorsv1alpha1.CatalogSource{ObjectMeta: metav1.ObjectMeta{Name: "configmap", Namespace: "ns"}, Spec: operatorsv1alpha1.CatalogSourceSpec{SourceType: operatorsv1alpha1.SourceTypeConfigmap}},
+		&operatorsv1alpha1.CatalogSource{ObjectMeta: metav1.ObjectMeta{Name: "address-only", Namespace: "ns"}, Spec: operatorsv1alpha1.CatalogSourceSpec{SourceType: operatorsv1alpha1.SourceTypeGrpc, Address: "catalog.ns.svc:50051"}},
+		&operatorsv1alpha1.CatalogSource{ObjectMeta: metav1.ObjectMeta{Name: "unknown", Namespace: "ns"}, Spec: operatorsv1alpha1.CatalogSourceSpec{SourceType: operatorsv1alpha1.SourceType("unsupported")}},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(sources...).Build()
+	results, err := NewCatalogMigrator(c).MigrateCatalogs(context.Background(), CatalogMigratorOptions{})
+	if err != nil || len(results) != len(sources) {
+		t.Fatalf("MigrateCatalogs() = %#v, %v", results, err)
+	}
+	for _, result := range results {
+		if result.Status != "skipped" || result.ClusterCatalogName != "" || result.Reason == "" {
+			t.Fatalf("unsupported source result = %#v", result)
+		}
+	}
+	var catalogs ocv1.ClusterCatalogList
+	if err := c.List(context.Background(), &catalogs); err != nil {
+		t.Fatal(err)
+	}
+	if len(catalogs.Items) != 0 {
+		t.Fatalf("unsupported CatalogSources created ClusterCatalogs: %#v", catalogs.Items)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
@@ -343,6 +344,29 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 		}
 	}
 
+	// Validate the data needed to restore OLMv0 ownership before deleting any
+	// OLMv1 resources. A corrupt or incomplete backup must leave the existing
+	// ClusterExtension and ClusterObjectSet recoverable.
+	subBackupJSON, ok := ce.Annotations[MigrationSubscriptionBackupAnnotation]
+	if !ok || subBackupJSON == "" {
+		return fmt.Errorf("ClusterExtension %s has no migration-subscription-backup annotation; cannot restore Subscription", ceName)
+	}
+	subRef := ce.Annotations[MigratedFromSubscriptionAnnotation]
+	if subRef == "" {
+		return fmt.Errorf("ClusterExtension %s has no migrated-from-subscription annotation", ceName)
+	}
+	var subSpec operatorsv1alpha1.SubscriptionSpec
+	if err := unmarshalJSON(subBackupJSON, &subSpec); err != nil {
+		return fmt.Errorf("failed to unmarshal subscription backup: %w", err)
+	}
+	if subSpec.Package == "" || subSpec.CatalogSource == "" || subSpec.CatalogSourceNamespace == "" {
+		return fmt.Errorf("subscription backup is missing required package, source, or sourceNamespace")
+	}
+	ns, name, err := splitSubRef(subRef)
+	if err != nil {
+		return fmt.Errorf("invalid migrated-from-subscription annotation %q: %w", subRef, err)
+	}
+
 	// Delete CE (orphan cascade — preserves operator workloads)
 	if err := m.Client.Delete(ctx, &ce, client.PropagationPolicy("Orphan")); err != nil {
 		if client.IgnoreNotFound(err) != nil {
@@ -361,28 +385,7 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 		}
 	}
 
-	// Restore Subscription from backup annotation
-	subBackupJSON, ok := ce.Annotations["olm.operatorframework.io/migration-subscription-backup"]
-	if !ok || subBackupJSON == "" {
-		return fmt.Errorf("ClusterExtension %s has no migration-subscription-backup annotation; cannot restore Subscription", ceName)
-	}
-
-	subRef := ce.Annotations[MigratedFromSubscriptionAnnotation]
-	if subRef == "" {
-		return fmt.Errorf("ClusterExtension %s has no migrated-from-subscription annotation", ceName)
-	}
-
-	// Restore Subscription
-	var subSpec operatorsv1alpha1.SubscriptionSpec
-	if err := unmarshalJSON(subBackupJSON, &subSpec); err != nil {
-		return fmt.Errorf("failed to unmarshal subscription backup: %w", err)
-	}
-
-	ns, name, err := splitSubRef(subRef)
-	if err != nil {
-		return fmt.Errorf("invalid migrated-from-subscription annotation %q: %w", subRef, err)
-	}
-
+	// Restore Subscription from the validated backup.
 	restoredSub := &operatorsv1alpha1.Subscription{}
 	restoredSub.Name = name
 	restoredSub.Namespace = ns
@@ -443,8 +446,11 @@ func (m *Migrator) CleanupConflict(ctx context.Context, ceName string) error {
 
 // splitSubRef splits a "namespace/name" subscription reference into its components.
 func splitSubRef(ref string) (string, string, error) {
+	if strings.Count(ref, "/") != 1 {
+		return "", "", fmt.Errorf("invalid namespace/name ref %q", ref)
+	}
 	parts := strings.SplitN(ref, "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	if len(validation.IsDNS1123Label(parts[0])) != 0 || len(validation.IsDNS1123Subdomain(parts[1])) != 0 {
 		return "", "", fmt.Errorf("invalid namespace/name ref %q", ref)
 	}
 	return parts[0], parts[1], nil
