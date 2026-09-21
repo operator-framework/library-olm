@@ -676,12 +676,12 @@ func TestRollbackAndCleanupRejectInvalidInputWithoutMutation(t *testing.T) {
 
 func TestCreateClusterObjectSetCleansTemporarySecretsOnCollision(t *testing.T) {
 	ctx := context.Background()
-	m := migrationTestClient(t)
+	m := migrationTestClient(t, establishedClusterObjectSetCRD())
 	m.Client = failingMigrationClient{Client: m.Client, failCOSCreate: true}
 	object := unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "operator-config", "namespace": "ns"},
 	}}
-	err := m.CreateClusterObjectSet(ctx, Options{SubscriptionName: "sub", SubscriptionNamespace: "ns"}, &MigrationInfo{
+	err := m.CreateClusterObjectSet(ctx, Options{SubscriptionName: "sub", SubscriptionNamespace: "ns", SystemNamespace: "olmv1-system"}, &MigrationInfo{
 		PackageName: "widgets", BundleName: "widgets.v1", Version: "1.0.0", CollectedObjects: []unstructured.Unstructured{object},
 	})
 	if err == nil || !apierrors.IsAlreadyExists(err) {
@@ -701,12 +701,12 @@ func TestCreateClusterObjectSetCleansTemporarySecretsOnCollision(t *testing.T) {
 
 func TestCreateClusterObjectSetPreservesSecretsAfterUnknownCreateOutcome(t *testing.T) {
 	ctx := context.Background()
-	m := migrationTestClient(t)
+	m := migrationTestClient(t, establishedClusterObjectSetCRD())
 	m.Client = failingMigrationClient{Client: m.Client, unknownCOSCreate: true}
 	object := unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "operator-config", "namespace": "ns"},
 	}}
-	err := m.CreateClusterObjectSet(ctx, Options{SubscriptionName: "sub", SubscriptionNamespace: "ns"}, &MigrationInfo{
+	err := m.CreateClusterObjectSet(ctx, Options{SubscriptionName: "sub", SubscriptionNamespace: "ns", SystemNamespace: "olmv1-system"}, &MigrationInfo{
 		PackageName: "widgets", BundleName: "widgets.v1", Version: "1.0.0", CollectedObjects: []unstructured.Unstructured{object},
 	})
 	if err == nil || !strings.Contains(err.Error(), "refusing automatic cleanup") {
