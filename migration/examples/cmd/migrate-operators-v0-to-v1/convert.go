@@ -264,29 +264,18 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	}
 	success("OLMv0 management removed")
 
-	stepHeader(7, "Creating ClusterObjectSet")
-	info(fmt.Sprintf("Applying COS %s-1 with %d objects...", opts.ClusterExtensionName, len(bundleInfo.CollectedObjects)))
+	stepHeader(7, "Creating OLMv1 migration resources")
+	info(fmt.Sprintf("Applying COS %s-1 with %d objects and creating its ClusterExtension...", opts.ClusterExtensionName, len(bundleInfo.CollectedObjects)))
 	startProgress()
-	if err := m.CreateClusterObjectSet(ctx, opts, bundleInfo); err != nil {
+	if err := m.CreateMigrationResources(ctx, opts, bundleInfo, backup); err != nil {
 		clearProgress()
-		if recoverErr := m.RecoverBeforeCE(ctx, opts, backup); recoverErr != nil {
-			return fmt.Errorf("COS creation failed: %w; recovery also failed: %v", err, recoverErr)
-		}
-		return fmt.Errorf("COS creation failed (recovered): %w", err)
+		return err
 	}
 	clearProgress()
 	success(fmt.Sprintf("ClusterObjectSet %s-1 reached Succeeded=True", opts.ClusterExtensionName))
-
-	stepHeader(8, "Creating ClusterExtension")
-	startProgress()
-	if err := m.CreateClusterExtension(ctx, opts, bundleInfo); err != nil {
-		clearProgress()
-		return fmt.Errorf("failed to create ClusterExtension: %w", err)
-	}
-	clearProgress()
 	success(fmt.Sprintf("ClusterExtension %s is Installed", opts.ClusterExtensionName))
 
-	stepHeader(9, "Cleaning up OLMv0 resources")
+	stepHeader(8, "Cleaning up OLMv0 resources")
 	cleanupResult := m.CleanupOLMv0Resources(ctx, opts, bundleInfo.PackageName, csv.Name)
 	for _, action := range cleanupResult.Actions {
 		switch {

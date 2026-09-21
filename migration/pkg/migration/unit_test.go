@@ -40,6 +40,7 @@ type failingMigrationClient struct {
 	unknownCOSCreate bool
 	failCECreate     bool
 	blockCOS         bool
+	succeedCOS       bool
 }
 
 func (c failingMigrationClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
@@ -56,6 +57,11 @@ func (c failingMigrationClient) Create(ctx context.Context, obj client.Object, o
 	if c.failCECreate {
 		if _, ok := obj.(*ocv1.ClusterExtension); ok {
 			return apierrors.NewAlreadyExists(ocv1.GroupVersion.WithResource("clusterextensions").GroupResource(), obj.GetName())
+		}
+	}
+	if c.succeedCOS {
+		if cos, ok := obj.(*ocv1.ClusterObjectSet); ok {
+			cos.Status.Conditions = []metav1.Condition{{Type: ocv1.ClusterObjectSetTypeSucceeded, Status: metav1.ConditionTrue}}
 		}
 	}
 	return c.Client.Create(ctx, obj, opts...)
@@ -376,6 +382,14 @@ func TestPrepareClusterObjectSet(t *testing.T) {
 	}
 	if got.SystemNamespace != "chosen" {
 		t.Fatalf("SystemNamespace override = %q, want chosen", got.SystemNamespace)
+	}
+}
+
+func TestPrepareClusterObjectSetRejectsExistingClusterExtension(t *testing.T) {
+	m := migrationTestClient(t, &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "sub"}})
+	_, err := m.PrepareClusterObjectSet(context.Background(), Options{SubscriptionName: "sub", SubscriptionNamespace: "operators"})
+	if err == nil || !strings.Contains(err.Error(), "ClusterExtension sub already exists") {
+		t.Fatalf("PrepareClusterObjectSet() error = %v, want existing ClusterExtension error", err)
 	}
 }
 
@@ -734,15 +748,35 @@ func TestCreateClusterExtensionAlreadyExistsIsKnownOutcome(t *testing.T) {
 	}
 }
 
-func TestCreateClusterObjectSetCleansSecretsAfterReadinessFailure(t *testing.T) {
+func TestCreateMigrationResourcesCleansTrackedCOSAfterClusterExtensionFailure(t *testing.T) {
 	ctx := context.Background()
 	m := migrationTestClient(t)
+	baseClient := m.Client
+	m.Client = failingMigrationClient{Client: baseClient, succeedCOS: true, failCECreate: true}
+	object := unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "operator-config", "namespace": "ns"},
+	}}
+	err := m.CreateMigrationResources(ctx, Options{SubscriptionName: "sub", SubscriptionNamespace: "ns", ClusterExtensionName: "sub", SystemNamespace: "olmv1-system"}, &MigrationInfo{
+		PackageName: "widgets", BundleName: "widgets.v1", Version: "1.0.0", CollectedObjects: []unstructured.Unstructured{object},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "ClusterExtension creation failed") {
+		t.Fatalf("CreateMigrationResources() error = %v, want ClusterExtension creation failure", err)
+	}
+	m.Client = baseClient
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: "sub-1"}, &ocv1.ClusterObjectSet{}); err == nil {
+		t.Fatal("ClusterExtension failure left the ClusterObjectSet created by this invocation")
+	}
+}
+
+func TestCreateClusterObjectSetCleansSecretsAfterReadinessFailure(t *testing.T) {
+	ctx := context.Background()
+	m := migrationTestClient(t, establishedClusterObjectSetCRD())
 	baseClient := m.Client
 	m.Client = failingMigrationClient{Client: baseClient, blockCOS: true}
 	object := unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "operator-config", "namespace": "ns"},
 	}}
-	err := m.CreateClusterObjectSet(ctx, Options{SubscriptionName: "sub", SubscriptionNamespace: "ns"}, &MigrationInfo{
+	err := m.CreateClusterObjectSet(ctx, Options{SubscriptionName: "sub", SubscriptionNamespace: "ns", SystemNamespace: "olmv1-system"}, &MigrationInfo{
 		PackageName: "widgets", BundleName: "widgets.v1", Version: "1.0.0", CollectedObjects: []unstructured.Unstructured{object},
 	})
 	if err == nil {

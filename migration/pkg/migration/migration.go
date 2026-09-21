@@ -149,24 +149,8 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	m.progress("Note: TLS certificate management will transfer from OLMv0 to cert-manager/service-ca; " +
 		"expect pod restarts while new cert secrets are provisioned")
 
-	resources, err := m.createClusterObjectSet(ctx, opts, info)
-	if err != nil {
-		if recoverErr := m.recoverCreatedMigrationResources(ctx, opts, backup, resources); recoverErr != nil {
-			return fmt.Errorf("COS creation failed: %w; recovery also failed: %v", err, recoverErr)
-		}
-		return fmt.Errorf("COS creation failed (recovered): %w", err)
-	}
-
-	ce, ownershipUnknown, err := m.createClusterExtension(ctx, opts, info)
-	if ce != nil {
-		resources.ce = ce
-	}
-	resources.ownershipUnknown = resources.ownershipUnknown || ownershipUnknown
-	if err != nil {
-		if recoverErr := m.recoverCreatedMigrationResources(ctx, opts, backup, resources); recoverErr != nil {
-			return fmt.Errorf("ClusterExtension creation failed: %w; recovery also failed: %v", err, recoverErr)
-		}
-		return fmt.Errorf("ClusterExtension creation failed (recovered): %w", err)
+	if err := m.CreateMigrationResources(ctx, opts, info, backup); err != nil {
+		return err
 	}
 
 	m.CleanupOLMv0Resources(ctx, opts, info.PackageName, csv.Name)
@@ -179,6 +163,9 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 // must run before PrepareForMigration, which deletes OLMv0 management objects.
 func (m *Migrator) PrepareClusterObjectSet(ctx context.Context, opts Options) (Options, error) {
 	opts.ApplyDefaults()
+	if err := m.ensureClusterExtensionAbsent(ctx, opts.ClusterExtensionName); err != nil {
+		return opts, err
+	}
 	if err := m.ensureClusterObjectSetCRD(ctx); err != nil {
 		return opts, err
 	}
@@ -433,6 +420,32 @@ func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, inf
 		}
 	}
 	return err
+}
+
+// CreateMigrationResources creates the ClusterObjectSet and its ClusterExtension
+// as one recoverable operation. If either creation fails, it removes only the
+// objects created by this invocation before restoring the OLMv0 Subscription.
+func (m *Migrator) CreateMigrationResources(ctx context.Context, opts Options, info *MigrationInfo, backup *Backup) error {
+	resources, err := m.createClusterObjectSet(ctx, opts, info)
+	if err != nil {
+		if recoverErr := m.recoverCreatedMigrationResources(ctx, opts, backup, resources); recoverErr != nil {
+			return fmt.Errorf("COS creation failed: %w; recovery also failed: %v", err, recoverErr)
+		}
+		return fmt.Errorf("COS creation failed (recovered): %w", err)
+	}
+
+	ce, ownershipUnknown, err := m.createClusterExtension(ctx, opts, info)
+	if ce != nil {
+		resources.ce = ce
+	}
+	resources.ownershipUnknown = resources.ownershipUnknown || ownershipUnknown
+	if err != nil {
+		if recoverErr := m.recoverCreatedMigrationResources(ctx, opts, backup, resources); recoverErr != nil {
+			return fmt.Errorf("ClusterExtension creation failed: %w; recovery also failed: %v", err, recoverErr)
+		}
+		return fmt.Errorf("ClusterExtension creation failed (recovered): %w", err)
+	}
+	return nil
 }
 
 func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, info *MigrationInfo) (*createdMigrationResources, error) {
