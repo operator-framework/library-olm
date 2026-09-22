@@ -82,7 +82,7 @@ func TestMigrationInClusterJob(t *testing.T) {
 		_, _ = output("kubectl", "delete", "clusterrolebinding/"+binding, "--ignore-not-found")
 	})
 	run(t, "kubectl", "delete", "clusterrolebinding/"+binding, "--ignore-not-found")
-	run(t, "kubectl", "delete", "namespace/"+runnerNamespace, "--ignore-not-found", "--wait=true")
+	run(t, "kubectl", "delete", "namespace/"+runnerNamespace, "--ignore-not-found", "--wait=true", "--timeout=10m")
 	run(t, "kubectl", "create", "namespace", runnerNamespace)
 	run(t, "kubectl", "create", "serviceaccount", serviceAccount, "-n", runnerNamespace)
 	run(t, "kubectl", "create", "clusterrolebinding", binding, "--clusterrole=cluster-admin", "--serviceaccount="+runnerNamespace+":"+serviceAccount)
