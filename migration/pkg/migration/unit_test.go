@@ -294,8 +294,8 @@ func TestPhaseSortAndResourceKeys(t *testing.T) {
 	if len(phases) != 3 || *phases[0].Name != string(PhaseConfiguration) || *phases[1].Name != string(PhaseCRDs) || *phases[2].Name != string(PhaseDeploy) {
 		t.Fatalf("unexpected phases %#v", phases)
 	}
-	if *phases[2].CollisionProtection != ocv1.CollisionProtectionIfNoController || phases[2].Objects[0].Object.GetNamespace() != "a" {
-		t.Fatalf("deployment phase not sorted/adoptable: %#v", phases[2])
+	if *phases[2].CollisionProtection != ocv1.CollisionProtectionNone || phases[2].Objects[0].Object.GetNamespace() != "a" {
+		t.Fatalf("deployment phase not sorted with migration collision protection: %#v", phases[2])
 	}
 	a := unstructured.Unstructured{}
 	a.SetGroupVersionKind(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"})

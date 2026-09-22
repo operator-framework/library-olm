@@ -184,7 +184,7 @@ func PhaseSort(unsortedObjs []ocv1ac.ClusterObjectSetObjectApplyConfiguration) [
 			objPtrs[i] = &objs[i]
 		}
 
-		cp := ocv1.CollisionProtectionIfNoController
+		cp := ocv1.CollisionProtectionNone
 		phasesSorted = append(phasesSorted, ocv1ac.ClusterObjectSetPhase().
 			WithName(string(phaseName)).
 			WithCollisionProtection(cp).

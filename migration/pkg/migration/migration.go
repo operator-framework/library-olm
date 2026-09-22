@@ -458,7 +458,7 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 		stripped := stripResource(obj)
 		cosObjects = append(cosObjects, *ocv1ac.ClusterObjectSetObject().
 			WithObject(stripped).
-			WithCollisionProtection(ocv1.CollisionProtectionIfNoController))
+			WithCollisionProtection(ocv1.CollisionProtectionNone))
 	}
 
 	phases := PhaseSort(cosObjects)
@@ -527,7 +527,7 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 
 	cosSpec := ocv1ac.ClusterObjectSetSpec().
 		WithRevision(1).
-		WithCollisionProtection(ocv1.CollisionProtectionIfNoController).
+		WithCollisionProtection(ocv1.CollisionProtectionNone).
 		WithLifecycleState(ocv1.ClusterObjectSetLifecycleStateActive).
 		WithPhases(phases...)
 
