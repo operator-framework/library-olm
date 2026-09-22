@@ -13,6 +13,19 @@ import (
 // It checks Subscription state, CSV health, uniqueness, and dependency status.
 func (m *Migrator) CheckReadiness(ctx context.Context, opts Options) (*PreMigrationReport, error) {
 	report := &PreMigrationReport{}
+	if err := m.ensureClusterObjectSetCRD(ctx); err != nil {
+		report.Checks = append(report.Checks, CheckResult{
+			Name:    "ClusterObjectSet API",
+			Passed:  false,
+			Message: err.Error(),
+		})
+	} else {
+		report.Checks = append(report.Checks, CheckResult{
+			Name:    "ClusterObjectSet API",
+			Passed:  true,
+			Message: "ClusterObjectSet CRD is established",
+		})
+	}
 
 	var sub operatorsv1alpha1.Subscription
 	if err := m.Client.Get(ctx, types.NamespacedName{

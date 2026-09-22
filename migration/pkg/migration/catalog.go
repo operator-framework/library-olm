@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
@@ -115,22 +116,26 @@ func catalogEndpoint(ctx context.Context, catalog *ocv1.ClusterCatalog, config *
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("create Kubernetes client for catalog port-forward: %w", err)
 	}
-	catalogConfig, err := catalogdTLSConfig(ctx, clientset, config)
+	namespace, serverName, err := catalogdServiceLocation(catalog)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	podName, err := catalogdLeader(ctx, clientset, namespace)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	catalogConfig, err := catalogdTLSConfig(ctx, clientset, config, namespace, podName)
 	if err != nil {
 		return "", nil, nil, err
 	}
 	if inCluster {
 		return catalog.Status.URLs.Base + "/api/v1/all", func() {}, catalogConfig, nil
 	}
-	podName, err := catalogdLeader(ctx, clientset)
-	if err != nil {
-		return "", nil, nil, err
-	}
 	u, err := url.Parse(config.Host)
 	if err != nil {
 		return "", nil, nil, err
 	}
-	u.Path = path.Join(u.Path, "api", "v1", "namespaces", "olmv1-system", "pods", podName, "portforward")
+	u.Path = path.Join(u.Path, "api", "v1", "namespaces", namespace, "pods", podName, "portforward")
 	rt, upgrader, err := spdy.RoundTripperFor(config)
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("create catalogd port-forward: %w", err)
@@ -161,13 +166,46 @@ func catalogEndpoint(ctx context.Context, catalog *ocv1.ClusterCatalog, config *
 		close(stop)
 		return "", nil, nil, err
 	}
-	catalogConfig.ServerName = "localhost"
+	// The local port-forward address is not the catalogd certificate's identity.
+	// Verify the service DNS name advertised by ClusterCatalog status instead.
+	catalogConfig.ServerName = serverName
 	return fmt.Sprintf("https://127.0.0.1:%d/catalogs/%s/api/v1/all", ports[0].Local, catalog.Name), func() { close(stop) }, catalogConfig, nil
 }
 
-// catalogdTLSConfig replaces the Kubernetes API CA with catalogd's serving CA.
-func catalogdTLSConfig(ctx context.Context, clientset kubernetes.Interface, config *rest.Config) (*rest.Config, error) {
-	secret, err := clientset.CoreV1().Secrets("cert-manager").Get(ctx, "olmv1-ca", metav1.GetOptions{})
+// catalogdServiceLocation derives catalogd's service namespace and TLS server
+// name from the in-cluster endpoint published by operator-controller. This
+// avoids imposing either the upstream cert-manager layout or OpenShift's
+// service-ca layout on migration users.
+func catalogdServiceLocation(catalog *ocv1.ClusterCatalog) (string, string, error) {
+	if catalog.Status.URLs == nil || catalog.Status.URLs.Base == "" {
+		return "", "", fmt.Errorf("catalog %s has no base URL in status", catalog.Name)
+	}
+	u, err := url.Parse(catalog.Status.URLs.Base)
+	if err != nil {
+		return "", "", fmt.Errorf("parse catalog %s base URL: %w", catalog.Name, err)
+	}
+	host := u.Hostname()
+	parts := strings.Split(host, ".")
+	if len(parts) < 3 || parts[0] == "" || parts[1] == "" || parts[2] != "svc" {
+		return "", "", fmt.Errorf("catalog %s base URL %q does not use a Kubernetes service hostname", catalog.Name, catalog.Status.URLs.Base)
+	}
+	return parts[1], host, nil
+}
+
+// catalogdTLSConfig replaces the Kubernetes API CA with the CA carried by the
+// serving certificate mounted in the current catalogd leader Pod. The secret
+// name is deliberately discovered from the Pod: upstream installs use a
+// cert-manager secret while OpenShift uses a service-ca-generated secret.
+func catalogdTLSConfig(ctx context.Context, clientset kubernetes.Interface, config *rest.Config, namespace, podName string) (*rest.Config, error) {
+	pod, err := clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("get catalogd pod: %w", err)
+	}
+	secretName := catalogdServingCertificateSecret(pod)
+	if secretName == "" {
+		return nil, fmt.Errorf("catalogd pod %s/%s has no serving certificate Secret", namespace, podName)
+	}
+	secret, err := clientset.CoreV1().Secrets(namespace).Get(ctx, secretName, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("get catalogd CA: %w", err)
 	}
@@ -190,17 +228,26 @@ func catalogdTLSConfig(ctx context.Context, clientset kubernetes.Interface, conf
 	return catalogConfig, nil
 }
 
+func catalogdServingCertificateSecret(pod *corev1.Pod) string {
+	for _, volume := range pod.Spec.Volumes {
+		if volume.Name == "catalogserver-certs" && volume.Secret != nil {
+			return volume.Secret.SecretName
+		}
+	}
+	return ""
+}
+
 // catalogdLeader waits for catalogd's leader Lease to reference a current pod.
-func catalogdLeader(ctx context.Context, clientset kubernetes.Interface) (string, error) {
+func catalogdLeader(ctx context.Context, clientset kubernetes.Interface, namespace string) (string, error) {
 	var lastErr error
 	var leader string
 	err := wait.PollUntilContextTimeout(ctx, time.Second, 30*time.Second, true, func(context.Context) (bool, error) {
-		pods, err := clientset.CoreV1().Pods("olmv1-system").List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/name=catalogd"})
+		pods, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/name=catalogd"})
 		if err != nil {
 			lastErr = fmt.Errorf("list catalogd pods: %w", err)
 			return false, nil
 		}
-		lease, err := clientset.CoordinationV1().Leases("olmv1-system").Get(ctx, "catalogd-operator-lock", metav1.GetOptions{})
+		lease, err := clientset.CoordinationV1().Leases(namespace).Get(ctx, "catalogd-operator-lock", metav1.GetOptions{})
 		if err != nil {
 			lastErr = fmt.Errorf("get catalogd leader lease: %w", err)
 			return false, nil
