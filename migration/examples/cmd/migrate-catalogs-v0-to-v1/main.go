@@ -87,10 +87,10 @@ func newClient() (client.Client, error) {
 
 	restConfig, err := kubeConfig.ClientConfig()
 	if err != nil {
-		// A migration Job has no kubeconfig file. Prefer an explicitly supplied
-		// kubeconfig, but otherwise use the projected ServiceAccount credentials
-		// when the CLI runs in a Pod.
-		if kubeconfig == "" {
+		// A migration Job has no kubeconfig file. Use projected ServiceAccount
+		// credentials only when neither --kubeconfig nor KUBECONFIG was supplied;
+		// an invalid explicit configuration must retain its original error.
+		if shouldUseInClusterConfig(kubeconfig, kubeconfigEnvIsSet()) {
 			restConfig, err = rest.InClusterConfig()
 		}
 		if err != nil {
@@ -103,6 +103,15 @@ func newClient() (client.Client, error) {
 		return nil, fmt.Errorf("failed to create client: %w", err)
 	}
 	return c, nil
+}
+
+func kubeconfigEnvIsSet() bool {
+	_, set := os.LookupEnv("KUBECONFIG")
+	return set
+}
+
+func shouldUseInClusterConfig(kubeconfig string, kubeconfigEnvSet bool) bool {
+	return kubeconfig == "" && !kubeconfigEnvSet
 }
 
 func runMigrateCatalogs(cmd *cobra.Command, _ []string) error {
