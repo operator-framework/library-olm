@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -86,7 +87,15 @@ func newClient() (client.Client, error) {
 
 	restConfig, err := kubeConfig.ClientConfig()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get REST config: %w", err)
+		// A migration Job has no kubeconfig file. Use projected ServiceAccount
+		// credentials only when neither --kubeconfig nor KUBECONFIG was supplied;
+		// an invalid explicit configuration must retain its original error.
+		if shouldUseInClusterConfig(kubeconfig, kubeconfigEnvIsSet()) {
+			restConfig, err = rest.InClusterConfig()
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to get REST config: %w", err)
+		}
 	}
 
 	c, err := client.New(restConfig, client.Options{Scheme: scheme})
@@ -94,6 +103,15 @@ func newClient() (client.Client, error) {
 		return nil, fmt.Errorf("failed to create client: %w", err)
 	}
 	return c, nil
+}
+
+func kubeconfigEnvIsSet() bool {
+	_, set := os.LookupEnv("KUBECONFIG")
+	return set
+}
+
+func shouldUseInClusterConfig(kubeconfig string, kubeconfigEnvSet bool) bool {
+	return kubeconfig == "" && !kubeconfigEnvSet
 }
 
 func runMigrateCatalogs(cmd *cobra.Command, _ []string) error {

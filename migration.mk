@@ -29,6 +29,7 @@ E2E_REAL_OPERATOR_MANIFEST ?= $(ROOT_DIR)/test/e2e/migration/real-operator.yaml
 E2E_REAL_OPERATOR_NAMESPACE ?= migration-e2e-real
 E2E_REAL_OPERATOR_SUBSCRIPTION ?= ecr-secret-operator
 E2E_OPERATOR ?= all
+E2E_MIGRATION_IMAGE ?= library-olm-migration-e2e:dev
 
 ##@ Migration
 
@@ -44,6 +45,14 @@ migration/build-operators: ## Build migrate-operators-v0-to-v1 into bin/
 migration/build-catalogs: ## Build migrate-catalogs-v0-to-v1 into bin/
 	@mkdir -p $(BIN_DIR)
 	go build -cover -covermode=count -o $(MIGRATE_CATALOGS_BIN) ./migration/examples/cmd/migrate-catalogs-v0-to-v1
+
+.PHONY: migration/build-e2e-image
+migration/build-e2e-image: $(KIND) ## Build and load an uninstrumented migration CLI image into the fixture kind cluster
+	@mkdir -p $(BIN_DIR)
+	CGO_ENABLED=0 go build -o $(MIGRATE_OPERATORS_BIN) ./migration/examples/cmd/migrate-operators-v0-to-v1
+	CGO_ENABLED=0 go build -o $(MIGRATE_CATALOGS_BIN) ./migration/examples/cmd/migrate-catalogs-v0-to-v1
+	docker build --tag "$(E2E_MIGRATION_IMAGE)" --file test/e2e/migration/migration-tool.Dockerfile .
+	$(KIND) load docker-image --name "$(E2E_FIXTURE_CLUSTER_NAME)" "$(E2E_MIGRATION_IMAGE)"
 
 .PHONY: migration/test-unit
 migration/test-unit: ## Run migration unit tests and write a coverage profile
@@ -88,6 +97,12 @@ migration/test-e2e-live-matrix: migration/build ## Install and migrate all three
 .PHONY: migration/test-e2e-fixture-matrix
 migration/test-e2e-fixture-matrix: migration/build ## Replay and migrate all three OLMv0 install snapshots
 	@set -euo pipefail; while IFS=$$'\t' read -r package channel namespace; do [[ -z "$$package" || "$$package" == \#* ]] && continue; coverage_dir="$(E2E_COVERAGE_DIR)/fixture/$$package"; artifact_dir="$(E2E_ARTIFACTS)/fixture/$$package"; mkdir -p "$$coverage_dir"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$$artifact_dir" E2E_SUITE=fixture E2E_NAMESPACE="$$namespace" E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -timeout "$(E2E_TIMEOUT)"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; done < test/e2e/migration/operators.tsv
+
+.PHONY: migration/test-e2e-in-cluster-job
+migration/test-e2e-in-cluster-job: migration/e2e-fixture-setup migration/build-e2e-image ## Run migration CLIs in a fixture-cluster Job (no coverage collection)
+	E2E_OPERATOR=ecr-secret-operator E2E_KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" $(MAKE) migration/e2e-delete-v1
+	E2E_OPERATOR=ecr-secret-operator $(MAKE) migration/e2e-install-fixture-v0
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" E2E_SUITE=in-cluster-job E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION=ecr-secret-operator E2E_MIGRATION_IMAGE="$(E2E_MIGRATION_IMAGE)" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/in-cluster-job" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestMigrationInClusterJob$$' -timeout "$(E2E_TIMEOUT)"
 
 .PHONY: migration/e2e-delete-v1
 migration/e2e-delete-v1: ## Delete one migration E2E operator as OLMv1, or all
