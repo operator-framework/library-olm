@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,8 +13,23 @@ import (
 	"strings"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/discovery"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	operatorsv1 "github.com/operator-framework/api/pkg/operators/v1"
+	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
+	ocv1 "github.com/operator-framework/operator-controller/api/v1"
+
+	"github.com/operator-framework/library-olm/migration/pkg/migration"
 )
 
 // TestEnvironment is deliberately small: it makes both E2E make targets verify
@@ -247,6 +263,151 @@ func TestFixtureNegativeGuards(t *testing.T) {
 	run(t, "kubectl", "patch", "subscription/"+subscription, "-n", namespace,
 		"--type=merge", "--patch", fmt.Sprintf(`{"spec":{"name":%q}}`, strings.TrimSpace(packageName)))
 	run(t, "kubectl", "get", "subscription/"+subscription, "-n", namespace)
+}
+
+// TestPrecreatedClusterObjectSetSupersession verifies the released controller's
+// migration handoff: the migration-created COS uses collision protection None,
+// then the catalog creates a controller-owned revision with Prevent protection.
+// The catalog revision is newer and therefore supersedes the migration revision.
+// It is intentionally a dedicated invocation because it mutates its fixture
+// installation without exercising the CLI's complete cleanup path.
+func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
+	if os.Getenv("E2E_COS_SUPERSESSION_TEST") != "true" {
+		t.Skip("set E2E_COS_SUPERSESSION_TEST=true to run the ClusterObjectSet supersession proof")
+	}
+	namespace, subscription := os.Getenv("E2E_NAMESPACE"), os.Getenv("E2E_SUBSCRIPTION")
+	if namespace == "" || subscription == "" {
+		t.Fatal("E2E_NAMESPACE and E2E_SUBSCRIPTION are required")
+	}
+	t.Cleanup(func() { collectArtifacts(t, namespace) })
+
+	ctx := context.Background()
+	m, kubeClient, restConfig := newMigrator(t)
+	opts := migration.Options{SubscriptionName: subscription, SubscriptionNamespace: namespace}
+	opts.ApplyDefaults()
+
+	// C7 must be satisfied before CE construction. The fixture target installs
+	// a CatalogSource and the catalog CLI creates its ClusterCatalog.
+	run(t, binary(t, "migrate-catalogs-v0-to-v1"), "--kubeconfig", os.Getenv("KUBECONFIG"))
+	_, csv, installPlan, err := m.GetCSVAndInstallPlan(ctx, opts)
+	if err != nil {
+		t.Fatalf("profile OLMv0 installation: %v", err)
+	}
+	info, err := m.GetBundleInfo(ctx, opts, csv, installPlan)
+	if err != nil {
+		t.Fatalf("get bundle information: %v", err)
+	}
+	catalogName, err := m.ResolveClusterCatalog(ctx, info, restConfig)
+	if err != nil {
+		t.Fatalf("resolve ClusterCatalog: %v", err)
+	}
+	if catalogName != "operatorhubio-catalog" {
+		t.Fatalf("resolved ClusterCatalog = %q, want fixture catalog %q", catalogName, "operatorhubio-catalog")
+	}
+	info.ResolvedCatalogName = catalogName
+	info.CollectedObjects, err = m.CollectResources(ctx, opts, csv, installPlan, info.PackageName)
+	if err != nil {
+		t.Fatalf("collect migration resources: %v", err)
+	}
+
+	if err := m.PrepareForMigration(ctx, opts, csv); err != nil {
+		t.Fatalf("remove OLMv0 management before creating COS: %v", err)
+	}
+	if err := m.CreateClusterObjectSet(ctx, opts, info); err != nil {
+		t.Fatalf("create pre-existing COS: %v", err)
+	}
+
+	var before ocv1.ClusterObjectSetList
+	if err := kubeClient.List(ctx, &before, client.MatchingLabels{
+		migration.LabelOwnerKind: ocv1.ClusterExtensionKind,
+		migration.LabelOwnerName: subscription,
+	}); err != nil {
+		t.Fatalf("list pre-existing COS: %v", err)
+	}
+	if len(before.Items) != 1 {
+		t.Fatalf("pre-existing COS count = %d, want 1", len(before.Items))
+	}
+	precreatedUID := before.Items[0].UID
+	if precreatedUID == "" {
+		t.Fatal("pre-existing COS has no UID")
+	}
+	if !cosSucceeded(before.Items[0]) {
+		t.Fatal("pre-existing COS did not reach Succeeded=True before CE creation")
+	}
+	if before.Items[0].Spec.CollisionProtection != ocv1.CollisionProtectionNone {
+		t.Fatalf("migration COS collisionProtection = %q, want %q", before.Items[0].Spec.CollisionProtection, ocv1.CollisionProtectionNone)
+	}
+
+	if err := m.CreateClusterExtension(ctx, opts, info); err != nil {
+		t.Fatalf("create CE for pre-existing COS: %v", err)
+	}
+	run(t, "kubectl", "wait", "--for=jsonpath={.status.conditions[?(@.type=='Installed')].status}=True", "clusterextension/"+subscription, "--timeout=10m")
+	var after ocv1.ClusterObjectSetList
+	if err := kubeClient.List(ctx, &after, client.MatchingLabels{
+		migration.LabelOwnerKind: ocv1.ClusterExtensionKind,
+		migration.LabelOwnerName: subscription,
+	}); err != nil {
+		t.Fatalf("list COS after CE creation: %v", err)
+	}
+	if len(after.Items) != 2 {
+		t.Fatalf("COS count after CE creation = %d, want 2 (migration and catalog revisions)", len(after.Items))
+	}
+	var migrationCOS, catalogCOS *ocv1.ClusterObjectSet
+	for i := range after.Items {
+		cos := &after.Items[i]
+		switch cos.Spec.Revision {
+		case 1:
+			migrationCOS = cos
+		case 2:
+			catalogCOS = cos
+		}
+	}
+	if migrationCOS == nil || catalogCOS == nil {
+		t.Fatalf("COS revisions = %#v, want migration revision 1 and catalog revision 2", after.Items)
+	}
+	if migrationCOS.UID != precreatedUID {
+		t.Fatalf("migration COS UID = %s, want pre-created UID %s", migrationCOS.UID, precreatedUID)
+	}
+	if migrationCOS.Spec.CollisionProtection != ocv1.CollisionProtectionNone {
+		t.Fatalf("migration COS collisionProtection = %q, want %q", migrationCOS.Spec.CollisionProtection, ocv1.CollisionProtectionNone)
+	}
+	if catalogCOS.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
+		t.Fatalf("catalog COS collisionProtection = %q, want %q", catalogCOS.Spec.CollisionProtection, ocv1.CollisionProtectionPrevent)
+	}
+	if len(catalogCOS.OwnerReferences) != 1 || catalogCOS.OwnerReferences[0].Name != subscription {
+		t.Fatalf("catalog COS ownerReferences = %#v, want ClusterExtension %q", catalogCOS.OwnerReferences, subscription)
+	}
+	run(t, "kubectl", "wait", "--for=jsonpath={.status.conditions[?(@.type=='Succeeded')].status}=True", "clusterobjectset/"+catalogCOS.Name, "--timeout=10m")
+}
+
+func cosSucceeded(cos ocv1.ClusterObjectSet) bool {
+	for _, condition := range cos.Status.Conditions {
+		if condition.Type == ocv1.ClusterObjectSetTypeSucceeded && condition.Status == metav1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+func newMigrator(t *testing.T) (*migration.Migrator, client.Client, *rest.Config) {
+	t.Helper()
+	config, err := clientcmd.BuildConfigFromFlags("", os.Getenv("KUBECONFIG"))
+	if err != nil {
+		t.Fatalf("load kubeconfig: %v", err)
+	}
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(ocv1.AddToScheme(scheme))
+	utilruntime.Must(appsv1.AddToScheme(scheme))
+	utilruntime.Must(corev1.AddToScheme(scheme))
+	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
+	utilruntime.Must(operatorsv1.AddToScheme(scheme))
+	utilruntime.Must(operatorsv1alpha1.AddToScheme(scheme))
+	kubeClient, err := client.New(config, client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatalf("create Kubernetes client: %v", err)
+	}
+	return migration.NewMigrator(kubeClient, config), kubeClient, config
 }
 
 // TestMigration applies the suite's complete fixture, exercises the two migration

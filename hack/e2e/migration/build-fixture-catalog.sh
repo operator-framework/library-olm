@@ -25,6 +25,10 @@ trap cleanup EXIT
 
 # Fixture setup is idempotent. Remove a prior CatalogSource migration result
 # before replaying the committed CatalogSource with the locally built image.
+# The experimental operator-controller installer creates an `operatorhubio`
+# ClusterCatalog that resolves packages from Quay. Fixture tests must never
+# select mutable external catalog content instead of their committed snapshots.
+kubectl delete clustercatalog/operatorhubio --ignore-not-found --wait=true
 kubectl delete clustercatalog/operatorhubio-catalog --ignore-not-found --wait=true
 kubectl apply -f "$root_dir/test/e2e/migration/fixtures/registry.yaml"
 kubectl -n "$registry_namespace" wait --for=condition=Ready certificate/fixture-registry-tls --timeout=3m

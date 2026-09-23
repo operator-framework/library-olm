@@ -58,6 +58,32 @@ jobs:
           path: artifacts/e2e
           if-no-files-found: ignore
 
+  cos-supersession:
+    name: migration COS supersession E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Set up fixture cluster
+        run: make migration/e2e-fixture-setup
+      - name: Verify migrated ClusterObjectSet supersession
+        run: make migration/test-e2e-cos-supersession
+      - name: Tear down fixture cluster
+        if: always()
+        run: E2E_CLUSTER_NAME=library-olm-fixture-e2e make migration/e2e-teardown
+      - name: Upload COS supersession diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: migration-cos-supersession-e2e-artifacts
+          path: artifacts/e2e
+          if-no-files-found: ignore
+
   in-cluster-job:
     name: migration in-cluster Job E2E
     runs-on: ubuntu-latest
