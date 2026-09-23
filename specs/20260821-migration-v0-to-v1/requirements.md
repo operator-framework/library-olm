@@ -38,12 +38,23 @@ is never ambiguous.
 Flags: `-n/--namespace`, `--all`, `--dry-run` (on `convert`), `--backup <directory>` (on
 `convert`; writes OLM-related objects to disk before deletions — see R2.6),
 `--delete-operatorgroup` (on `convert`; deletes the OperatorGroup when no Subscriptions
-remain — both conditions required), `--continue-on-error` (on `convert --all`),
+remain — both conditions required), `--install-namespace` (on single-operator `convert`;
+defaults to the Subscription namespace), `--acknowledge-namespace-delete` (on a
+cross-namespace conversion; permits deletion of the source namespace only after a successful
+migration), `--continue-on-error` (on `convert --all`),
 `--acknowledge-installed` (on `rollback`), and the eligibility-override flags (R3):
 `--acknowledge-watch-scope-change`, `--acknowledge-operator-condition`,
 `--acknowledge-olmv0-api-access`, `--acknowledge-scoped-serviceaccount`,
 `--acknowledge-not-steady-state`. `check`/`convert` target a `Subscription` (name + `-n`
 namespace); `rollback`/`cleanup` target the resulting `ClusterExtension`.
+
+**Requirement gap — OLMv1 system-managed namespace:** add an explicit
+`--system-managed-install-namespace` conversion mode once a released, supported
+operator-controller API permits omitting `ClusterExtension.spec.namespace`. That mode must omit
+the field and let OLMv1 resolve the namespace from bundle metadata. It must be capability-gated
+and rejected with an actionable error on controllers that require `spec.namespace`; omitting
+`--install-namespace` must continue to mean the Subscription namespace and must never silently
+select the system-managed mode.
 
 For `migrate-catalogs-v0-to-v1`: `--delete-catalogsource` deletes the source `CatalogSource`
 after creating the `ClusterCatalog`, but only when no `Subscription` references it — both
@@ -218,7 +229,7 @@ Subscription + OperatorGroup inputs above.
 |---|---|---|
 | `metadata.name` | Subscription name (default; `--ce-name` override) | |
 | `metadata.annotations` | migration metadata | See R2.5 (`migrated-from-subscription`, `migration-subscription-backup`, `acknowledged-*`). |
-| `spec.namespace` | Subscription namespace (default) or `--install-namespace` | Required, immutable today. **Phase 6 / [PR #2825](https://github.com/operator-framework/operator-controller/pull/2825):** may become optional/omitted → OLMv1 resolves it from bundle metadata. |
+| `spec.namespace` | Subscription namespace (default) or `--install-namespace` | Required and immutable in released operator-controller versions. For a different `--install-namespace`, migration creates or updates the target namespace, copies PSA and SCC-sync labels, and rewrites collected namespaced resources to the target. An existing target must explicitly declare an equal or less restrictive PSA `enforce` level when the source declares one; migration fails closed rather than infer an unknown cluster PSA default. **Gap:** a future, explicit `--system-managed-install-namespace` mode must omit this field only when the installed controller supports its experimental optional-namespace API; it must use bundle metadata rather than fall back on an unsupported controller. |
 | `spec.serviceAccount` | **do not set** | Deprecated and **ignored** in current OLMv1 (operator-controller uses its own cluster-admin SA). The RFC/prototype `<ce>-installer` SA concept is obsolete — do not create or set it. |
 | `spec.source.sourceType` | constant `Catalog` | Only implemented source type. |
 | `spec.source.catalog.packageName` | Subscription `spec.name` | Required, immutable. |
@@ -278,7 +289,12 @@ Both conditions must be met.
 - **OperatorCondition detection** → OLMv0 stamps OperatorCondition RBAC onto **every** operator's service account, so RBAC is **not** a usage signal. Usage is detected **only** via `OperatorCondition.status.conditions` (C4); C5 explicitly excludes `operatorconditions` from the OLMv0-API RBAC check.
 - **Certificate handling** → OLMv0 manages TLS certs directly; OLMv1 delegates to cert-manager (upstream) / service-ca (downstream). Expect pod restarts across the pivot; document as known behavior.
 - **Large bundles** → SecretPacker (R2.4) avoids Kubernetes object-size limits.
-- **Namespace change** → copy PSA labels (`pod-security.kubernetes.io/*`) and the OpenShift SCC sync label (`security.openshift.io/scc.podSecurityLabelSync`) from the old namespace to the new one. Delete the old namespace **only** with `--acknowledge-namespace-delete` (it may contain non-operator resources).
+- **Namespace change** → copy PSA labels (`pod-security.kubernetes.io/*`) and the OpenShift SCC sync label (`security.openshift.io/scc.podSecurityLabelSync`) from the old namespace to the new one. An existing target with an unknown PSA default is rejected when the source declares `enforce`; do not weaken an unobservable cluster default. Before creating the target CE, scale collected source Deployments to zero so controllers cannot overlap with independent leader-election Leases. Restore their original replica counts only when target COS creation failed before it could reconcile; if the target may be active, retain the source at zero, do not automatically restore OLMv0 management, and report the state for recovery. After the target CE is installed, delete the collected source-namespace operator resources. Delete the old namespace **only** with `--acknowledge-namespace-delete` (it may contain non-operator resources).
+- **OLMv1 system-managed namespace (gap)** → support only through an explicit opt-in and a
+  controller capability check. The CE must omit `spec.namespace`, and OLMv1 must choose the
+  bundle-metadata namespace; migration must not infer one or change the default source-namespace
+  behavior. Define its resource and source-cleanup semantics with its implementation and validate
+  them against a controller release that supports the optional field.
 - **Disconnected / mirrored** → catalogs must be migrated first; the operator tool never auto-creates catalogs.
 
 ---
