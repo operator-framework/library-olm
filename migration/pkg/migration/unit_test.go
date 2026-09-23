@@ -351,6 +351,238 @@ func TestOptionsReportsAndAnnotationFiltering(t *testing.T) {
 	}
 }
 
+func TestPrepareInstallNamespace(t *testing.T) {
+	ctx := context.Background()
+	source := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: "source",
+		Labels: map[string]string{
+			"pod-security.kubernetes.io/enforce":             "restricted",
+			"pod-security.kubernetes.io/enforce-version":     "latest",
+			"security.openshift.io/scc.podSecurityLabelSync": "true",
+			"unrelated.example.test/do-not-copy":             "value",
+		},
+	}}
+	m := migrationTestClient(t, source)
+	opts := Options{SubscriptionNamespace: "source", InstallNamespace: "target"}
+	if err := m.PrepareInstallNamespace(ctx, opts); err != nil {
+		t.Fatalf("PrepareInstallNamespace() error = %v", err)
+	}
+	var target corev1.Namespace
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: "target"}, &target); err != nil {
+		t.Fatalf("get target namespace: %v", err)
+	}
+	if got := target.Labels["pod-security.kubernetes.io/enforce"]; got != "restricted" {
+		t.Fatalf("PSA label = %q, want restricted", got)
+	}
+	if got := target.Labels[sccPodSecurityLabelSync]; got != "true" {
+		t.Fatalf("SCC label = %q, want true", got)
+	}
+	if _, found := target.Labels["unrelated.example.test/do-not-copy"]; found {
+		t.Fatalf("target labels unexpectedly include unrelated source label: %#v", target.Labels)
+	}
+
+	target.Labels["pod-security.kubernetes.io/enforce"] = "baseline"
+	if err := m.Client.Update(ctx, &target); err != nil {
+		t.Fatalf("update target namespace: %v", err)
+	}
+	if err := m.PrepareInstallNamespace(ctx, opts); err != nil {
+		t.Fatalf("PrepareInstallNamespace(existing) error = %v", err)
+	}
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: "target"}, &target); err != nil {
+		t.Fatalf("get updated target namespace: %v", err)
+	}
+	if got := target.Labels["pod-security.kubernetes.io/enforce"]; got != "restricted" {
+		t.Fatalf("updated PSA label = %q, want restricted", got)
+	}
+}
+
+func TestInstallNamespaceRewriteAndSourceResourceDeletion(t *testing.T) {
+	ctx := context.Background()
+	objects := []unstructured.Unstructured{
+		{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "in-source", "namespace": "source"}}},
+		{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "elsewhere", "namespace": "elsewhere"}}},
+		{Object: map[string]interface{}{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole", "metadata": map[string]interface{}{"name": "cluster-role"}}},
+	}
+	RewriteInstallNamespace(objects, "source", "target")
+	if got := objects[0].GetNamespace(); got != "target" {
+		t.Fatalf("source object namespace = %q, want target", got)
+	}
+	if got := objects[1].GetNamespace(); got != "elsewhere" {
+		t.Fatalf("other object namespace = %q, want unchanged", got)
+	}
+	if got := objects[2].GetNamespace(); got != "" {
+		t.Fatalf("cluster-scoped object namespace = %q, want empty", got)
+	}
+	service := unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1", "kind": "Service",
+		"metadata": map[string]interface{}{"name": "operator-metrics", "namespace": "source"},
+		"spec": map[string]interface{}{
+			"clusterIP":           "10.96.0.42",
+			"clusterIPs":          []interface{}{"10.96.0.42"},
+			"healthCheckNodePort": int64(30001),
+			"ports":               []interface{}{map[string]interface{}{"port": int64(8443), "nodePort": int64(30002)}},
+		},
+	}}
+	services := []unstructured.Unstructured{service}
+	RewriteInstallNamespace(services, "source", "target")
+	if _, found, _ := unstructured.NestedFieldNoCopy(services[0].Object, "spec", "clusterIP"); found {
+		t.Fatal("rewritten Service retained source clusterIP")
+	}
+	if _, found, _ := unstructured.NestedFieldNoCopy(services[0].Object, "spec", "clusterIPs"); found {
+		t.Fatal("rewritten Service retained source clusterIPs")
+	}
+	if _, found, _ := unstructured.NestedFieldNoCopy(services[0].Object, "spec", "healthCheckNodePort"); found {
+		t.Fatal("rewritten Service retained source healthCheckNodePort")
+	}
+	ports, found, err := unstructured.NestedSlice(services[0].Object, "spec", "ports")
+	if err != nil || !found {
+		t.Fatalf("rewritten Service ports = %#v, found=%t, err=%v", ports, found, err)
+	}
+	if _, found := ports[0].(map[string]interface{})["nodePort"]; found {
+		t.Fatal("rewritten Service retained source nodePort")
+	}
+	references := []unstructured.Unstructured{
+		{Object: map[string]interface{}{"apiVersion": "v1", "kind": "Service", "metadata": map[string]interface{}{"name": "operator-webhook", "namespace": "source"}}},
+		{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ServiceAccount", "metadata": map[string]interface{}{"name": "operator", "namespace": "source"}}},
+		{Object: map[string]interface{}{
+			"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRoleBinding",
+			"subjects": []interface{}{
+				map[string]interface{}{"kind": "ServiceAccount", "name": "operator", "namespace": "source"},
+				map[string]interface{}{"kind": "User", "name": "unchanged", "namespace": "source"},
+			},
+		}},
+		{Object: map[string]interface{}{
+			"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingWebhookConfiguration",
+			"webhooks": []interface{}{map[string]interface{}{"clientConfig": map[string]interface{}{"service": map[string]interface{}{"name": "operator-webhook", "namespace": "source"}}}},
+		}},
+		{Object: map[string]interface{}{
+			"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition",
+			"spec": map[string]interface{}{"conversion": map[string]interface{}{"webhook": map[string]interface{}{"clientConfig": map[string]interface{}{"service": map[string]interface{}{"name": "operator-webhook", "namespace": "source"}}}}},
+		}},
+	}
+	RewriteInstallNamespace(references, "source", "target")
+	subjects, _, _ := unstructured.NestedSlice(references[2].Object, "subjects")
+	if got := subjects[0].(map[string]interface{})["namespace"]; got != "target" {
+		t.Fatalf("ServiceAccount subject namespace = %q, want target", got)
+	}
+	if got := subjects[1].(map[string]interface{})["namespace"]; got != "source" {
+		t.Fatalf("non-ServiceAccount subject namespace = %q, want source", got)
+	}
+	webhooks, _, _ := unstructured.NestedSlice(references[3].Object, "webhooks")
+	webhookService := webhooks[0].(map[string]interface{})["clientConfig"].(map[string]interface{})["service"].(map[string]interface{})
+	if got := webhookService["namespace"]; got != "target" {
+		t.Fatalf("webhook Service namespace = %q, want target", got)
+	}
+	conversionService, found, err := unstructured.NestedMap(references[4].Object, "spec", "conversion", "webhook", "clientConfig", "service")
+	if err != nil || !found {
+		t.Fatalf("CRD conversion Service = %#v, found=%t, err=%v", conversionService, found, err)
+	}
+	if got := conversionService["namespace"]; got != "target" {
+		t.Fatalf("CRD conversion Service namespace = %q, want target", got)
+	}
+
+	sourceConfigMap := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "operator-config", "namespace": "source", "uid": "source-config-uid"},
+	}}
+	otherConfigMap := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "unrelated", "namespace": "source"},
+	}}
+	resourceMigrator := migrationTestClient(t, sourceConfigMap, otherConfigMap)
+	if err := resourceMigrator.DeleteSourceNamespaceResources(ctx, []unstructured.Unstructured{*sourceConfigMap.DeepCopy()}, Options{SubscriptionNamespace: "source", InstallNamespace: "target"}); err != nil {
+		t.Fatalf("DeleteSourceNamespaceResources() error = %v", err)
+	}
+	gotSource := &unstructured.Unstructured{}
+	gotSource.SetAPIVersion("v1")
+	gotSource.SetKind("ConfigMap")
+	if err := resourceMigrator.Client.Get(ctx, client.ObjectKeyFromObject(sourceConfigMap), gotSource); !apierrors.IsNotFound(err) {
+		t.Fatalf("source operator ConfigMap error = %v, want not found", err)
+	}
+	gotOther := &unstructured.Unstructured{}
+	gotOther.SetAPIVersion("v1")
+	gotOther.SetKind("ConfigMap")
+	if err := resourceMigrator.Client.Get(ctx, client.ObjectKeyFromObject(otherConfigMap), gotOther); err != nil {
+		t.Fatalf("unrelated ConfigMap was deleted: %v", err)
+	}
+	if err := resourceMigrator.DeleteSourceNamespaceResources(ctx, []unstructured.Unstructured{{Object: map[string]interface{}{
+		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "no-uid", "namespace": "source"},
+	}}}, Options{SubscriptionNamespace: "source", InstallNamespace: "target"}); err == nil {
+		t.Fatal("DeleteSourceNamespaceResources() unexpectedly deleted an object without a UID")
+	}
+}
+
+func TestPrepareInstallNamespaceRejectsWeakerPSA(t *testing.T) {
+	ctx := context.Background()
+	source := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "source", Labels: map[string]string{"pod-security.kubernetes.io/enforce": "privileged"}}}
+	target := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "target", Labels: map[string]string{"pod-security.kubernetes.io/enforce": "restricted"}}}
+	m := migrationTestClient(t, source, target)
+	err := m.PrepareInstallNamespace(ctx, Options{SubscriptionNamespace: "source", InstallNamespace: "target"})
+	if err == nil {
+		t.Fatal("PrepareInstallNamespace() unexpectedly weakened target PSA enforcement")
+	}
+	var unchanged corev1.Namespace
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: "target"}, &unchanged); err != nil {
+		t.Fatalf("get target namespace: %v", err)
+	}
+	if got := unchanged.Labels["pod-security.kubernetes.io/enforce"]; got != "restricted" {
+		t.Fatalf("target PSA enforcement = %q, want restricted", got)
+	}
+}
+
+func TestPrepareInstallNamespaceRejectsUnknownPSADefault(t *testing.T) {
+	ctx := context.Background()
+	source := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "source", Labels: map[string]string{"pod-security.kubernetes.io/enforce": "baseline"}}}
+	target := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "target"}}
+	m := migrationTestClient(t, source, target)
+	err := m.PrepareInstallNamespace(ctx, Options{SubscriptionNamespace: "source", InstallNamespace: "target"})
+	if err == nil {
+		t.Fatal("PrepareInstallNamespace() unexpectedly changed an existing target with unknown PSA enforcement")
+	}
+	var unchanged corev1.Namespace
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: "target"}, &unchanged); err != nil {
+		t.Fatalf("get target namespace: %v", err)
+	}
+	if _, found := unchanged.Labels["pod-security.kubernetes.io/enforce"]; found {
+		t.Fatalf("target PSA enforcement was changed: %#v", unchanged.Labels)
+	}
+}
+
+func TestScaleSourceDeployments(t *testing.T) {
+	ctx := context.Background()
+	replicas := int32(2)
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "operator", Namespace: "source"}, Spec: appsv1.DeploymentSpec{Replicas: &replicas}}
+	m := migrationTestClient(t, deployment)
+	objects := []unstructured.Unstructured{{Object: map[string]interface{}{
+		"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]interface{}{"name": "operator", "namespace": "source"},
+	}}}
+	restore, err := m.ScaleSourceDeployments(ctx, objects, Options{SubscriptionNamespace: "source", InstallNamespace: "target"})
+	if err != nil {
+		t.Fatalf("ScaleSourceDeployments() error = %v", err)
+	}
+	var scaled appsv1.Deployment
+	if err := m.Client.Get(ctx, client.ObjectKey{Namespace: "source", Name: "operator"}, &scaled); err != nil {
+		t.Fatalf("get scaled Deployment: %v", err)
+	}
+	if scaled.Spec.Replicas == nil || *scaled.Spec.Replicas != 0 {
+		t.Fatalf("scaled Deployment replicas = %v, want 0", scaled.Spec.Replicas)
+	}
+	if err := restore(ctx); err != nil {
+		t.Fatalf("restore source Deployments: %v", err)
+	}
+	if err := m.Client.Get(ctx, client.ObjectKey{Namespace: "source", Name: "operator"}, &scaled); err != nil {
+		t.Fatalf("get restored Deployment: %v", err)
+	}
+	if scaled.Spec.Replicas == nil || *scaled.Spec.Replicas != 2 {
+		t.Fatalf("restored Deployment replicas = %v, want 2", scaled.Spec.Replicas)
+	}
+}
+
+func TestCleanupResultErr(t *testing.T) {
+	err := (&CleanupResult{Actions: []CleanupAction{{Description: "Delete OperatorCondition", Error: errors.New("forbidden")}}}).Err()
+	if err == nil || !strings.Contains(err.Error(), "Delete OperatorCondition: forbidden") {
+		t.Fatalf("CleanupResult.Err() = %v, want action error", err)
+	}
+}
+
 func TestPrepareClusterObjectSet(t *testing.T) {
 	establishedCRD := &apiextensionsv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
@@ -756,11 +988,14 @@ func TestCreateMigrationResourcesCleansTrackedCOSAfterClusterExtensionFailure(t 
 	object := unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "operator-config", "namespace": "ns"},
 	}}
-	err := m.CreateMigrationResources(ctx, Options{SubscriptionName: "sub", SubscriptionNamespace: "ns", ClusterExtensionName: "sub", SystemNamespace: "olmv1-system"}, &MigrationInfo{
+	result, err := m.CreateMigrationResources(ctx, Options{SubscriptionName: "sub", SubscriptionNamespace: "ns", ClusterExtensionName: "sub", SystemNamespace: "olmv1-system"}, &MigrationInfo{
 		PackageName: "widgets", BundleName: "widgets.v1", Version: "1.0.0", CollectedObjects: []unstructured.Unstructured{object},
 	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "ClusterExtension creation failed") {
 		t.Fatalf("CreateMigrationResources() error = %v, want ClusterExtension creation failure", err)
+	}
+	if !result.TargetMayBeActive {
+		t.Fatal("CreateMigrationResources() TargetMayBeActive = false, want true after COS success")
 	}
 	m.Client = baseClient
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: "sub-1"}, &ocv1.ClusterObjectSet{}); err == nil {

@@ -39,3 +39,22 @@ func TestDryRunCleanupPlan(t *testing.T) {
 		t.Fatalf("dry-run cleanup plan does not describe the default OperatorGroup behavior:\n%s", plan)
 	}
 }
+
+func TestDryRunCleanupPlanNamespaceChange(t *testing.T) {
+	opts := migration.Options{
+		SubscriptionName:      "widget-operator",
+		SubscriptionNamespace: "operators",
+		InstallNamespace:      "widget-system",
+	}
+	info := &migration.MigrationInfo{PackageName: "widgets", BundleName: "widgets.v1.2.3"}
+	plan := strings.Join(dryRunCleanupPlan(opts, info), "\n")
+	for _, expected := range []string{
+		"Create or update install namespace widget-system with PSA/SCC labels copied from operators.",
+		"Move collected namespaced operator resources from operators to widget-system and delete their source copies after ClusterExtension installation.",
+		"Retain source namespace operators.",
+	} {
+		if !strings.Contains(plan, expected) {
+			t.Fatalf("dry-run cleanup plan missing %q:\n%s", expected, plan)
+		}
+	}
+}

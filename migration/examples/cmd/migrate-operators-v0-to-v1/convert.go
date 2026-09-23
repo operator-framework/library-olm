@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/operator-framework/library-olm/migration/pkg/migration"
 )
@@ -69,6 +72,9 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	}
 	if !convertAll && len(args) == 0 {
 		return fmt.Errorf("specify an operator name or --all")
+	}
+	if convertAll && convertInstallNs != "" {
+		return fmt.Errorf("--install-namespace requires a single operator")
 	}
 
 	c, restCfg, err := newClient()
@@ -152,7 +158,6 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 		AcknowledgeNotSteadyState:       convertAckNotSteady,
 	}
 	opts.ApplyDefaults()
-
 	if convertDryRun {
 		return runConvertDryRun(cmd, m, opts)
 	}
@@ -218,12 +223,20 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 		return fmt.Errorf("ClusterObjectSet prerequisite check failed: %w", err)
 	}
 	success(fmt.Sprintf("ClusterObjectSet API established; using operator-controller namespace %s", opts.SystemNamespace))
+	if err := m.PrepareInstallNamespace(ctx, opts); err != nil {
+		return fmt.Errorf("install namespace preparation failed: %w", err)
+	}
 
 	stepHeader(4, "Collecting operator resources")
 	objects, err := m.CollectResources(ctx, opts, csv, ip, bundleInfo.PackageName)
 	if err != nil {
 		return fmt.Errorf("failed to collect resources: %w", err)
 	}
+	sourceObjects := make([]unstructured.Unstructured, len(objects))
+	for i := range objects {
+		sourceObjects[i] = *objects[i].DeepCopy()
+	}
+	migration.RewriteInstallNamespace(objects, opts.SubscriptionNamespace, opts.InstallNamespace)
 	bundleInfo.CollectedObjects = objects
 	kindCounts := make(map[string]int)
 	for _, obj := range objects {
@@ -258,22 +271,41 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	success("Resources backed up in memory (CE annotation backup authoritative)")
 
 	stepHeader(6, "Preparing operator for migration")
-	info("Deleting Subscription and CSV (orphan cascade — workloads keep running)...")
+	info("Deleting Subscription and CSV (orphan cascade)...")
 	if err := m.PrepareForMigration(ctx, opts, csv); err != nil {
 		return fmt.Errorf("preparation failed: %w", err)
 	}
 	success("OLMv0 management removed")
+	restoreSourceDeployments, err := m.ScaleSourceDeployments(ctx, sourceObjects, opts)
+	if err != nil {
+		return err
+	}
+	if opts.InstallNamespace != opts.SubscriptionNamespace {
+		success("Source Deployments scaled to zero before target cutover")
+	}
 
 	stepHeader(7, "Creating OLMv1 migration resources")
 	info(fmt.Sprintf("Applying COS %s-1 with %d objects and creating its ClusterExtension...", opts.ClusterExtensionName, len(bundleInfo.CollectedObjects)))
 	startProgress()
-	if err := m.CreateMigrationResources(ctx, opts, bundleInfo, backup); err != nil {
+	result, err := m.CreateMigrationResources(ctx, opts, bundleInfo, backup)
+	if err != nil {
 		clearProgress()
+		if result.TargetMayBeActive {
+			return fmt.Errorf("create migration resources: %w; target ClusterObjectSet may be active, so source Deployments remain scaled to zero", err)
+		}
+		restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if restoreErr := restoreSourceDeployments(restoreCtx); restoreErr != nil {
+			return fmt.Errorf("create migration resources: %w; restore source Deployments: %v", err, restoreErr)
+		}
 		return err
 	}
 	clearProgress()
 	success(fmt.Sprintf("ClusterObjectSet %s-1 reached Succeeded=True", opts.ClusterExtensionName))
 	success(fmt.Sprintf("ClusterExtension %s is Installed", opts.ClusterExtensionName))
+	if err := m.DeleteSourceNamespaceResources(ctx, sourceObjects, opts); err != nil {
+		return fmt.Errorf("delete source install resources: %w", err)
+	}
 
 	stepHeader(8, "Cleaning up OLMv0 resources")
 	cleanupResult := m.CleanupOLMv0Resources(ctx, opts, bundleInfo.PackageName, csv.Name)
@@ -287,7 +319,9 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 			success(action.Description)
 		}
 	}
-
+	if err := cleanupResult.Err(); err != nil {
+		return fmt.Errorf("clean up OLMv0 resources: %w", err)
+	}
 	banner(fmt.Sprintf("Migration complete! %s is now managed by OLMv1", bundleInfo.PackageName))
 	fmt.Println()
 	return nil
@@ -367,6 +401,12 @@ func dryRunCleanupPlan(opts migration.Options, info *migration.MigrationInfo) []
 		lines = append(lines, "Delete OperatorGroup(s) only when no Subscriptions remain; strip OLM ownership labels from their aggregation ClusterRoles first.")
 	} else {
 		lines = append(lines, "Retain OperatorGroup(s); --delete-operatorgroup was not specified.")
+	}
+	if opts.InstallNamespace != opts.SubscriptionNamespace {
+		lines = append(lines,
+			fmt.Sprintf("Create or update install namespace %s with PSA/SCC labels copied from %s.", opts.InstallNamespace, opts.SubscriptionNamespace),
+			fmt.Sprintf("Move collected namespaced operator resources from %s to %s and delete their source copies after ClusterExtension installation.", opts.SubscriptionNamespace, opts.InstallNamespace))
+		lines = append(lines, fmt.Sprintf("Retain source namespace %s.", opts.SubscriptionNamespace))
 	}
 	return lines
 }
