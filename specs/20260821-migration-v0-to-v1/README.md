@@ -77,9 +77,9 @@ check ──────────────► convert ──────�
                                ├─ resolve target ClusterCatalog (by image)
                                ├─ back up Subscription and OperatorGroup specs (CE annotations)
                                ├─ collect owned resources (5 sources, dedup)
-                               ├─ create ClusterObjectSet (SecretPacker, IfNoController)
+                               ├─ create migration ClusterObjectSet (SecretPacker, None)
                                │     └─ wait for COS controller: Succeeded=True
-                               └─ create ClusterExtension (adopts the COS)
+                               └─ create ClusterExtension (controller creates catalog revision)
                                ▲
                                └── rollback: delete CE+COS (orphan cascade), restore Subscription
 ```
@@ -96,10 +96,10 @@ minimized.
   (formerly `ClusterExtensionRevision`).
 - The migration tool **creates** the COS and **waits** for the COS controller to set
   `Succeeded=True`; it never writes status on OLMv1 APIs. It then creates the
-  `ClusterExtension`, which adopts the COS via owner labels.
+  `ClusterExtension`; the controller creates the subsequent catalog-derived COS revision.
 - Collected objects are stored via boxcutter's **SecretPacker** (not inline) to support
-  large bundles, with `CollisionProtection: IfNoController` so OLMv1 can adopt existing
-  resources (including CRDs) without conflict.
+  large bundles, with migration collision protection `None`. The controller's catalog-derived
+  revision uses `Prevent`.
 
 ## Prototype lineage
 

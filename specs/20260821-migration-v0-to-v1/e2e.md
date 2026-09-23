@@ -1,43 +1,45 @@
 # E2E Test Strategy — OLMv0 → OLMv1 Migration
 
-This document implements the Phase 8 E2E plan from [validation.md](validation.md).
-It uses deterministic fixture scenarios for the migration tool's decision and recovery paths,
-real-operator smoke scenarios for controller adoption, and an in-cluster Job that verifies
-ServiceAccount authentication. All are required CI gates for pull requests, merge queues, and
-pushes to `main`.
+This document tracks the implemented portion of the Phase 8 E2E plan from
+[validation.md](validation.md). It uses deterministic fixture scenarios for migration and
+rejection paths, real-operator smoke scenarios, COS supersession, and an in-cluster Job that
+verifies ServiceAccount authentication.
 
 ## Test environments
 
 | Suite | Cluster | Catalog content | Purpose |
 |---|---|---|---|
-| `fixture` | kind + OLMv1 + OLMv0 CRDs only (no OLMv0 controllers) | Committed OLMv0-install snapshots and a digest-pinned CatalogSource | Deterministic coverage of V1, V2, V3, V4. |
-| `real-operator` | separate kind cluster with OLMv0 + OLMv1 | OLMv0's installed OperatorHub catalog | Proves V5.2–V5.8 with real deployed operators. |
+| `fixture` | kind + OLMv1 + OLMv0 CRDs only (no OLMv0 controllers) | Committed OLMv0-install snapshots and a locally built FBC served by an in-cluster TLS registry | Deterministic migration and rejection coverage without a remote catalog. |
+| `real-operator` | separate kind cluster with OLMv0 + OLMv1 | OLMv0's installed OperatorHub catalog | Covers the V5.2–V5.6 baseline with real deployed operators; V5.7 upgrade and V5.8 rollback remain gaps. |
 | `in-cluster-job` | fixture cluster | A replayed ecr-secret-operator installation | Proves both CLIs authenticate and migrate using only a Pod ServiceAccount. |
-| `kind-only` | kind + OLMv1 | Local fixture objects, no OLMv0 controllers | Fast contract tests for resource rendering and COS adoption prerequisites. |
 
-Do not use a mutable `latest` image or an unpinned release installer in CI. The default
-bootstrap pins OLMv0 to `v0.46.0`, OLMv1 to `v1.12.0`, and kind to `v0.33.0` with the
-digest-pinned Kubernetes `v1.36.1` node image; CI should
+Do not use a mutable public `latest` image or an unpinned release installer in CI. The fixture
+registry's `latest` tag is private to the disposable cluster and rebuilt from committed inputs on
+every setup. The default bootstrap pins OLMv0 to `v0.46.0`, OLMv1 to `v1.12.0`, and kind to
+`v0.33.0` with the digest-pinned Kubernetes `v1.36.1` node image; CI should
 mirror those release artifacts and override the URLs when it cannot access GitHub. The job inputs
 are the kind node image, OLMv0 manifest URL and digest, operator-controller release
-manifest URL and digest, fixture catalog image digest, and (only for the smoke suite) the
-catalog image/package/channel/CSV version. Catalog images are specified by immutable SHA
-digests, never `latest`, so a CI run is reproducible. Record these in the workflow job summary.
+manifest URL and digest, and (only for the smoke suite) the catalog image/package/channel/CSV
+version. The fixture catalog is constructed from committed snapshots on every fixture-cluster
+setup, so it does not rely on a retained Quay digest or a mutable external catalog tag.
 
 ## Bootstrap
 
 1. Run `make migration/e2e-setup` to create (or reuse) an isolated kind cluster named `library-olm-e2e` using
-   [`e2e/migration/kind-config.yaml`](../../e2e/migration/kind-config.yaml), exporting an explicit
+   [`test/e2e/migration/kind-config.yaml`](../../test/e2e/migration/kind-config.yaml), exporting an explicit
    Kind-generated kubeconfig at `.kubeconfig/library-olm-e2e`. `E2E_KUBECONFIG` is only
    an optional override for that generated output path.
 2. Apply the pinned OLMv0 quickstart manifest and wait for both `olm-operator` and
    `catalog-operator` deployments to be Available.
 3. Install the pinned operator-controller release manifest and wait for its deployment,
    catalogd, cert provider, and required CRDs to be established.
-4. Apply the committed OLMv0-install snapshots, including the digest-pinned fixture
-   `CatalogSource`, then migrate it with `migrate-catalogs-v0-to-v1` and wait for its
-   `ClusterCatalog` to become `Serving=True`.
-5. Before each scenario, create a new namespace and apply exactly one fixture set. After
+4. For a fixture cluster, build bundle and FBC images from the committed snapshots, publish them
+   over TLS to the in-cluster fixture registry, then apply the fixture `CatalogSource`. The
+   registry certificate is issued by OLMv1's `olmv1-ca`; publishing uses the CA and an HTTPS
+   port-forward, not an insecure HTTP registry connection.
+5. The fixture test migrates the `CatalogSource` with `migrate-catalogs-v0-to-v1` and waits for
+   the resulting `ClusterCatalog` to become `Serving=True`.
+6. Before each scenario, create a new namespace and apply exactly one fixture set. After
    each scenario, collect all migration objects, CSV/Subscription/InstallPlan events, pod
    logs, and `kubectl get --all-namespaces -o yaml` for the test namespace on failure.
 
@@ -49,25 +51,23 @@ and [operator-controller E2E guidance](https://github.com/operator-framework/ope
 
 ## Fixtures
 
-The fixture catalog contains small deployable bundles, all using a harmless pause-style
-Deployment and a test CRD. It must provide independent packages for:
+The committed fixture inputs capture steady-state OLMv0 installs for three real packages:
+`ecr-secret-operator`, `external-secrets-operator`, and `redis-operator`. Each snapshot has its
+OLMv0 resources, namespaced resources, CRDs, and any preinstall ServiceAccount needed for replay.
+Fixture setup turns those inputs into bundle images and an FBC image using `crane`, then publishes
+them to a TLS registry in `migration-e2e-registry`. The in-cluster `CatalogSource` points at that
+registry; fixture replay never installs an OLMv0 controller and never pulls an OperatorHub catalog
+from Quay.
 
-- `eligible`: an AllNamespaces CSV with a CRD, ServiceAccount, Role/Binding, Service and
-  Deployment. It is the baseline conversion, rollback, and CRD-adoption package.
-- `c1-watch-scope`, `c4-condition`, `c5-v0-rbac`, `c6-serviceaccount`, and `c8-unsteady`:
-  each contains exactly one soft incompatibility. Each scenario runs once without its
-  acknowledgment and once with it, asserting the CE audit annotation.
-- `c2-package-dependency`, `c2-gvk-dependency`, `c3-apiservice`, and `c9-generated`:
-  hard-block fixtures. They never create a CE.
-- `large-bundle`: objects sufficient to force SecretPacker externalization.
-- `shared-crd-a` and `shared-crd-b`: two packages owning the same CRD, proving
-  `IfNoController` adoption.
-
-Fixtures are source-controlled YAML/FBC inputs. The image is built once per CI run,
-tagged with the commit SHA, loaded with `kind load docker-image`, and never pulled from a
-public mutable catalog.
+This is deliberately a snapshot test, not a synthetic fixture matrix. Unit tests cover many
+individual compatibility and recovery boundaries; the fixture E2E suite currently verifies the
+real captured shapes, catalog conversion, normal conversion, and two refusal-before-mutation
+guards (a non-steady Subscription and an unresolvable package).
 
 ## Scenario matrix
+
+This is the target matrix derived from `validation.md`, not a claim that every row is implemented.
+The currently implemented coverage is described in the Fixtures and CI sections.
 
 | Validation IDs | Scenario | Required assertions |
 |---|---|---|
@@ -92,11 +92,9 @@ the Kubernetes client only for setup and assertions. Every wait has a bounded ti
 prints current objects/events on timeout.
 
 `make migration/test-e2e-fixture-matrix` runs only deterministic fixture scenarios. `make
-migration/test-e2e-live-matrix` runs only the real-operator smoke scenarios. Both use the Kind-generated
-kubeconfig by default. The
-targets require a pre-bootstrapped cluster rather than silently provisioning or deleting
-one; bootstrap automation will be added with the pinned installation inputs. Both commands
-write diagnostics below `E2E_ARTIFACTS` (default: `artifacts/e2e`).
+migration/test-e2e-live-matrix` runs only the real-operator smoke scenarios. Both use the
+Kind-generated kubeconfig by default and require their cluster to have been bootstrapped first.
+Both commands write diagnostics below `E2E_ARTIFACTS` (default: `artifacts/e2e`).
 
 Coverage is optional because the migration binaries run outside the Go test process. E2E CLI
 binaries are always built with `go build -cover`, and the E2E targets collect their coverage
@@ -108,6 +106,18 @@ absent, preventing a misleading partial result. Upload the merged profile
 and failure artifacts, but do not impose an E2E percentage threshold; the unit suite owns the
 ≥80% gate. This avoids treating controller waits and external command plumbing as unit
 coverage while still showing which migration paths the E2E suite executes.
+
+## CI status
+
+The `migration-test` workflow runs unit coverage, fixture E2E, live-operator E2E, the
+in-cluster Job E2E, and the focused COS-supersession E2E as independent jobs. Unit, fixture,
+live, and COS-supersession tests publish coverage inputs; a dependent coverage job displays
+their combined report. The Job intentionally does not upload diagnostics or coverage artifacts.
+
+The supersession check is deliberately separate from the conversion matrix. With the released
+operator-controller v1.12.0, migration creates revision 1 with collision protection `None`;
+creating the ClusterExtension results in a controller-owned, catalog-derived revision 2 with
+collision protection `Prevent`. The check requires both revisions to succeed.
 
 ## CI rollout
 
@@ -177,15 +187,15 @@ git commit -m 'test: refresh OLMv0 operator snapshots'
 make migration/e2e-teardown
 ```
 
-For a single package, replace `all` with its name from `e2e/migration/operators.tsv`, for example
+For a single package, replace `all` with its name from `test/e2e/migration/operators.tsv`, for example
 `make migration/e2e-install-v0 E2E_OPERATOR=redis-operator`. Snapshot capture must occur while the
 operator remains OLMv0-managed. Fixture CI never captures snapshots, so it can run
 independently and in parallel with the live suite.
 
 ### In-cluster Job test
 
-This focused test is independent of coverage collection. It provisions the fixture cluster,
-loads a locally built, uninstrumented image into Kind, then runs catalog and operator migration
+This focused test is independent of coverage collection. It provisions (or reuses) the fixture
+cluster, builds and loads a locally built, uninstrumented image into Kind, then runs catalog and operator migration
 from a Job using projected ServiceAccount credentials (with a test-only `cluster-admin` binding).
 It intentionally retains the Job namespace for log inspection; the next invocation removes it
 before creating a fresh Job.

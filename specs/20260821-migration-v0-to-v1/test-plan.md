@@ -5,8 +5,8 @@
 **Identifier:** `OPRUN-4715-TP-001`  
 **Feature:** [OPRUN-4715 — OLMv0 → OLMv1 Migration library & CLIs (prototype)](https://redhat.atlassian.net/browse/OPRUN-4715)  
 **Version:** 1.0  
-**Date:** 2026-09-18  
-**Status:** Active; Phase 8 test implementation is in progress.
+**Date:** 2026-09-23
+**Status:** Active; the Phase 8 test foundation is implemented, with validation expansion in progress.
 
 This plan follows the IEEE 829 test-plan structure. It is the executable-test companion to
 [requirements.md](requirements.md), [validation.md](validation.md),
@@ -61,7 +61,8 @@ tests. A focused in-cluster Job test verifies that the CLIs can also run using P
 ### 4.3 Migration, recovery, and mappings
 
 - COS creation and `Succeeded=True` before ClusterExtension creation; no client-written OLMv1
-  status; `IfNoController` collision protection and CRD adoption.
+  status; migration revision `None` collision protection and the controller's `Prevent`
+  superseding revision.
 - Subscription, OperatorGroup, ClusterExtension, CatalogSource, and ClusterCatalog field mappings
   defined in requirements R4, R6, R7, and R8.
 - Backup annotations and optional on-disk backup; rollback acknowledgement and restoration;
@@ -92,14 +93,15 @@ allocation; an item is not considered complete merely because it is allocated he
 | V2.1–V2.10, V4.3–V4.5 | Focused unit tests; fixture refusal tests | Non-steady-state and unresolved-package refusal are covered in fixture E2E; complete acknowledgement and four-state matrix remains. |
 | V3.8–V3.11, V3.13–V3.17, V3.19 | Catalog unit tests plus fixture/live E2E | Basic CatalogSource migration covered; edge, adoption, overflow, and deletion-reference cases remain. |
 | V3.12, V4.1–V4.2, V4.6 | Unit plus live E2E | Planned; requires deployment upgrade, shared-resource, and large-payload scenarios. |
-| V5.1–V5.9 | Live kind E2E | Bootstrap, real installation, catalog conversion, check, and conversion are covered; upgrade, rollback, and four-state batch scenario remain. |
+| V5.1–V5.9 | Live kind E2E | Bootstrap, real installation, catalog conversion, check, and conversion are covered; a 2026-09-23 live `logging-operator` migration confirmed the COS supersession handoff and workload availability. Upgrade, rollback, and four-state batch scenario remain. |
 | V4.7–V4.8 | Fixture and live E2E plus unit tests | Explicit cross-namespace and acknowledged source-namespace deletion are covered. System-managed namespace mode is covered against the experimental controller CRD, including omitted CE namespace and unsupported-CRD rejection. |
 | V6.* | Product / downstream qualification | Not a Kind CI gate; topology, architecture, and restricted-network coverage require separate environments. |
 
 ## 5. Features Not to Be Tested
 
-- APIService-based operator migration is excluded while C3 remains a hard block; it is revisited
-  only after OPRUN-4723 has complete operator-controller renderer support.
+- APIService-based operator migration is permanently out of scope. OLMv1 does not support
+  APIService-owning operators; C3 must continue to reject them with no acknowledgement or
+  override. The C3 negative tests are required regression coverage.
 - Hosted Control Planes are out of scope. SNO, compact, multi-node, non-x86 architectures, and
   restricted/disconnected network qualification are downstream/product-environment work, not
   kind CI coverage.
@@ -135,7 +137,7 @@ logs.
 Run `make migration/e2e-setup`, `make migration/test-e2e-live-matrix`, then
 `make migration/e2e-teardown`. This uses a separate Kind cluster with OLMv0 and OLMv1 installed.
 The suite installs packages through OLMv0, creates/migrates a CatalogSource, invokes the CLIs,
-and verifies actual controller reconciliation and adoption. It is a smoke/integration layer, not
+and verifies actual controller reconciliation. It is a smoke/integration layer, not
 a substitute for exhaustive fixture cases. Pin the Kind, Kubernetes node, OLMv0, and OLMv1
 versions documented in `e2e.md`.
 
@@ -183,8 +185,8 @@ the fixture registry/catalog cannot serve its content. Preserve artifacts and cl
 enough to diagnose the failure, then tear down the known cluster explicitly.
 
 Resume after the failed prerequisite is corrected and a clean, correctly version-pinned cluster
-has been created. Do not mask functional failures by re-running assertions. Phase-6 and
-APIService test work resumes only after their documented upstream dependencies are available.
+has been created. Do not mask functional failures by re-running assertions. Phase-6 test work
+resumes only after its documented upstream dependencies are available.
 
 ## 9. Test Deliverables
 
@@ -204,7 +206,8 @@ APIService test work resumes only after their documented upstream dependencies a
 3. Implement and run unit tests for every library branch, acknowledgement, recovery ownership
    decision, and catalog mapping boundary.
 4. Implement fixture E2E cases for every remaining V1–V4 validation row.
-5. Maintain live tests for representative real operators and controller-adoption behavior.
+5. Maintain live tests for representative real operators and controller reconciliation; retain
+   the focused fixture COS-supersession check for the migration-to-catalog handoff.
 6. Run the in-cluster Job test to protect the in-cluster authentication path.
 7. Publish/inspect combined coverage and prioritize unexecuted migration and catalog paths.
 8. Triage failures as product defects, fixture drift, environment/provisioning failures, or test
@@ -230,7 +233,7 @@ APIService test work resumes only after their documented upstream dependencies a
 | Migration-library maintainers | Implement fixes, unit tests, and regression coverage. |
 | E2E/CI maintainers | Maintain fixtures, bootstrap scripts, workflow reliability, artifacts, and coverage aggregation. |
 | Reviewers | Verify test-to-requirement traceability, safety assertions, fixture sanitization, and no false coverage claims. |
-| Operator-controller maintainers | Resolve upstream Phase 6/APIService prerequisites and provide compatibility guidance. |
+| Operator-controller maintainers | Resolve upstream Phase 6 prerequisites and provide compatibility guidance. |
 
 ## 13. Staffing and Training Needs
 
@@ -244,11 +247,11 @@ snapshots are committed test inputs and may not contain credentials or cluster-s
 Testing follows implementation milestones rather than fixed dates:
 
 1. Keep the merged unit, fixture, and live foundations passing on every change.
-2. Merge pending Phase 8 negative/recovery, in-cluster Job, documentation, and coverage work.
-3. Close the remaining V1–V5 rows in priority order: safety/rejection and recovery first,
+2. Close the remaining V1–V5 rows in priority order: safety/rejection and recovery first,
    catalog edge cases and mapping next, then upgrade/large-payload/shared-resource scenarios.
-4. Revisit deferred V4.7 and APIService scenarios when their upstream work lands.
-5. Declare Phase 8 complete only after its coverage target and applicable validation inventory
+3. Revisit deferred V4.7 scenarios when their upstream work lands; retain C3 refusal coverage
+   because APIService migration is permanently unsupported.
+4. Declare Phase 8 complete only after its coverage target and applicable validation inventory
    pass in CI.
 
 ## 15. Risks and Contingencies
@@ -260,7 +263,7 @@ Testing follows implementation milestones rather than fixed dates:
 | Real operator external dependencies | Live smoke test instability | Select self-contained operators; move deterministic semantics to fixtures. |
 | Fixture drift from a real OLMv0 install | False confidence | Deliberately refresh, sanitize, review, and commit snapshots only from a healthy live installation. |
 | Unsafe migration cleanup | Workload/resource loss | Require refusal-before-mutation, backup/recovery tests, orphan-cascade assertions, and regression tests. |
-| Upstream OLMv1 dependencies | Validation scope blocked | Keep C3 and install-namespace scenarios explicitly deferred; track OPRUN-4723 and Phase 6 prerequisites. |
+| Upstream OLMv1 dependencies | Validation scope blocked | Keep install-namespace scenarios explicitly deferred; track Phase 6 prerequisites. APIService migration is permanently unsupported and covered by C3 refusal tests. |
 | Coverage-only confidence | Untested controller behavior | Require both unit threshold and fixture/live functional gates; report merged E2E coverage separately. |
 
 ## 16. Approvals

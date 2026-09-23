@@ -98,16 +98,16 @@ old `ClusterExtensionRevision` name throughout; all references must be updated t
 `ClusterObjectSet` / `ClusterObjectSetList` / `ClusterObjectSetTypeSucceeded`.
 
 **R2.3** — The migration tool **creates** the COS, then **waits** for the COS controller
-to set `Succeeded=True`, then creates the `ClusterExtension` (which adopts the COS via
-`olm.operatorframework.io/owner-kind` + `owner-name` labels). The tool **must not** write
+to set `Succeeded=True`, then creates the `ClusterExtension`. With operator-controller v1.12.0,
+the controller creates a subsequent catalog-derived COS revision rather than adopting the
+migration COS. The tool **must not** write
 status on any OLMv1 API. No operator-controller changes are required (verified — see
 [PLAN.md](PLAN.md) prerequisite).
 
 **R2.4** — Collected objects are stored via boxcutter's **SecretPacker** (Secret-backed,
 not inline in the COS spec) to support large bundles, with
-`CollisionProtection: IfNoController` so OLMv1 can adopt pre-existing resources — including
-CRDs — without conflict, while still refusing to stomp resources owned by another
-controller.
+`CollisionProtection: None` for the migration revision. The controller-created catalog revision
+uses `Prevent`; the explicit two-revision handoff is verified in E2E.
 
 **R2.5 — Migration annotations.** The `migrated-from-subscription` annotation is set on **both** the `ClusterObjectSet` and the `ClusterExtension`:
 - On the **COS**: `olm.operatorframework.io/migrated-from-subscription: <ns>/<name>` — ties the revision to its OLMv0 origin; makes migrated COSes discoverable independently of the CE and provides provenance even if the CE annotation is lost.
@@ -141,7 +141,7 @@ annotation, R2.5) or **hard** (must be remediated first — no override).
 |---|---|---|---|
 | C1 | AllNamespaces watch scope | OperatorGroup targets specific namespaces (Own/Single/Multi) | `--acknowledge-watch-scope-change` |
 | C2 | No dependency resolution *(hard)* | CSV declares `olm.package.required` or `olm.gvk.required` | none — OLMv1 fundamentally does not resolve dependencies; migrating without them would leave the operator broken |
-| C3 | No APIService definitions *(hard)* | CSV `spec.apiservicedefinitions.owned` is non-empty | none — OLMv1 does not support APIService-based operators. | CSV `spec.apiservicedefinitions.owned` is non-empty | none — OLMv1's registry+v1 renderer currently has **no** `apiregistration.k8s.io` generator; when [OPRUN-4723](https://redhat.atlassian.net/browse/OPRUN-4723) merges, OLMv1 will manage APIService objects natively and **C3 is removed entirely** (no override flag; operators with APIService definitions become Eligible) |
+| C3 | No APIService definitions *(permanent hard block)* | CSV `spec.apiservicedefinitions.owned` is non-empty | none — OLMv1 does not support APIService-owning operators, so migration must reject them with no override. |
 | C4 | No active OperatorCondition | `OperatorCondition.status.conditions` has entries (see R9) | `--acknowledge-operator-condition` |
 | C5 | OLMv0-API RBAC without OLMv1 RBAC | The installed RBAC (from live cluster, sourced from bundle manifests or CSV) grants access to `operators.coreos.com` resources (`subscriptions`/`installplans`/`clusterserviceversions`/`catalogsources`, **excluding** `operatorconditions`) **and** does not also grant equivalent OLMv1 API access — operators updated for OLMv1 compatibility will carry both and pass | `--acknowledge-olmv0-api-access` |
 | C6 | No scoped ServiceAccount | OperatorGroup `spec.serviceAccountName` is set | `--acknowledge-scoped-serviceaccount` |
@@ -283,7 +283,7 @@ Both conditions must be met.
 ## R9. Edge cases
 
 - **Multiple operators in one namespace** → OperatorGroup deletion requires `--delete-operatorgroup` AND no Subscriptions remaining; in a multi-operator namespace the second condition won't be met until all operators are migrated (R6).
-- **Multiple operators sharing a cluster resource** (e.g. the same CRD across Own/Single installs) → `CollisionProtection: IfNoController` allows adoption without conflict.
+- **Multiple operators sharing a cluster resource** (e.g. the same CRD across Own/Single installs) → preserve safe collision handling; verify the controller-created `Prevent` revision does not conflict.
 - **Operator not at steady state** → C8 (soft; overridable with `--acknowledge-not-steady-state`).
 - **Dependency relationships** → an operator that depends on others is blocked by C2; migrating an operator that *others depend on* proceeds but must warn about dependents.
 - **OperatorCondition detection** → OLMv0 stamps OperatorCondition RBAC onto **every** operator's service account, so RBAC is **not** a usage signal. Usage is detected **only** via `OperatorCondition.status.conditions` (C4); C5 explicitly excludes `operatorconditions` from the OLMv0-API RBAC check.
