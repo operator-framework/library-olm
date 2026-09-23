@@ -334,7 +334,7 @@ func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.
 		detail("Version:", "(unset — automatic channel-based upgrades)")
 	}
 	detail("Channel:", valueOrDefault(info.Channel, "(none set)"))
-	detail("CollisionProtection:", "IfNoController")
+	detail("CollisionProtection:", "None")
 
 	fmt.Printf("\n  OLMv0 resources that would be deleted or changed:\n")
 	for _, line := range dryRunCleanupPlan(opts, info) {

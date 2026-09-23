@@ -400,7 +400,7 @@ func (m *Migrator) ensureClusterExtensionAbsent(ctx context.Context, name string
 }
 
 // CreateClusterObjectSet builds and creates a COS from the collected resources.
-// It uses CollisionProtection=IfNoController so OLMv1 can adopt existing resources (including CRDs).
+// It uses CollisionProtection=None; the controller creates the subsequent catalog-derived revision.
 // The COS is annotated with the source Subscription reference.
 //
 // TODO(R2.7): when boxcutter phase 2 introduces ClusterObjectDeployment as a replacement or
