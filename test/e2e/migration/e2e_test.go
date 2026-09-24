@@ -479,6 +479,145 @@ func TestMigration(t *testing.T) {
 	}
 }
 
+// TestCrossNamespaceMigration proves the explicit install-namespace path using
+// a committed OLMv0 fixture. It is a separate invocation because it leaves the
+// source namespace in place long enough to verify that only migrated operator
+// resources, rather than the whole namespace, were removed.
+func TestCrossNamespaceMigration(t *testing.T) {
+	if os.Getenv("E2E_CROSS_NAMESPACE_TEST") != "true" {
+		t.Skip("set E2E_CROSS_NAMESPACE_TEST=true to run the cross-namespace migration scenario")
+	}
+	if os.Getenv("E2E_SUITE") != "fixture" {
+		t.Fatal("cross-namespace migration is exercised against the fixture suite")
+	}
+
+	namespace, subscription := os.Getenv("E2E_NAMESPACE"), os.Getenv("E2E_SUBSCRIPTION")
+	if namespace == "" || subscription == "" {
+		t.Fatal("E2E_NAMESPACE and E2E_SUBSCRIPTION are required")
+	}
+	targetNamespace := namespace + "-target"
+	t.Cleanup(func() {
+		collectArtifacts(t, namespace)
+		if t.Failed() {
+			collectArtifacts(t, targetNamespace)
+		}
+	})
+
+	// Use labels which must be copied before the controller renders the target
+	// bundle. The target namespace is deliberately absent at conversion start.
+	run(t, "kubectl", "delete", "namespace/"+targetNamespace, "--ignore-not-found", "--wait=true")
+	// Use audit rather than enforce: the fixture bundle is not restricted-PSA
+	// compliant, so enforce would correctly prevent its Deployment from being
+	// created and turn this namespace-label preservation test into an unrelated
+	// admission test.
+	run(t, "kubectl", "label", "namespace/"+namespace,
+		"pod-security.kubernetes.io/audit=restricted",
+		"security.openshift.io/scc.podSecurityLabelSync=true", "--overwrite")
+
+	sourceDeployments, err := output("kubectl", "get", "deployment", "-n", namespace, "-o", "name")
+	if err != nil || strings.TrimSpace(sourceDeployments) == "" {
+		t.Fatalf("list source operator deployments: %v\n%s", err, sourceDeployments)
+	}
+
+	// The fixture CatalogSource is intentionally present but not reconciled by
+	// OLMv0; create its ClusterCatalog before conversion to satisfy C7.
+	run(t, binary(t, "migrate-catalogs-v0-to-v1"), "--kubeconfig", os.Getenv("KUBECONFIG"))
+	run(t, binary(t, "migrate-operators-v0-to-v1"), "convert", subscription,
+		"-n", namespace, "--install-namespace", targetNamespace,
+		"--kubeconfig", os.Getenv("KUBECONFIG"))
+
+	run(t, "kubectl", "wait", "--for=jsonpath={.status.conditions[?(@.type=='Installed')].status}=True", "clusterextension/"+subscription, "--timeout=10m")
+	gotNamespace, err := output("kubectl", "get", "clusterextension/"+subscription, "-o", "jsonpath={.spec.namespace}")
+	if err != nil || strings.TrimSpace(gotNamespace) != targetNamespace {
+		t.Fatalf("ClusterExtension install namespace = %q, err=%v; want %q", gotNamespace, err, targetNamespace)
+	}
+	for key, want := range map[string]string{
+		"pod-security.kubernetes.io/audit":               "restricted",
+		"security.openshift.io/scc.podSecurityLabelSync": "true",
+	} {
+		got, err := output("kubectl", "get", "namespace/"+targetNamespace, "-o", "jsonpath={.metadata.labels."+escapeJSONPathLabel(key)+"}")
+		if err != nil || strings.TrimSpace(got) != want {
+			t.Fatalf("target namespace label %s = %q, err=%v; want %q", key, got, err, want)
+		}
+	}
+
+	// The catalog-rendered target Deployment proves the new installation is
+	// present. The source Deployments must be gone: retaining them would leave
+	// two active operator copies when the source namespace is intentionally kept.
+	targetDeployments, err := output("kubectl", "get", "deployment", "-n", targetNamespace, "-o", "name")
+	if err != nil || strings.TrimSpace(targetDeployments) == "" {
+		t.Fatalf("list target operator deployments: %v\n%s", err, targetDeployments)
+	}
+	for _, deployment := range strings.Fields(sourceDeployments) {
+		if out, err := output("kubectl", "get", deployment, "-n", namespace); err == nil {
+			t.Fatalf("source operator resource %s remains after cross-namespace migration:\n%s", deployment, out)
+		}
+	}
+	sourceDeletionTimestamp, err := output("kubectl", "get", "namespace/"+namespace, "-o", "jsonpath={.metadata.deletionTimestamp}")
+	if err != nil || strings.TrimSpace(sourceDeletionTimestamp) != "" {
+		t.Fatalf("source namespace deletionTimestamp = %q, err=%v; want empty", sourceDeletionTimestamp, err)
+	}
+}
+
+// TestLiveCrossNamespaceDeletionMigration verifies the destructive namespace
+// path against OLMv0 itself. Unlike fixture tests, OLMv0 is present to release
+// the CSV cleanup finalizer, so Kubernetes can complete namespace deletion.
+func TestLiveCrossNamespaceDeletionMigration(t *testing.T) {
+	if os.Getenv("E2E_LIVE_NAMESPACE_DELETE_TEST") != "true" {
+		t.Skip("set E2E_LIVE_NAMESPACE_DELETE_TEST=true to run live namespace deletion")
+	}
+	if os.Getenv("E2E_SUITE") != "real-operator" {
+		t.Fatal("acknowledged namespace deletion is exercised against live OLMv0")
+	}
+
+	namespace, subscription := os.Getenv("E2E_NAMESPACE"), os.Getenv("E2E_SUBSCRIPTION")
+	if namespace == "" || subscription == "" {
+		t.Fatal("E2E_NAMESPACE and E2E_SUBSCRIPTION are required")
+	}
+	targetNamespace := namespace + "-target"
+	t.Cleanup(func() {
+		collectArtifacts(t, namespace)
+		if t.Failed() {
+			collectArtifacts(t, targetNamespace)
+		}
+	})
+
+	run(t, "kubectl", "delete", "namespace/"+targetNamespace, "--ignore-not-found", "--wait=true")
+	// Audit mode proves PSA labels are transferred without turning this test
+	// into an admission-policy test for the catalog bundle.
+	run(t, "kubectl", "label", "namespace/"+namespace,
+		"pod-security.kubernetes.io/audit=restricted",
+		"security.openshift.io/scc.podSecurityLabelSync=true", "--overwrite")
+
+	// Migrate catalogs before converting the Subscription so C7 is satisfied.
+	run(t, binary(t, "migrate-catalogs-v0-to-v1"), "--kubeconfig", os.Getenv("KUBECONFIG"))
+	run(t, binary(t, "migrate-operators-v0-to-v1"), "convert", subscription,
+		"-n", namespace, "--install-namespace", targetNamespace,
+		"--acknowledge-namespace-delete", "--kubeconfig", os.Getenv("KUBECONFIG"))
+
+	run(t, "kubectl", "wait", "--for=jsonpath={.status.conditions[?(@.type=='Installed')].status}=True", "clusterextension/"+subscription, "--timeout=10m")
+	for key, want := range map[string]string{
+		"pod-security.kubernetes.io/audit":               "restricted",
+		"security.openshift.io/scc.podSecurityLabelSync": "true",
+	} {
+		got, err := output("kubectl", "get", "namespace/"+targetNamespace, "-o", "jsonpath={.metadata.labels."+escapeJSONPathLabel(key)+"}")
+		if err != nil || strings.TrimSpace(got) != want {
+			t.Fatalf("target namespace label %s = %q, err=%v; want %q", key, got, err, want)
+		}
+	}
+	targetDeployments, err := output("kubectl", "get", "deployment", "-n", targetNamespace, "-o", "name")
+	if err != nil || strings.TrimSpace(targetDeployments) == "" {
+		t.Fatalf("list target operator deployments: %v\n%s", err, targetDeployments)
+	}
+	if out, err := output("kubectl", "wait", "--for=delete", "namespace/"+namespace, "--timeout=10m"); err != nil {
+		t.Fatalf("wait for acknowledged source namespace deletion: %v\n%s", err, out)
+	}
+}
+
+func escapeJSONPathLabel(label string) string {
+	return strings.ReplaceAll(label, ".", `\.`)
+}
+
 // restoreSubscriptionForConflict replays the pre-migration Subscription without
 // its API-assigned state, creating the Conflict state exercised by cleanup.
 func restoreSubscriptionForConflict(t *testing.T, raw string) {
