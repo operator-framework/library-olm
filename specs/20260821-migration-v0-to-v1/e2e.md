@@ -16,7 +16,7 @@ pushes to `main`.
 | `kind-only` | kind + OLMv1 | Local fixture objects, no OLMv0 controllers | Fast contract tests for resource rendering and COS adoption prerequisites. |
 
 Do not use a mutable `latest` image or an unpinned release installer in CI. The default
-bootstrap pins OLMv0 to `v0.46.0`, OLMv1 to `v1.11.0`, and kind to `v0.33.0` with the
+bootstrap pins OLMv0 to `v0.46.0`, OLMv1 to `v1.12.0`, and kind to `v0.33.0` with the
 digest-pinned Kubernetes `v1.36.1` node image; CI should
 mirror those release artifacts and override the URLs when it cannot access GitHub. The job inputs
 are the kind node image, OLMv0 manifest URL and digest, operator-controller release

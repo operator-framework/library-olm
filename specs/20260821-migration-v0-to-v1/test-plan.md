@@ -217,7 +217,7 @@ APIService test work resumes only after their documented upstream dependencies a
 |---|---|
 | Local / CI host | Go toolchain and Bingo-managed Kind; container runtime available to Kind. |
 | Kubernetes | Kind Kubernetes `v1.36.1` node image unless the test run explicitly validates another supported version. |
-| OLM components | Pinned OLMv0 `v0.46.0` and OLMv1 `v1.11.0` manifests, or CI-approved overrides of those pinned inputs. |
+| OLM components | Pinned OLMv0 `v0.46.0` and OLMv1 `v1.12.0` manifests, or CI-approved overrides of those pinned inputs. |
 | Kubeconfig | Kind-generated `.kubeconfig/library-olm-e2e` by default; `E2E_KUBECONFIG` only overrides that output path. |
 | Fixture environment | Separate `library-olm-fixture-e2e` cluster; OLMv0 CRDs only, OLMv1 controllers, local TLS registry/FBC, committed snapshots. |
 | Live environment | Separate `library-olm-e2e` cluster with both OLMv0 and OLMv1 controllers and OLMv0 catalog access. |
@@ -272,4 +272,3 @@ Testing follows implementation milestones rather than fixed dates:
 | Migration-library maintainer | TBD | TBD |
 | QE / test owner | TBD | TBD |
 | Operator-controller dependency owner (as needed) | TBD | TBD |
-
