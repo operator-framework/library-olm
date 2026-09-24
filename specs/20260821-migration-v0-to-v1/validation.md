@@ -65,7 +65,12 @@ flag flips it to `Eligible`:
 - **V4.4** Dependency operator (`olm.generated-by` present / declares requirements) → flagged; an operator others depend on migrates but emits a dependents warning.
 - **V4.5** OperatorCondition disambiguation: an operator with OLMv0-stamped OperatorCondition RBAC but **empty** `status.conditions` is **Eligible** (RBAC is not treated as usage).
 - **V4.6** Large bundle exceeding inline size limits migrates successfully via SecretPacker.
-- **V4.7** Namespace change copies `pod-security.kubernetes.io/*` and `security.openshift.io/scc.podSecurityLabelSync` to the new namespace; old namespace deleted only with `--acknowledge-namespace-delete`.
+- **V4.7** Namespace change copies `pod-security.kubernetes.io/*` and `security.openshift.io/scc.podSecurityLabelSync` to the new namespace. An existing target with no explicit PSA `enforce` label is rejected when the source sets one, because its cluster default is not observable. Collected source Deployments scale to zero before target creation so two controllers do not overlap. They return to their original replica count only when target COS creation failed before it may have reconciled; otherwise migration reports that the target may be active, leaves the source scaled down, and refuses automatic OLMv0 recovery. The target operator resources are present and their collected source copies are removed. The fixture scenario retains the old namespace by default; the live scenario passes `--acknowledge-namespace-delete` and verifies the source namespace is deleted after OLMv0 finalizes its CSV.
+- **V4.8** System-managed namespace (requirement gap): against a controller release that supports
+  an omitted `ClusterExtension.spec.namespace`, explicit system-managed conversion omits the
+  field and OLMv1 installs into the namespace resolved from bundle metadata. The same invocation
+  against a controller that requires the field is rejected before mutation with an actionable
+  error. A conversion with neither namespace flag continues to use the Subscription namespace.
 
 ## V5. End-to-end scenario (kind)
 
@@ -118,8 +123,8 @@ flag flips it to `Eligible`:
 | R3 C1–C9 | V2.1–V2.10 |
 | R4 Subscription fields | V3.1–V3.3, V3.12, V4.4 |
 | R5 Resource collection strategy | V1.3, V4.2, V4.6 |
-| R6 OperatorGroup fields | V2.1, V2.7, V3.5, V3.7 |
-| R7 ClusterExtension mapping | V3.1–V3.6, V3.12 |
+| R6 OperatorGroup fields | V2.1, V2.7, V3.5, V3.7, V4.7 |
+| R7 ClusterExtension mapping | V3.1–V3.6, V3.12, V4.8 |
 | R8 CatalogSource→ClusterCatalog | V3.8–V3.11, V3.13–V3.17, V3.19 |
-| R9 Edge cases | V4.1–V4.7 |
+| R9 Edge cases | V4.1–V4.8 |
 | R10 Non-goals | V6.4, V6.5 |

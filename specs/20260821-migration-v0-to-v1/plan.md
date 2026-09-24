@@ -123,18 +123,25 @@ flag is set; CE carries the matching annotation.
 **Depends on:** Phase 1. **Exit:** N CatalogSources → N serving ClusterCatalogs; operator scan
 then reports catalog-available.
 
-## Phase 6 — Install-namespace change ⚠️ blocked — [OPRUN-4721](https://redhat.atlassian.net/browse/OPRUN-4721)
-**Goal:** Support `--install-namespace` differing from the Subscription namespace (R6, R9).
-- **Blocked on** [OCPSTRAT-2690](https://redhat.atlassian.net/browse/OCPSTRAT-2690) /
-  [OPRUN-4505](https://redhat.atlassian.net/browse/OPRUN-4505) /
-  [PR #2825](https://github.com/operator-framework/operator-controller/pull/2825) (making
-  `spec.namespace` optional / COS-managed). Once it lands, the tool may omit `spec.namespace`.
-- Move namespace-scoped resources to the new namespace; copy PSA (`pod-security.kubernetes.io/*`)
-  and `security.openshift.io/scc.podSecurityLabelSync` labels; delete the old namespace only with
-  `--acknowledge-namespace-delete`.
+## Phase 6 — Install-namespace change 🚧 in progress — [OPRUN-4721](https://redhat.atlassian.net/browse/OPRUN-4721)
+**Goal:** Support `--install-namespace` differing from the Subscription namespace (R6, R9), then
+an explicitly selected OLMv1 system-managed namespace mode when its controller API is released.
+- Create or update the target namespace before removing OLMv0 management, copying PSA
+  (`pod-security.kubernetes.io/*`) and `security.openshift.io/scc.podSecurityLabelSync` labels.
+- Move collected namespace-scoped resources to the target namespace in the migration COS and,
+  after the target CE is installed, remove their source copies.
+- Delete the source namespace only with `--acknowledge-namespace-delete`; retain it by default.
+- **Remaining requirement gap:** introduce an explicit
+  `--system-managed-install-namespace` mode after operator-controller ships a supported API for
+  an omitted `spec.namespace`. It must capability-gate the mode, omit the field, and let OLMv1
+  resolve the namespace from bundle metadata. It must reject unsupported controllers (including
+  released versions that require the field), not silently fall back to another namespace. Add a
+  dedicated E2E scenario before declaring this mode complete.
 
-**Depends on:** Phases 1, 3 + PR #2825. **Exit:** resources land in the new namespace with PSA/SCC
-labels copied; old namespace deleted only when acknowledged.
+**Depends on:** Phases 1 and 3. **Exit:** resources land in the new namespace with PSA/SCC
+labels copied; old namespace deleted only when acknowledged. The system-managed mode is complete
+only when its supported controller prerequisite, capability rejection, and dedicated E2E scenario
+are in place.
 
 ## Phase 7 — OLMv1 APIService renderer support *(cross-repo, operator-controller)* — [OPRUN-4723](https://redhat.atlassian.net/browse/OPRUN-4723)
 **Goal:** Add `apiregistration.k8s.io` support to the OLMv1 registry+v1 bundle renderer as
@@ -173,7 +180,7 @@ E2E scenarios in VALIDATION pass in CI.
 Prerequisite (OPRUN-4716, operator-controller) ──┐  (parallel; needed before Phase 8)
                                                   ▼
 Phase 1 (4717) ──► Phase 2 (4718) ──► Phase 3 (4719) ──► Phase 4 (4720) ──► Phase 8
-   │                  └─────────────────────────────────► Phase 6 (4721) BLOCKED
+   │                  └─────────────────────────────────► Phase 6 (4721)
    └──► Phase 5 (4722, parallel) ──────────────────────────────────────────► Phase 8
 
 Phase 7 (4723, operator-controller, parallel) ──► removes C3 from Phase 3 (operators with APIService definitions become Eligible)
