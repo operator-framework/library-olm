@@ -51,6 +51,11 @@ type Options struct {
 	// no other Subscriptions remain in the namespace (R6).
 	DeleteOperatorGroup bool
 
+	// AcknowledgeNamespaceDelete permits deleting the Subscription namespace after
+	// a cross-namespace migration. The namespace may contain unrelated resources,
+	// so deletion is never the default.
+	AcknowledgeNamespaceDelete bool
+
 	// SystemNamespace is the namespace where COS ref Secrets are created (R2.4).
 	// When empty, migration discovers the operator-controller Deployment namespace.
 	// It is an override for unusual installations, not a production default.
