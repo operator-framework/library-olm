@@ -131,17 +131,16 @@ an explicitly selected OLMv1 system-managed namespace mode when its controller A
 - Move collected namespace-scoped resources to the target namespace in the migration COS and,
   after the target CE is installed, remove their source copies.
 - Delete the source namespace only with `--acknowledge-namespace-delete`; retain it by default.
-- **Remaining requirement gap:** introduce an explicit
-  `--system-managed-install-namespace` mode after operator-controller ships a supported API for
-  an omitted `spec.namespace`. It must capability-gate the mode, omit the field, and let OLMv1
-  resolve the namespace from bundle metadata. It must reject unsupported controllers (including
-  released versions that require the field), not silently fall back to another namespace. Add a
-  dedicated E2E scenario before declaring this mode complete.
+- `--system-managed-install-namespace` uses operator-controller `v1.12.0`'s experimental
+  optional-namespace CRD. It capability-gates the mode and omits the CE field. Migration
+  prepares the bundle-metadata namespace before its COS, after which OLMv1 manages it. Unit tests
+  reject CRDs that require the field; the dedicated fixture E2E verifies the omitted field,
+  target namespace, and source-resource cleanup.
 
 **Depends on:** Phases 1 and 3. **Exit:** resources land in the new namespace with PSA/SCC
-labels copied; old namespace deleted only when acknowledged. The system-managed mode is complete
-only when its supported controller prerequisite, capability rejection, and dedicated E2E scenario
-are in place.
+labels copied; old namespace deleted only when acknowledged. The system-managed mode requires
+the experimental optional-namespace controller profile, capability rejection, and its dedicated
+E2E scenario.
 
 ## Phase 7 — OLMv1 APIService renderer support *(cross-repo, operator-controller)* — [OPRUN-4723](https://redhat.atlassian.net/browse/OPRUN-4723)
 **Goal:** Add `apiregistration.k8s.io` support to the OLMv1 registry+v1 bundle renderer as

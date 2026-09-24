@@ -27,6 +27,7 @@ import (
 
 const (
 	clusterObjectSetCRDName      = "clusterobjectsets.olm.operatorframework.io"
+	clusterExtensionCRDName      = "clusterextensions.olm.operatorframework.io"
 	operatorControllerDeployName = "operator-controller-controller-manager"
 )
 
@@ -112,7 +113,15 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
-	if err := m.PrepareInstallNamespace(ctx, opts); err != nil {
+	resourceOpts := opts
+	resourceOpts.InstallNamespace, err = opts.EffectiveInstallNamespace(info.PackageName, csv.GetAnnotations())
+	if err != nil {
+		return err
+	}
+	// The COS is applied before the CE. Ensure the metadata-derived namespace
+	// exists now so its namespaced objects can succeed; the CE itself still
+	// omits spec.namespace and lets OLMv1 manage that namespace thereafter.
+	if err := m.PrepareInstallNamespace(ctx, resourceOpts); err != nil {
 		return err
 	}
 
@@ -154,7 +163,7 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	for i := range objects {
 		sourceObjects[i] = *objects[i].DeepCopy()
 	}
-	RewriteInstallNamespace(objects, opts.SubscriptionNamespace, opts.InstallNamespace)
+	RewriteInstallNamespace(objects, opts.SubscriptionNamespace, resourceOpts.InstallNamespace)
 	info.CollectedObjects = objects
 
 	// R9: warn about TLS certificate pivot. OLMv0 manages certs directly via its own
@@ -164,7 +173,7 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	m.progress("Note: TLS certificate management will transfer from OLMv0 to cert-manager/service-ca; " +
 		"expect pod restarts while new cert secrets are provisioned")
 
-	restoreSourceDeployments, err := m.ScaleSourceDeployments(ctx, sourceObjects, opts)
+	restoreSourceDeployments, err := m.ScaleSourceDeployments(ctx, sourceObjects, resourceOpts)
 	if err != nil {
 		recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
@@ -185,7 +194,7 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 		}
 		return err
 	}
-	if err := m.DeleteSourceNamespaceResources(ctx, sourceObjects, opts); err != nil {
+	if err := m.DeleteSourceNamespaceResources(ctx, sourceObjects, resourceOpts); err != nil {
 		return err
 	}
 
@@ -210,6 +219,17 @@ func (m *Migrator) PrepareClusterObjectSet(ctx context.Context, opts Options) (O
 	if err := m.ensureClusterObjectSetCRD(ctx); err != nil {
 		return opts, err
 	}
+	if opts.SystemManagedInstallNamespace {
+		if opts.InstallNamespace != "" {
+			return opts, fmt.Errorf("system-managed install namespace cannot be combined with an explicit install namespace")
+		}
+		if opts.AcknowledgeNamespaceDelete {
+			return opts, fmt.Errorf("--acknowledge-namespace-delete is not supported with a system-managed install namespace")
+		}
+		if err := m.ensureSystemManagedNamespaceSupport(ctx); err != nil {
+			return opts, err
+		}
+	}
 	if opts.SystemNamespace != "" {
 		return opts, nil
 	}
@@ -219,6 +239,46 @@ func (m *Migrator) PrepareClusterObjectSet(ctx context.Context, opts Options) (O
 	}
 	opts.SystemNamespace = namespace
 	return opts, nil
+}
+
+// ensureSystemManagedNamespaceSupport verifies that the installed
+// ClusterExtension CRD accepts an omitted spec.namespace. The optional field
+// is currently an operator-controller experimental API, so reject the mode
+// before any OLMv0 resources are changed when the standard CRD is installed.
+func (m *Migrator) ensureSystemManagedNamespaceSupport(ctx context.Context) error {
+	var crd apiextensionsv1.CustomResourceDefinition
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: clusterExtensionCRDName}, &crd); err != nil {
+		return fmt.Errorf("system-managed install namespace requires ClusterExtension CRD %q with optional spec.namespace: %w", clusterExtensionCRDName, err)
+	}
+	established := false
+	for _, condition := range crd.Status.Conditions {
+		if condition.Type == apiextensionsv1.Established && condition.Status == apiextensionsv1.ConditionTrue {
+			established = true
+			break
+		}
+	}
+	if !established {
+		return fmt.Errorf("system-managed install namespace requires established ClusterExtension CRD %q", clusterExtensionCRDName)
+	}
+	for _, version := range crd.Spec.Versions {
+		if !version.Served || version.Schema == nil || version.Schema.OpenAPIV3Schema == nil {
+			continue
+		}
+		spec, ok := version.Schema.OpenAPIV3Schema.Properties["spec"]
+		if !ok {
+			continue
+		}
+		if _, ok := spec.Properties["namespace"]; !ok {
+			continue
+		}
+		for _, required := range spec.Required {
+			if required == "namespace" {
+				return fmt.Errorf("system-managed install namespace requires an operator-controller experimental CRD with optional spec.namespace; the installed ClusterExtension CRD requires it")
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("system-managed install namespace requires a ClusterExtension CRD schema that declares optional spec.namespace")
 }
 
 func (m *Migrator) ensureClusterObjectSetCRD(ctx context.Context) error {
@@ -722,7 +782,6 @@ func (m *Migrator) createClusterExtension(ctx context.Context, opts Options, inf
 			Annotations: annotations,
 		},
 		Spec: ocv1.ClusterExtensionSpec{
-			Namespace: opts.InstallNamespace,
 			// ServiceAccount is deliberately not set — deprecated and ignored in OLMv1.
 			Source: ocv1.SourceConfig{
 				SourceType: ocv1.SourceTypeCatalog,
@@ -731,6 +790,9 @@ func (m *Migrator) createClusterExtension(ctx context.Context, opts Options, inf
 				},
 			},
 		},
+	}
+	if !opts.SystemManagedInstallNamespace {
+		ce.Spec.Namespace = opts.InstallNamespace
 	}
 
 	// Version pinning: Manual approval → pin to installed version; Automatic → channel-based upgrades.
