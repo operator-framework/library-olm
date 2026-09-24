@@ -103,7 +103,7 @@ jobs:
 
   coverage:
     name: migration total coverage
-    needs: [unit-coverage, fixture, live]
+    needs: [unit-coverage, fixture, cos-supersession, live]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -121,6 +121,11 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: migration-fixture-e2e-artifacts
+          path: artifacts/e2e
+      - name: Download COS supersession E2E coverage
+        uses: actions/download-artifact@v8
+        with:
+          name: migration-cos-supersession-e2e-artifacts
           path: artifacts/e2e
       - name: Download live E2E coverage
         uses: actions/download-artifact@v8

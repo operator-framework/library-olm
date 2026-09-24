@@ -109,13 +109,14 @@ coverage while still showing which migration paths the E2E suite executes.
 
 ## CI rollout
 
-1. The `migration-test` workflow runs unit coverage, fixture E2E, live-operator E2E, and the
-   in-cluster Job E2E independently. The first three provide CLI coverage; a fifth job merges
-   their coverage profiles and displays the total report.
-2. Run all five jobs for pull requests, merge queues, and pushes to `main`. The fixture,
-   live-operator, and in-cluster Job suites are required merge gates. Preserve diagnostics and
-   CLI coverage artifacts for the coverage-producing fixture and live-operator suites; the
-   focused in-cluster Job check uploads neither.
+1. The `migration-test` workflow runs unit coverage, fixture E2E, live-operator E2E, COS
+   supersession E2E, and the in-cluster Job E2E independently. Unit, fixture, and live tests
+   collect CLI coverage; COS supersession collects direct `migration/...` package coverage. A
+   final job merges all of those profiles and displays the total report.
+2. Run all jobs for pull requests, merge queues, and pushes to `main`. The fixture,
+   live-operator, COS-supersession, and in-cluster Job suites are required merge gates.
+   Preserve diagnostics and coverage artifacts for every coverage-producing suite; the focused
+   in-cluster Job check uploads neither.
 3. Retry only provisioning/image-pull failures once; never retry a failed assertion automatically.
 
 ## Run order
