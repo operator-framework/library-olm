@@ -22,6 +22,7 @@ var (
 	convertDeleteOG           bool
 	convertCEName             string
 	convertInstallNs          string
+	convertSystemManagedNs    bool
 	convertAckNamespaceDelete bool
 
 	// Acknowledgment flags
@@ -61,6 +62,7 @@ func init() {
 	convertCmd.Flags().BoolVar(&convertDeleteOG, "delete-operatorgroup", false, "Delete the OperatorGroup when no other Subscriptions remain")
 	convertCmd.Flags().StringVar(&convertCEName, "ce-name", "", "ClusterExtension name (default: Subscription name)")
 	convertCmd.Flags().StringVar(&convertInstallNs, "install-namespace", "", "Install namespace (default: Subscription namespace)")
+	convertCmd.Flags().BoolVar(&convertSystemManagedNs, "system-managed-install-namespace", false, "Omit ClusterExtension namespace and let a compatible OLMv1 controller use bundle metadata")
 	convertCmd.Flags().BoolVar(&convertAckNamespaceDelete, "acknowledge-namespace-delete", false, "Delete the source namespace after a cross-namespace migration")
 	convertCmd.Flags().BoolVar(&convertAckWatchScope, "acknowledge-watch-scope-change", false, "Acknowledge that the operator will run AllNamespaces (was scoped)")
 	convertCmd.Flags().BoolVar(&convertAckOpCond, "acknowledge-operator-condition", false, "Acknowledge active OperatorCondition usage")
@@ -76,8 +78,8 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	if !convertAll && len(args) == 0 {
 		return fmt.Errorf("specify an operator name or --all")
 	}
-	if convertAll && (convertInstallNs != "" || convertAckNamespaceDelete) {
-		return fmt.Errorf("--install-namespace and --acknowledge-namespace-delete require a single operator")
+	if convertAll && (convertInstallNs != "" || convertSystemManagedNs || convertAckNamespaceDelete) {
+		return fmt.Errorf("--install-namespace, --system-managed-install-namespace, and --acknowledge-namespace-delete require a single operator")
 	}
 	if convertAll && (convertNamespace != "" || cmd.Flags().Changed("namespace")) {
 		return fmt.Errorf("-n/--namespace cannot be combined with --all; --all scans every namespace")
@@ -133,6 +135,7 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 		SubscriptionNamespace:           convertNamespace,
 		ClusterExtensionName:            convertCEName,
 		InstallNamespace:                convertInstallNs,
+		SystemManagedInstallNamespace:   convertSystemManagedNs,
 		AcknowledgeNamespaceDelete:      convertAckNamespaceDelete,
 		BackupDirectory:                 convertBackupDir,
 		DeleteOperatorGroup:             convertDeleteOG,
@@ -143,6 +146,12 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 		AcknowledgeNotSteadyState:       convertAckNotSteady,
 	}
 	opts.ApplyDefaults()
+	if opts.SystemManagedInstallNamespace && convertInstallNs != "" {
+		return fmt.Errorf("--system-managed-install-namespace cannot be combined with --install-namespace")
+	}
+	if opts.SystemManagedInstallNamespace && opts.AcknowledgeNamespaceDelete {
+		return fmt.Errorf("--system-managed-install-namespace cannot be combined with --acknowledge-namespace-delete")
+	}
 	if opts.AcknowledgeNamespaceDelete && opts.InstallNamespace == opts.SubscriptionNamespace {
 		return fmt.Errorf("--acknowledge-namespace-delete requires --install-namespace to differ from -n/--namespace")
 	}
@@ -169,6 +178,11 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	detail("Version:", bundleInfo.Version)
 	detail("Channel:", valueOrDefault(bundleInfo.Channel, "(default)"))
 	success("Operator profiled")
+	resourceOpts := opts
+	resourceOpts.InstallNamespace, err = opts.EffectiveInstallNamespace(bundleInfo.PackageName, csv.GetAnnotations())
+	if err != nil {
+		return err
+	}
 
 	stepHeader(2, "Checking readiness and compatibility")
 	sectionHeader("Readiness")
@@ -211,6 +225,7 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	if err != nil {
 		return fmt.Errorf("ClusterObjectSet prerequisite check failed: %w", err)
 	}
+	resourceOpts.SystemNamespace = opts.SystemNamespace
 	success(fmt.Sprintf("ClusterObjectSet API established; using operator-controller namespace %s", opts.SystemNamespace))
 	stepHeader(4, "Collecting operator resources")
 	objects, err := m.CollectResources(ctx, opts, csv, ip, bundleInfo.PackageName)
@@ -221,8 +236,8 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	for i := range objects {
 		sourceObjects[i] = *objects[i].DeepCopy()
 	}
-	migration.RewriteInstallNamespace(objects, opts.SubscriptionNamespace, opts.InstallNamespace)
-	if err := m.EnsureTargetNamespaceResourcesAbsent(ctx, sourceObjects, objects, opts); err != nil {
+	migration.RewriteInstallNamespace(objects, opts.SubscriptionNamespace, resourceOpts.InstallNamespace)
+	if err := m.EnsureTargetNamespaceResourcesAbsent(ctx, sourceObjects, objects, resourceOpts); err != nil {
 		return fmt.Errorf("target namespace resource preflight failed: %w", err)
 	}
 	bundleInfo.CollectedObjects = objects
@@ -231,7 +246,7 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 		kindCounts[obj.GetKind()]++
 	}
 	success(fmt.Sprintf("Found %d resources across %d kinds", len(objects), len(kindCounts)))
-	if err := m.PrepareInstallNamespace(ctx, opts); err != nil {
+	if err := m.PrepareInstallNamespace(ctx, resourceOpts); err != nil {
 		return fmt.Errorf("install namespace preparation failed: %w", err)
 	}
 
@@ -267,7 +282,7 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 		return fmt.Errorf("preparation failed: %w", err)
 	}
 	success("OLMv0 management removed")
-	restoreSourceDeployments, err := m.ScaleSourceDeployments(ctx, sourceObjects, opts)
+	restoreSourceDeployments, err := m.ScaleSourceDeployments(ctx, sourceObjects, resourceOpts)
 	if err != nil {
 		recoveryCtx, cancel := migration.NewRecoveryContext(ctx)
 		defer cancel()
@@ -276,7 +291,7 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 		}
 		return fmt.Errorf("scale source Deployments failed (recovered): %w", err)
 	}
-	if opts.InstallNamespace != opts.SubscriptionNamespace {
+	if resourceOpts.InstallNamespace != opts.SubscriptionNamespace {
 		success("Source Deployments scaled to zero before target cutover")
 	}
 
@@ -299,7 +314,7 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	clearProgress()
 	success(fmt.Sprintf("ClusterObjectSet %s-1 reached Succeeded=True", opts.ClusterExtensionName))
 	success(fmt.Sprintf("ClusterExtension %s is Installed", opts.ClusterExtensionName))
-	if err := m.DeleteSourceNamespaceResources(ctx, sourceObjects, opts); err != nil {
+	if err := m.DeleteSourceNamespaceResources(ctx, sourceObjects, resourceOpts); err != nil {
 		return fmt.Errorf("delete source install resources: %w", err)
 	}
 
@@ -361,6 +376,18 @@ func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.
 	info.ResolvedCatalogName = catalogName
 	success(fmt.Sprintf("Selected ClusterCatalog: %s", catalogName))
 
+	resourceOpts := opts
+	if opts.SystemManagedInstallNamespace {
+		_, csv, _, getErr := m.GetCSVAndInstallPlan(ctx, opts)
+		if getErr != nil {
+			return fmt.Errorf("failed to profile operator for system-managed namespace: %w", getErr)
+		}
+		resourceOpts.InstallNamespace, getErr = opts.EffectiveInstallNamespace(info.PackageName, csv.GetAnnotations())
+		if getErr != nil {
+			return getErr
+		}
+	}
+
 	success(fmt.Sprintf("Package: %s  Version: %s  Channel: %s", info.PackageName, info.Version, valueOrDefault(info.Channel, "(default)")))
 	fmt.Printf("\n  Resources that would be created:\n")
 	detail("ClusterObjectSet:", fmt.Sprintf("%s-1 (wait for Succeeded=True before creating the ClusterExtension)", opts.ClusterExtensionName))
@@ -376,7 +403,11 @@ func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.
 
 	fmt.Printf("\n  ClusterExtension that would be created:\n")
 	detail("Name:", opts.ClusterExtensionName)
-	detail("Namespace:", opts.InstallNamespace)
+	if opts.SystemManagedInstallNamespace {
+		detail("Namespace:", fmt.Sprintf("(omitted; OLMv1 resolves %s from bundle metadata)", resourceOpts.InstallNamespace))
+	} else {
+		detail("Namespace:", opts.InstallNamespace)
+	}
 	detail("PackageName:", info.PackageName)
 	if info.ManualApproval {
 		detail("Version:", fmt.Sprintf("%s (pinned — manual approval)", info.Version))
@@ -387,7 +418,7 @@ func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.
 	detail("CollisionProtection:", "None")
 
 	fmt.Printf("\n  OLMv0 resources that would be deleted or changed:\n")
-	for _, line := range dryRunCleanupPlan(opts, info) {
+	for _, line := range dryRunCleanupPlan(opts, resourceOpts, info) {
 		info2(line)
 	}
 
@@ -404,7 +435,7 @@ func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.
 
 // dryRunCleanupPlan describes all OLMv0 cleanup actions performed by a normal
 // conversion. It intentionally calls no API: dry-run must remain non-mutating.
-func dryRunCleanupPlan(opts migration.Options, info *migration.MigrationInfo) []string {
+func dryRunCleanupPlan(opts, resourceOpts migration.Options, info *migration.MigrationInfo) []string {
 	lines := []string{
 		fmt.Sprintf("Delete Subscription %s/%s with orphan propagation (operator workloads remain).", opts.SubscriptionNamespace, opts.SubscriptionName),
 		fmt.Sprintf("Delete ClusterServiceVersion %s/%s with orphan propagation (operator workloads remain).", opts.SubscriptionNamespace, info.BundleName),
@@ -412,7 +443,7 @@ func dryRunCleanupPlan(opts migration.Options, info *migration.MigrationInfo) []
 		fmt.Sprintf("Delete OperatorCondition %s/%s if present.", opts.SubscriptionNamespace, info.BundleName),
 		fmt.Sprintf("Delete copied ClusterServiceVersions derived from %s if present, with orphan propagation.", info.BundleName),
 	}
-	deleteSourceNamespace := opts.AcknowledgeNamespaceDelete && opts.InstallNamespace != opts.SubscriptionNamespace
+	deleteSourceNamespace := opts.AcknowledgeNamespaceDelete && resourceOpts.InstallNamespace != opts.SubscriptionNamespace
 	if !deleteSourceNamespace {
 		lines = append(lines, "Retain InstallPlan resources; conversion does not delete them.")
 		if opts.DeleteOperatorGroup {
@@ -421,10 +452,14 @@ func dryRunCleanupPlan(opts migration.Options, info *migration.MigrationInfo) []
 			lines = append(lines, "Retain OperatorGroup(s); --delete-operatorgroup was not specified.")
 		}
 	}
-	if opts.InstallNamespace != opts.SubscriptionNamespace {
-		lines = append(lines,
-			fmt.Sprintf("Create or update install namespace %s with PSA/SCC labels copied from %s.", opts.InstallNamespace, opts.SubscriptionNamespace),
-			fmt.Sprintf("Move collected namespaced operator resources from %s to %s and delete their source copies after ClusterExtension installation.", opts.SubscriptionNamespace, opts.InstallNamespace))
+	if resourceOpts.InstallNamespace != opts.SubscriptionNamespace {
+		if opts.SystemManagedInstallNamespace {
+			lines = append(lines, fmt.Sprintf("Prepare install namespace %s from bundle metadata for the migration COS; ClusterExtension.spec.namespace is omitted and OLMv1 manages the namespace.", resourceOpts.InstallNamespace))
+		} else {
+			lines = append(lines,
+				fmt.Sprintf("Create or update install namespace %s with PSA/SCC labels copied from %s.", resourceOpts.InstallNamespace, opts.SubscriptionNamespace))
+		}
+		lines = append(lines, fmt.Sprintf("Move collected namespaced operator resources from %s to %s and delete their source copies after ClusterExtension installation.", opts.SubscriptionNamespace, resourceOpts.InstallNamespace))
 		if deleteSourceNamespace {
 			lines = append(lines, fmt.Sprintf("Delete source namespace %s after migration (--acknowledge-namespace-delete); this also removes any remaining InstallPlans and OperatorGroups.", opts.SubscriptionNamespace))
 		} else {
