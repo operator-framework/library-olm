@@ -72,6 +72,9 @@ public mutable catalog.
 | Validation IDs | Scenario | Required assertions |
 |---|---|---|
 | V1.1, V1.2, V1.3, V3.1–V3.7 | Baseline fixture migration | `check`, dry-run, COS `Succeeded=True` before CE creation, CE `Installed=True`, field mappings, CE backups/audit, Sub/CSV cleanup. |
+| V4.7 | Cross-namespace fixture migration | Target namespace is created with copied PSA/SCC labels; source Deployments are scaled to zero before target creation; CE and rendered Deployment use the target; collected source Deployment is removed while the source namespace remains. |
+| V4.7 | Acknowledged live namespace deletion | A real OLMv0 installation is converted with `--acknowledge-namespace-delete`; after CE installation in the target namespace, OLMv0 finalizes the CSV and the source namespace is deleted. |
+| V4.8 | System-managed namespace (requirement gap) | Deferred until a supported controller can accept an omitted CE namespace. Verify the explicit opt-in omits `spec.namespace` and uses the bundle-metadata namespace; verify unsupported controllers reject it before mutation. |
 | V1.4, V3.18 | Rollback | Refusal without acknowledgment for installed CE; CE/COS deletion and Subscription restoration with acknowledgment; on-disk backup files exist before deletion. |
 | V1.5, V4.1 | Conflict cleanup | CE stays; Subscription and OLMv0 artifacts are removed; shared OperatorGroup is retained. |
 | V1.6–V1.8, V2.10 | Batch and argument behavior | Four-section ordering; only Eligible converts; stop/continue behavior; a Subscription named `check` works. |
@@ -79,7 +82,6 @@ public mutable catalog.
 | V3.8–V3.11, V3.13–V3.17, V3.19 | Catalog migration | image, poll interval, priority, unsupported source, dedup/adoption, overflow, and deletion-reference behavior. |
 | V3.12, V4.2, V4.6 | Collection and adoption | Deployment config survives an OLMv1 upgrade, shared CRD adoption succeeds, and large payload uses Secrets. |
 | V5.1–V5.9 | Real-operator smoke | Bootstrap, install a pinned AllNamespaces operator, catalog migration, conversion, upgrade, rollback, and four-state batch scan. |
-| V4.7 | Namespace change | Deferred: Phase 6 is blocked. Add only when its upstream prerequisite lands. |
 
 ## Test implementation and coverage
 
@@ -152,6 +154,7 @@ controllers. It replays the committed OLMv0 snapshots.
 ```bash
 make migration/e2e-fixture-setup
 make migration/test-e2e-fixture-matrix
+make migration/test-e2e-cross-namespace
 E2E_CLUSTER_NAME=library-olm-fixture-e2e make migration/e2e-teardown
 ```
 
