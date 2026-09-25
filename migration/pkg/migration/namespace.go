@@ -349,3 +349,18 @@ func restoreSourceDeploymentReplicas(ctx context.Context, m *Migrator, originals
 	}
 	return errors.Join(errs...)
 }
+
+// DeleteSourceNamespace deletes the source namespace only when the caller has
+// explicitly acknowledged that destructive operation.
+func (m *Migrator) DeleteSourceNamespace(ctx context.Context, opts Options) error {
+	if !opts.AcknowledgeNamespaceDelete || opts.InstallNamespace == opts.SubscriptionNamespace {
+		return nil
+	}
+	source := &corev1.Namespace{}
+	source.Name = opts.SubscriptionNamespace
+	if err := m.Client.Delete(ctx, source); err != nil && client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("delete source namespace %q: %w", opts.SubscriptionNamespace, err)
+	}
+	m.progress(fmt.Sprintf("Requested deletion of source namespace %s", opts.SubscriptionNamespace))
+	return nil
+}

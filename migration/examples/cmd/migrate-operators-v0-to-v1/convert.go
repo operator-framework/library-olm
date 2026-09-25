@@ -14,14 +14,15 @@ import (
 )
 
 var (
-	convertNamespace     string
-	convertAll           bool
-	convertDryRun        bool
-	convertContinueOnErr bool
-	convertBackupDir     string
-	convertDeleteOG      bool
-	convertCEName        string
-	convertInstallNs     string
+	convertNamespace          string
+	convertAll                bool
+	convertDryRun             bool
+	convertContinueOnErr      bool
+	convertBackupDir          string
+	convertDeleteOG           bool
+	convertCEName             string
+	convertInstallNs          string
+	convertAckNamespaceDelete bool
 
 	// Acknowledgment flags
 	convertAckWatchScope bool
@@ -59,6 +60,7 @@ func init() {
 	convertCmd.Flags().BoolVar(&convertDeleteOG, "delete-operatorgroup", false, "Delete the OperatorGroup when no other Subscriptions remain")
 	convertCmd.Flags().StringVar(&convertCEName, "ce-name", "", "ClusterExtension name (default: Subscription name)")
 	convertCmd.Flags().StringVar(&convertInstallNs, "install-namespace", "", "Install namespace (default: Subscription namespace)")
+	convertCmd.Flags().BoolVar(&convertAckNamespaceDelete, "acknowledge-namespace-delete", false, "Delete the source namespace after a cross-namespace migration")
 	convertCmd.Flags().BoolVar(&convertAckWatchScope, "acknowledge-watch-scope-change", false, "Acknowledge that the operator will run AllNamespaces (was scoped)")
 	convertCmd.Flags().BoolVar(&convertAckOpCond, "acknowledge-operator-condition", false, "Acknowledge active OperatorCondition usage")
 	convertCmd.Flags().BoolVar(&convertAckOLMv0API, "acknowledge-olmv0-api-access", false, "Acknowledge OLMv0 API RBAC without OLMv1 equivalent")
@@ -73,8 +75,8 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	if !convertAll && len(args) == 0 {
 		return fmt.Errorf("specify an operator name or --all")
 	}
-	if convertAll && convertInstallNs != "" {
-		return fmt.Errorf("--install-namespace requires a single operator")
+	if convertAll && (convertInstallNs != "" || convertAckNamespaceDelete) {
+		return fmt.Errorf("--install-namespace and --acknowledge-namespace-delete require a single operator")
 	}
 
 	c, restCfg, err := newClient()
@@ -149,6 +151,7 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 		SubscriptionNamespace:           convertNamespace,
 		ClusterExtensionName:            convertCEName,
 		InstallNamespace:                convertInstallNs,
+		AcknowledgeNamespaceDelete:      convertAckNamespaceDelete,
 		BackupDirectory:                 convertBackupDir,
 		DeleteOperatorGroup:             convertDeleteOG,
 		AcknowledgeWatchScopeChange:     convertAckWatchScope,
@@ -158,6 +161,10 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 		AcknowledgeNotSteadyState:       convertAckNotSteady,
 	}
 	opts.ApplyDefaults()
+	if opts.AcknowledgeNamespaceDelete && opts.InstallNamespace == opts.SubscriptionNamespace {
+		return fmt.Errorf("--acknowledge-namespace-delete requires --install-namespace to differ from -n/--namespace")
+	}
+
 	if convertDryRun {
 		return runConvertDryRun(cmd, m, opts)
 	}
@@ -327,6 +334,10 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	if err := cleanupResult.Err(); err != nil {
 		return fmt.Errorf("clean up OLMv0 resources: %w", err)
 	}
+	if err := m.DeleteSourceNamespace(ctx, opts); err != nil {
+		return err
+	}
+
 	banner(fmt.Sprintf("Migration complete! %s is now managed by OLMv1", bundleInfo.PackageName))
 	fmt.Println()
 	return nil
@@ -411,7 +422,11 @@ func dryRunCleanupPlan(opts migration.Options, info *migration.MigrationInfo) []
 		lines = append(lines,
 			fmt.Sprintf("Create or update install namespace %s with PSA/SCC labels copied from %s.", opts.InstallNamespace, opts.SubscriptionNamespace),
 			fmt.Sprintf("Move collected namespaced operator resources from %s to %s and delete their source copies after ClusterExtension installation.", opts.SubscriptionNamespace, opts.InstallNamespace))
-		lines = append(lines, fmt.Sprintf("Retain source namespace %s.", opts.SubscriptionNamespace))
+		if opts.AcknowledgeNamespaceDelete {
+			lines = append(lines, fmt.Sprintf("Delete source namespace %s after migration (--acknowledge-namespace-delete).", opts.SubscriptionNamespace))
+		} else {
+			lines = append(lines, fmt.Sprintf("Retain source namespace %s; --acknowledge-namespace-delete was not specified.", opts.SubscriptionNamespace))
+		}
 	}
 	return lines
 }
