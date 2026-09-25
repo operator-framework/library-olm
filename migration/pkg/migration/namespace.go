@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -311,7 +312,10 @@ func (m *Migrator) ScaleSourceDeployments(ctx context.Context, objects []unstruc
 			original = &sourceDeploymentReplica{name: deployment.Name, namespace: deployment.Namespace, replicas: replicas}
 			return nil
 		}); err != nil {
-			if restoreErr := restoreSourceDeploymentReplicas(ctx, m, originals); restoreErr != nil {
+			restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			restoreErr := restoreSourceDeploymentReplicas(restoreCtx, m, originals)
+			cancel()
+			if restoreErr != nil {
 				return noRestore, fmt.Errorf("scale source Deployment %s/%s: %w; restore scaled Deployments: %v", obj.GetNamespace(), obj.GetName(), err, restoreErr)
 			}
 			return noRestore, fmt.Errorf("scale source Deployment %s/%s: %w", obj.GetNamespace(), obj.GetName(), err)

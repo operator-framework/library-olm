@@ -278,7 +278,12 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	success("OLMv0 management removed")
 	restoreSourceDeployments, err := m.ScaleSourceDeployments(ctx, sourceObjects, opts)
 	if err != nil {
-		return err
+		recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if recoverErr := m.RecoverFromBackup(recoveryCtx, opts, backup); recoverErr != nil {
+			return fmt.Errorf("scale source Deployments: %w; recovery also failed: %v", err, recoverErr)
+		}
+		return fmt.Errorf("scale source Deployments failed (recovered): %w", err)
 	}
 	if opts.InstallNamespace != opts.SubscriptionNamespace {
 		success("Source Deployments scaled to zero before target cutover")

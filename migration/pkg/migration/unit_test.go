@@ -43,6 +43,24 @@ type failingMigrationClient struct {
 	succeedCOS       bool
 }
 
+// canceledScaleClient cancels the caller's context while failing one scale-down
+// update. It verifies partial scale recovery uses an independent context.
+type canceledScaleClient struct {
+	client.Client
+	cancel context.CancelFunc
+}
+
+func (c canceledScaleClient) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	if deployment, ok := obj.(*appsv1.Deployment); ok && deployment.Name == "second" && deployment.Spec.Replicas != nil && *deployment.Spec.Replicas == 0 {
+		c.cancel()
+		return errors.New("simulated scale failure")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return c.Client.Update(ctx, obj, opts...)
+}
+
 func (c failingMigrationClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
 	if c.failCOSCreate {
 		if _, ok := obj.(*ocv1.ClusterObjectSet); ok {
@@ -576,6 +594,33 @@ func TestScaleSourceDeployments(t *testing.T) {
 	}
 }
 
+func TestScaleSourceDeploymentsRestoresAfterCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	firstReplicas, secondReplicas := int32(2), int32(1)
+	first := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "first", Namespace: "source"}, Spec: appsv1.DeploymentSpec{Replicas: &firstReplicas}}
+	second := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "second", Namespace: "source"}, Spec: appsv1.DeploymentSpec{Replicas: &secondReplicas}}
+	m := migrationTestClient(t, first, second)
+	m.Client = canceledScaleClient{Client: m.Client, cancel: cancel}
+	objects := []unstructured.Unstructured{
+		{Object: map[string]interface{}{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]interface{}{"name": "first", "namespace": "source"}}},
+		{Object: map[string]interface{}{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]interface{}{"name": "second", "namespace": "source"}}},
+	}
+
+	_, err := m.ScaleSourceDeployments(ctx, objects, Options{SubscriptionNamespace: "source", InstallNamespace: "target"})
+	if err == nil || !strings.Contains(err.Error(), "simulated scale failure") {
+		t.Fatalf("ScaleSourceDeployments() error = %v, want scale failure", err)
+	}
+
+	var restored appsv1.Deployment
+	if err := m.Client.Get(context.Background(), client.ObjectKey{Namespace: "source", Name: "first"}, &restored); err != nil {
+		t.Fatalf("get restored Deployment: %v", err)
+	}
+	if restored.Spec.Replicas == nil || *restored.Spec.Replicas != firstReplicas {
+		t.Fatalf("restored Deployment replicas = %v, want %d", restored.Spec.Replicas, firstReplicas)
+	}
+}
+
 func TestCleanupResultErr(t *testing.T) {
 	err := (&CleanupResult{Actions: []CleanupAction{{Description: "Delete OperatorCondition", Error: errors.New("forbidden")}}}).Err()
 	if err == nil || !strings.Contains(err.Error(), "Delete OperatorCondition: forbidden") {
@@ -920,7 +965,7 @@ func TestRollbackAndCleanupRejectInvalidInputWithoutMutation(t *testing.T) {
 	}
 }
 
-func TestCreateClusterObjectSetCleansTemporarySecretsOnCollision(t *testing.T) {
+func TestCreateClusterObjectSetPreservesTemporarySecretsOnCollision(t *testing.T) {
 	ctx := context.Background()
 	m := migrationTestClient(t, establishedClusterObjectSetCRD())
 	m.Client = failingMigrationClient{Client: m.Client, failCOSCreate: true}
@@ -937,11 +982,29 @@ func TestCreateClusterObjectSetCleansTemporarySecretsOnCollision(t *testing.T) {
 	if err := m.Client.List(ctx, &secrets, client.InNamespace("olmv1-system")); err != nil {
 		t.Fatal(err)
 	}
-	if len(secrets.Items) != 0 {
-		t.Fatalf("COS collision left temporary Secret(s): %#v", secrets.Items)
+	if len(secrets.Items) == 0 {
+		t.Fatal("COS collision removed temporary Secret(s) despite unknown ownership")
 	}
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: "sub-1"}, &ocv1.ClusterObjectSet{}); err == nil {
 		t.Fatal("COS collision created a ClusterObjectSet")
+	}
+}
+
+func TestCreateMigrationResourcesTreatsCOSCollisionAsPotentiallyActive(t *testing.T) {
+	ctx := context.Background()
+	m := migrationTestClient(t, establishedClusterObjectSetCRD())
+	m.Client = failingMigrationClient{Client: m.Client, failCOSCreate: true}
+	object := unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "operator-config", "namespace": "ns"},
+	}}
+	result, err := m.CreateMigrationResources(ctx, Options{SubscriptionName: "sub", SubscriptionNamespace: "ns", ClusterExtensionName: "sub", SystemNamespace: "olmv1-system"}, &MigrationInfo{
+		PackageName: "widgets", BundleName: "widgets.v1", Version: "1.0.0", CollectedObjects: []unstructured.Unstructured{object},
+	}, nil)
+	if err == nil || !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("CreateMigrationResources() error = %v, want COS collision", err)
+	}
+	if !result.TargetMayBeActive {
+		t.Fatal("CreateMigrationResources() TargetMayBeActive = false, want true after COS collision")
 	}
 }
 

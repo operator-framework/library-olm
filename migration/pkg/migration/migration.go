@@ -166,7 +166,12 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 
 	restoreSourceDeployments, err := m.ScaleSourceDeployments(ctx, sourceObjects, opts)
 	if err != nil {
-		return err
+		recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if recoverErr := m.RecoverFromBackup(recoveryCtx, opts, backup); recoverErr != nil {
+			return fmt.Errorf("scale source Deployments: %w; recovery also failed: %v", err, recoverErr)
+		}
+		return fmt.Errorf("scale source Deployments failed (recovered): %w", err)
 	}
 	result, err := m.CreateMigrationResources(ctx, opts, info, backup)
 	if err != nil {
@@ -539,6 +544,7 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 		secret.Annotations[migrationInvocationAnnotation] = invocationMarker
 		if err := m.Client.Create(ctx, secret); err != nil {
 			if apierrors.IsAlreadyExists(err) {
+				resources.ownershipUnknown = true
 				return resources, fmt.Errorf("failed to create COS ref Secret %s: %w", secret.Name, err)
 			}
 			if m.resolveCreatedObject(context.WithoutCancel(ctx), secret, invocationMarker) {
@@ -602,6 +608,7 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 	// and Secret cleanup unsafe.
 	if err := m.Client.Create(ctx, cosObj); err != nil {
 		if apierrors.IsAlreadyExists(err) {
+			resources.ownershipUnknown = true
 			return resources, failWithSecretCleanup(fmt.Errorf("failed to create ClusterObjectSet: %w", err))
 		}
 		if m.resolveCreatedObject(context.WithoutCancel(ctx), cosObj, invocationMarker) {
