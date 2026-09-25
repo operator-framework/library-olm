@@ -166,7 +166,7 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 
 	restoreSourceDeployments, err := m.ScaleSourceDeployments(ctx, sourceObjects, opts)
 	if err != nil {
-		recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		recoveryCtx, cancel := NewRecoveryContext(ctx)
 		defer cancel()
 		if recoverErr := m.RecoverFromBackup(recoveryCtx, opts, backup); recoverErr != nil {
 			return fmt.Errorf("scale source Deployments: %w; recovery also failed: %v", err, recoverErr)
@@ -323,6 +323,12 @@ func (m *Migrator) PrepareForMigration(ctx context.Context, opts Options, csv *o
 	return nil
 }
 
+// NewRecoveryContext returns a cancellation-independent context with enough
+// time to recreate and observe a restored Subscription.
+func NewRecoveryContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), subWaitTimeout+30*time.Second)
+}
+
 // RecoverFromBackup restores the Subscription from backup after a failed preparation.
 func (m *Migrator) RecoverFromBackup(ctx context.Context, opts Options, backup *Backup) error {
 	if backup == nil {
@@ -373,7 +379,7 @@ func (m *Migrator) RecoverBeforeCE(ctx context.Context, opts Options, backup *Ba
 // restore the OLMv0 Subscription automatically because orphaned target objects
 // can still be running while deletion propagates.
 func (m *Migrator) recoverCreatedMigrationResources(ctx context.Context, opts Options, backup *Backup, resources *createdMigrationResources) error {
-	recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), subWaitTimeout+30*time.Second)
+	recoveryCtx, cancel := NewRecoveryContext(ctx)
 	defer cancel()
 	if resources == nil {
 		return m.RecoverBeforeCE(recoveryCtx, opts, backup)
