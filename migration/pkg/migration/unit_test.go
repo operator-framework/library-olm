@@ -147,6 +147,30 @@ func establishedClusterObjectSetCRD() *apiextensionsv1.CustomResourceDefinition 
 	}
 }
 
+func establishedClusterExtensionCRD(namespaceRequired bool) *apiextensionsv1.CustomResourceDefinition {
+	spec := apiextensionsv1.JSONSchemaProps{Properties: map[string]apiextensionsv1.JSONSchemaProps{
+		"namespace": {Type: "string"},
+	}}
+	if namespaceRequired {
+		spec.Required = []string{"namespace"}
+	}
+	return &apiextensionsv1.CustomResourceDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: clusterExtensionCRDName},
+		Spec: apiextensionsv1.CustomResourceDefinitionSpec{Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{
+			Name:    "v1",
+			Served:  true,
+			Storage: true,
+			Schema: &apiextensionsv1.CustomResourceValidation{OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
+				Properties: map[string]apiextensionsv1.JSONSchemaProps{"spec": spec},
+			}},
+		}}},
+		Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{
+			Type:   apiextensionsv1.Established,
+			Status: apiextensionsv1.ConditionTrue,
+		}}},
+	}
+}
+
 func TestCheckReadiness(t *testing.T) {
 	sub, csv := healthySubscriptionFixtures()
 	m := migrationTestClient(t, sub, csv, establishedClusterObjectSetCRD())

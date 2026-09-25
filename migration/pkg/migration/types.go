@@ -32,6 +32,11 @@ type Options struct {
 	SubscriptionNamespace string
 	ClusterExtensionName  string
 	InstallNamespace      string
+	// SystemManagedInstallNamespace omits ClusterExtension.spec.namespace so an
+	// operator-controller that supports the experimental API can select and
+	// create the namespace declared by the bundle metadata. It is deliberately
+	// opt-in: an unset InstallNamespace otherwise means SubscriptionNamespace.
+	SystemManagedInstallNamespace bool
 
 	// BackupDirectory, when non-empty, writes OLM objects to disk before deletions (R2.6).
 	BackupDirectory string
@@ -67,7 +72,7 @@ func (o *Options) ApplyDefaults() {
 	if o.ClusterExtensionName == "" {
 		o.ClusterExtensionName = o.SubscriptionName
 	}
-	if o.InstallNamespace == "" {
+	if !o.SystemManagedInstallNamespace && o.InstallNamespace == "" {
 		o.InstallNamespace = o.SubscriptionNamespace
 	}
 }

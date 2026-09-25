@@ -93,13 +93,11 @@ allocation; an item is not considered complete merely because it is allocated he
 | V3.8–V3.11, V3.13–V3.17, V3.19 | Catalog unit tests plus fixture/live E2E | Basic CatalogSource migration covered; edge, adoption, overflow, and deletion-reference cases remain. |
 | V3.12, V4.1–V4.2, V4.6 | Unit plus live E2E | Planned; requires deployment upgrade, shared-resource, and large-payload scenarios. |
 | V5.1–V5.9 | Live kind E2E | Bootstrap, real installation, catalog conversion, check, and conversion are covered; upgrade, rollback, and four-state batch scenario remain. |
-| V4.7 | Deferred | Blocked with Phase 6 on install-namespace support. |
+| V4.7–V4.8 | Fixture and live E2E plus unit tests | Explicit cross-namespace and acknowledged source-namespace deletion are covered. System-managed namespace mode is covered against the experimental controller CRD, including omitted CE namespace and unsupported-CRD rejection. |
 | V6.* | Product / downstream qualification | Not a Kind CI gate; topology, architecture, and restricted-network coverage require separate environments. |
 
 ## 5. Features Not to Be Tested
 
-- Install-namespace migration (V4.7) is excluded until the Phase 6 upstream prerequisite makes
-  the OLMv1 install namespace optional/COS-managed.
 - APIService-based operator migration is excluded while C3 remains a hard block; it is revisited
   only after OPRUN-4723 has complete operator-controller renderer support.
 - Hosted Control Planes are out of scope. SNO, compact, multi-node, non-x86 architectures, and
@@ -120,7 +118,8 @@ catalog access. This target is independent of all E2E setup.
 ### 6.2 Fixture E2E tests
 
 Run `make migration/e2e-fixture-setup` followed by
-`make migration/test-e2e-fixture-matrix`, then tear down the fixture cluster. The fixture
+`make migration/test-e2e-fixture-matrix`, `make migration/test-e2e-cross-namespace`, and
+`make migration/test-e2e-system-managed-namespace`, then tear down the fixture cluster. The fixture
 environment has Kind, OLMv1, OLMv0 CRDs, and **no OLMv0 controllers**. It replays committed,
 sanitized OLMv0 installs and builds a local FBC from them. The TLS registry certificate comes
 from OLMv1's `olmv1-ca`; fixture tests therefore do not depend on a mutable Quay image/digest or

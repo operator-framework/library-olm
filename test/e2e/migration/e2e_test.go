@@ -559,6 +559,75 @@ func TestCrossNamespaceMigration(t *testing.T) {
 	}
 }
 
+// TestSystemManagedNamespaceMigration verifies the experimental OLMv1 mode in
+// which migration intentionally omits ClusterExtension.spec.namespace. The
+// controller manages the bundle's namespace; migration prepares the same
+// metadata-derived name before its COS relocates collected OLMv0 objects.
+func TestSystemManagedNamespaceMigration(t *testing.T) {
+	if os.Getenv("E2E_SYSTEM_MANAGED_NAMESPACE_TEST") != "true" {
+		t.Skip("set E2E_SYSTEM_MANAGED_NAMESPACE_TEST=true to run the system-managed namespace scenario")
+	}
+	if os.Getenv("E2E_SUITE") != "fixture" {
+		t.Fatal("system-managed namespace migration is exercised against the fixture suite")
+	}
+
+	namespace, subscription := os.Getenv("E2E_NAMESPACE"), os.Getenv("E2E_SUBSCRIPTION")
+	if namespace == "" || subscription == "" {
+		t.Fatal("E2E_NAMESPACE and E2E_SUBSCRIPTION are required")
+	}
+	// The fixture bundle supplies operatorframework.io/suggested-namespace,
+	// which has precedence over the package-derived default.
+	targetNamespace := subscription
+	t.Cleanup(func() {
+		collectArtifacts(t, namespace)
+		if t.Failed() {
+			collectArtifacts(t, targetNamespace)
+		}
+	})
+
+	run(t, "kubectl", "delete", "namespace/"+targetNamespace, "--ignore-not-found", "--wait=true")
+	sourceDeployments, err := output("kubectl", "get", "deployment", "-n", namespace, "-o", "name")
+	if err != nil || strings.TrimSpace(sourceDeployments) == "" {
+		t.Fatalf("list source operator deployments: %v\n%s", err, sourceDeployments)
+	}
+
+	run(t, binary(t, "migrate-catalogs-v0-to-v1"), "--kubeconfig", os.Getenv("KUBECONFIG"))
+	run(t, binary(t, "migrate-operators-v0-to-v1"), "convert", subscription,
+		"-n", namespace, "--system-managed-install-namespace", "--kubeconfig", os.Getenv("KUBECONFIG"))
+
+	run(t, "kubectl", "wait", "--for=jsonpath={.status.conditions[?(@.type=='Installed')].status}=True", "clusterextension/"+subscription, "--timeout=10m")
+	ceJSON, err := output("kubectl", "get", "clusterextension/"+subscription, "-o", "json")
+	if err != nil {
+		t.Fatalf("get ClusterExtension: %v\n%s", err, ceJSON)
+	}
+	var ce map[string]any
+	if err := json.Unmarshal([]byte(ceJSON), &ce); err != nil {
+		t.Fatalf("decode ClusterExtension: %v", err)
+	}
+	spec, ok := ce["spec"].(map[string]any)
+	if !ok {
+		t.Fatalf("ClusterExtension has no spec: %s", ceJSON)
+	}
+	if _, found := spec["namespace"]; found {
+		t.Fatalf("ClusterExtension unexpectedly sets spec.namespace: %s", ceJSON)
+	}
+
+	run(t, "kubectl", "get", "namespace/"+targetNamespace)
+	targetDeployments, err := output("kubectl", "get", "deployment", "-n", targetNamespace, "-o", "name")
+	if err != nil || strings.TrimSpace(targetDeployments) == "" {
+		t.Fatalf("list system-managed target deployments: %v\n%s", err, targetDeployments)
+	}
+	for _, deployment := range strings.Fields(sourceDeployments) {
+		if out, err := output("kubectl", "get", deployment, "-n", namespace); err == nil {
+			t.Fatalf("source operator resource %s remains after system-managed migration:\n%s", deployment, out)
+		}
+	}
+	deletionTimestamp, err := output("kubectl", "get", "namespace/"+namespace, "-o", "jsonpath={.metadata.deletionTimestamp}")
+	if err != nil || strings.TrimSpace(deletionTimestamp) != "" {
+		t.Fatalf("source namespace deletionTimestamp = %q, err=%v; want empty", deletionTimestamp, err)
+	}
+}
+
 // TestLiveCrossNamespaceDeletionMigration verifies the destructive namespace
 // path against OLMv0 itself. Unlike fixture tests, OLMv0 is present to release
 // the CSV cleanup finalizer, so Kubernetes can complete namespace deletion.

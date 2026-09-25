@@ -49,6 +49,8 @@ jobs:
         run: make migration/test-e2e-fixture-matrix
       - name: Verify cross-namespace fixture migration
         run: make migration/test-e2e-cross-namespace
+      - name: Verify system-managed namespace fixture migration
+        run: make migration/test-e2e-system-managed-namespace
       - name: Tear down fixture cluster
         if: always()
         run: E2E_CLUSTER_NAME=library-olm-fixture-e2e make migration/e2e-teardown
