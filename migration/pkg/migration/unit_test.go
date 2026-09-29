@@ -1393,3 +1393,25 @@ func TestRollbackRejectsMissingAndMalformedBackupsWithoutMutation(t *testing.T) 
 		})
 	}
 }
+
+func TestRollbackRejectsMissingSourceNamespaceWithoutMutation(t *testing.T) {
+	ctx := context.Background()
+	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{
+		Name: "sub",
+		Annotations: map[string]string{
+			MigratedFromSubscriptionAnnotation:    "deleted-source/sub",
+			MigrationSubscriptionBackupAnnotation: `{"name":"widgets","source":"catalog","sourceNamespace":"olm"}`,
+		},
+	}}
+	cos := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "sub-1"}}
+	m := migrationTestClient(t, ce, cos)
+	if err := m.Rollback(ctx, Options{ClusterExtensionName: "sub", AcknowledgeInstalled: true}); err == nil || !strings.Contains(err.Error(), "source namespace \"deleted-source\" must exist") {
+		t.Fatalf("Rollback() error = %v, want missing source namespace error", err)
+	}
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(ce), &ocv1.ClusterExtension{}); err != nil {
+		t.Fatalf("rollback deleted ClusterExtension before source namespace preflight: %v", err)
+	}
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(cos), &ocv1.ClusterObjectSet{}); err != nil {
+		t.Fatalf("rollback deleted ClusterObjectSet before source namespace preflight: %v", err)
+	}
+}

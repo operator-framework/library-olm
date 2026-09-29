@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -365,6 +366,10 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 	ns, name, err := splitSubRef(subRef)
 	if err != nil {
 		return fmt.Errorf("invalid migrated-from-subscription annotation %q: %w", subRef, err)
+	}
+	var sourceNamespace corev1.Namespace
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: ns}, &sourceNamespace); err != nil {
+		return fmt.Errorf("source namespace %q must exist before rollback can restore Subscription: %w", ns, err)
 	}
 
 	// Delete CE (orphan cascade — preserves operator workloads)
