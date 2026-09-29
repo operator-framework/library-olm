@@ -212,14 +212,16 @@ func (m *Migrator) PrepareClusterObjectSet(ctx context.Context, opts Options) (O
 	if err := m.ensureClusterObjectSetCRD(ctx); err != nil {
 		return opts, err
 	}
-	if opts.SystemNamespace != "" {
-		return opts, nil
+	if opts.SystemNamespace == "" {
+		namespace, err := m.operatorControllerNamespace(ctx)
+		if err != nil {
+			return opts, err
+		}
+		opts.SystemNamespace = namespace
 	}
-	namespace, err := m.operatorControllerNamespace(ctx)
-	if err != nil {
-		return opts, err
+	if opts.AcknowledgeNamespaceDelete && opts.InstallNamespace != opts.SubscriptionNamespace && opts.SystemNamespace == opts.SubscriptionNamespace {
+		return opts, fmt.Errorf("cannot delete source namespace %q: it is the operator-controller namespace used for ClusterObjectSet Secrets", opts.SubscriptionNamespace)
 	}
-	opts.SystemNamespace = namespace
 	return opts, nil
 }
 

@@ -413,19 +413,22 @@ func dryRunCleanupPlan(opts migration.Options, info *migration.MigrationInfo) []
 		fmt.Sprintf("Delete Operator CR %s.%s.", info.PackageName, opts.SubscriptionNamespace),
 		fmt.Sprintf("Delete OperatorCondition %s/%s if present.", opts.SubscriptionNamespace, info.BundleName),
 		fmt.Sprintf("Delete copied ClusterServiceVersions derived from %s if present, with orphan propagation.", info.BundleName),
-		"Retain InstallPlan resources; conversion does not delete them.",
 	}
-	if opts.DeleteOperatorGroup {
-		lines = append(lines, "Delete OperatorGroup(s) only when no Subscriptions remain; strip OLM ownership labels from their aggregation ClusterRoles first.")
-	} else {
-		lines = append(lines, "Retain OperatorGroup(s); --delete-operatorgroup was not specified.")
+	deleteSourceNamespace := opts.AcknowledgeNamespaceDelete && opts.InstallNamespace != opts.SubscriptionNamespace
+	if !deleteSourceNamespace {
+		lines = append(lines, "Retain InstallPlan resources; conversion does not delete them.")
+		if opts.DeleteOperatorGroup {
+			lines = append(lines, "Delete OperatorGroup(s) only when no Subscriptions remain; strip OLM ownership labels from their aggregation ClusterRoles first.")
+		} else {
+			lines = append(lines, "Retain OperatorGroup(s); --delete-operatorgroup was not specified.")
+		}
 	}
 	if opts.InstallNamespace != opts.SubscriptionNamespace {
 		lines = append(lines,
 			fmt.Sprintf("Create or update install namespace %s with PSA/SCC labels copied from %s.", opts.InstallNamespace, opts.SubscriptionNamespace),
 			fmt.Sprintf("Move collected namespaced operator resources from %s to %s and delete their source copies after ClusterExtension installation.", opts.SubscriptionNamespace, opts.InstallNamespace))
-		if opts.AcknowledgeNamespaceDelete {
-			lines = append(lines, fmt.Sprintf("Delete source namespace %s after migration (--acknowledge-namespace-delete).", opts.SubscriptionNamespace))
+		if deleteSourceNamespace {
+			lines = append(lines, fmt.Sprintf("Delete source namespace %s after migration (--acknowledge-namespace-delete); this also removes any remaining InstallPlans and OperatorGroups.", opts.SubscriptionNamespace))
 		} else {
 			lines = append(lines, fmt.Sprintf("Retain source namespace %s; --acknowledge-namespace-delete was not specified.", opts.SubscriptionNamespace))
 		}

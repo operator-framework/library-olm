@@ -764,6 +764,39 @@ func TestPrepareClusterObjectSetRejectsExistingClusterExtension(t *testing.T) {
 	}
 }
 
+func TestPrepareClusterObjectSetRejectsDeletingOperatorControllerNamespace(t *testing.T) {
+	establishedCRD := &apiextensionsv1.CustomResourceDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
+		Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{
+			Type:   apiextensionsv1.Established,
+			Status: apiextensionsv1.ConditionTrue,
+		}}},
+	}
+	controller := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Name:      operatorControllerDeployName,
+		Namespace: "operator-controller",
+		Labels:    map[string]string{"app.kubernetes.io/name": "operator-controller"},
+	}}
+	for name, opts := range map[string]Options{
+		"configured namespace": {
+			SubscriptionName: "sub", SubscriptionNamespace: "operator-controller", InstallNamespace: "target",
+			SystemNamespace: "operator-controller", AcknowledgeNamespaceDelete: true,
+		},
+		"discovered namespace": {
+			SubscriptionName: "sub", SubscriptionNamespace: "operator-controller", InstallNamespace: "target",
+			AcknowledgeNamespaceDelete: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := migrationTestClient(t, establishedCRD, controller)
+			_, err := m.PrepareClusterObjectSet(context.Background(), opts)
+			if err == nil || !strings.Contains(err.Error(), "cannot delete source namespace \"operator-controller\"") {
+				t.Fatalf("PrepareClusterObjectSet() error = %v, want source operator-controller namespace deletion rejection", err)
+			}
+		})
+	}
+}
+
 func TestPrepareClusterObjectSetRequiresEstablishedCRD(t *testing.T) {
 	m := migrationTestClient(t)
 	if _, err := m.PrepareClusterObjectSet(context.Background(), Options{}); err == nil || !strings.Contains(err.Error(), clusterObjectSetCRDName) {

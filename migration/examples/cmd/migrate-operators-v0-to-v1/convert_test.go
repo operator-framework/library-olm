@@ -60,7 +60,10 @@ func TestDryRunCleanupPlanNamespaceChange(t *testing.T) {
 
 	opts.AcknowledgeNamespaceDelete = true
 	plan = strings.Join(dryRunCleanupPlan(opts, info), "\n")
-	if !strings.Contains(plan, "Delete source namespace operators after migration (--acknowledge-namespace-delete).") {
+	if !strings.Contains(plan, "Delete source namespace operators after migration (--acknowledge-namespace-delete); this also removes any remaining InstallPlans and OperatorGroups.") {
 		t.Fatalf("dry-run cleanup plan does not disclose source deletion:\n%s", plan)
+	}
+	if strings.Contains(plan, "Retain InstallPlan resources") || strings.Contains(plan, "Retain OperatorGroup(s)") {
+		t.Fatalf("dry-run cleanup plan incorrectly retains resources removed with the source namespace:\n%s", plan)
 	}
 }
