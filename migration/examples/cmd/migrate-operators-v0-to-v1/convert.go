@@ -223,10 +223,6 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 		return fmt.Errorf("ClusterObjectSet prerequisite check failed: %w", err)
 	}
 	success(fmt.Sprintf("ClusterObjectSet API established; using operator-controller namespace %s", opts.SystemNamespace))
-	if err := m.PrepareInstallNamespace(ctx, opts); err != nil {
-		return fmt.Errorf("install namespace preparation failed: %w", err)
-	}
-
 	stepHeader(4, "Collecting operator resources")
 	objects, err := m.CollectResources(ctx, opts, csv, ip, bundleInfo.PackageName)
 	if err != nil {
@@ -237,12 +233,18 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 		sourceObjects[i] = *objects[i].DeepCopy()
 	}
 	migration.RewriteInstallNamespace(objects, opts.SubscriptionNamespace, opts.InstallNamespace)
+	if err := m.EnsureTargetNamespaceResourcesAbsent(ctx, sourceObjects, objects, opts); err != nil {
+		return fmt.Errorf("target namespace resource preflight failed: %w", err)
+	}
 	bundleInfo.CollectedObjects = objects
 	kindCounts := make(map[string]int)
 	for _, obj := range objects {
 		kindCounts[obj.GetKind()]++
 	}
 	success(fmt.Sprintf("Found %d resources across %d kinds", len(objects), len(kindCounts)))
+	if err := m.PrepareInstallNamespace(ctx, opts); err != nil {
+		return fmt.Errorf("install namespace preparation failed: %w", err)
+	}
 
 	stepHeader(5, "Backing up resources")
 	backup, err := m.BackupResources(ctx, opts, csv, ip)

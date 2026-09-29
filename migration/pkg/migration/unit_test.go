@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -79,7 +80,10 @@ func (c failingMigrationClient) Create(ctx context.Context, obj client.Object, o
 	}
 	if c.succeedCOS {
 		if cos, ok := obj.(*ocv1.ClusterObjectSet); ok {
-			cos.Status.Conditions = []metav1.Condition{{Type: ocv1.ClusterObjectSetTypeSucceeded, Status: metav1.ConditionTrue}}
+			cos.Status.Conditions = []metav1.Condition{
+				{Type: ocv1.ClusterObjectSetTypeSucceeded, Status: metav1.ConditionTrue},
+				{Type: ocv1.ClusterObjectSetTypeAvailable, Status: metav1.ConditionTrue},
+			}
 		}
 	}
 	return c.Client.Create(ctx, obj, opts...)
@@ -564,6 +568,49 @@ func TestPrepareInstallNamespaceRejectsUnknownPSADefault(t *testing.T) {
 	}
 }
 
+func TestPrepareInstallNamespaceRejectsDifferentPSAEnforceVersion(t *testing.T) {
+	ctx := context.Background()
+	source := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "source", Labels: map[string]string{
+		"pod-security.kubernetes.io/enforce":         "baseline",
+		"pod-security.kubernetes.io/enforce-version": "v1.33",
+	}}}
+	target := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "target", Labels: map[string]string{
+		"pod-security.kubernetes.io/enforce":         "baseline",
+		"pod-security.kubernetes.io/enforce-version": "v1.34",
+	}}}
+	m := migrationTestClient(t, source, target)
+	if err := m.PrepareInstallNamespace(ctx, Options{SubscriptionNamespace: "source", InstallNamespace: "target"}); err == nil {
+		t.Fatal("PrepareInstallNamespace() unexpectedly replaced target PSA policy version")
+	}
+	var unchanged corev1.Namespace
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: "target"}, &unchanged); err != nil {
+		t.Fatalf("get target namespace: %v", err)
+	}
+	if got := unchanged.Labels["pod-security.kubernetes.io/enforce-version"]; got != "v1.34" {
+		t.Fatalf("target PSA policy version = %q, want v1.34", got)
+	}
+}
+
+func TestEnsureTargetNamespaceResourcesAbsent(t *testing.T) {
+	ctx := context.Background()
+	source := unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "operator-config", "namespace": "source"},
+	}}
+	target := *source.DeepCopy()
+	target.SetNamespace("target")
+	existing := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "operator-config", Namespace: "target"}}
+	m := migrationTestClient(t, existing)
+	err := m.EnsureTargetNamespaceResourcesAbsent(ctx, []unstructured.Unstructured{source}, []unstructured.Unstructured{target}, Options{SubscriptionNamespace: "source", InstallNamespace: "target"})
+	if err == nil || !strings.Contains(err.Error(), "target namespace resource collision") {
+		t.Fatalf("EnsureTargetNamespaceResourcesAbsent() error = %v, want collision", err)
+	}
+
+	m = migrationTestClient(t)
+	if err := m.EnsureTargetNamespaceResourcesAbsent(ctx, []unstructured.Unstructured{source}, []unstructured.Unstructured{target}, Options{SubscriptionNamespace: "source", InstallNamespace: "target"}); err != nil {
+		t.Fatalf("EnsureTargetNamespaceResourcesAbsent() error = %v, want no collision", err)
+	}
+}
+
 func TestScaleSourceDeployments(t *testing.T) {
 	ctx := context.Background()
 	replicas := int32(2)
@@ -591,6 +638,28 @@ func TestScaleSourceDeployments(t *testing.T) {
 	}
 	if scaled.Spec.Replicas == nil || *scaled.Spec.Replicas != 2 {
 		t.Fatalf("restored Deployment replicas = %v, want 2", scaled.Spec.Replicas)
+	}
+}
+
+func TestScaleSourceDeploymentsWaitsForSourcePodsAndRestoresOnFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	replicas := int32(1)
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "operator", Namespace: "source"}, Spec: appsv1.DeploymentSpec{Replicas: &replicas, Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "operator"}}}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "operator-pod", Namespace: "source", Labels: map[string]string{"app": "operator"}, OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: "operator-abc"}}}}
+	m := migrationTestClient(t, deployment, pod)
+	objects := []unstructured.Unstructured{{Object: map[string]interface{}{
+		"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]interface{}{"name": "operator", "namespace": "source"},
+	}}}
+	if _, err := m.ScaleSourceDeployments(ctx, objects, Options{SubscriptionNamespace: "source", InstallNamespace: "target"}); err == nil || !strings.Contains(err.Error(), "terminate Pods") {
+		t.Fatalf("ScaleSourceDeployments() error = %v, want source Pod termination failure", err)
+	}
+	var restored appsv1.Deployment
+	if err := m.Client.Get(context.Background(), client.ObjectKey{Namespace: "source", Name: "operator"}, &restored); err != nil {
+		t.Fatalf("get restored Deployment: %v", err)
+	}
+	if restored.Spec.Replicas == nil || *restored.Spec.Replicas != replicas {
+		t.Fatalf("restored Deployment replicas = %v, want %d", restored.Spec.Replicas, replicas)
 	}
 }
 
@@ -1043,7 +1112,7 @@ func TestCreateClusterExtensionAlreadyExistsIsKnownOutcome(t *testing.T) {
 	}
 }
 
-func TestCreateMigrationResourcesCleansTrackedCOSAfterClusterExtensionFailure(t *testing.T) {
+func TestCreateMigrationResourcesPreservesTrackedCOSAfterClusterExtensionFailure(t *testing.T) {
 	ctx := context.Background()
 	m := migrationTestClient(t)
 	baseClient := m.Client
@@ -1061,8 +1130,8 @@ func TestCreateMigrationResourcesCleansTrackedCOSAfterClusterExtensionFailure(t 
 		t.Fatal("CreateMigrationResources() TargetMayBeActive = false, want true after COS success")
 	}
 	m.Client = baseClient
-	if err := m.Client.Get(ctx, client.ObjectKey{Name: "sub-1"}, &ocv1.ClusterObjectSet{}); err == nil {
-		t.Fatal("ClusterExtension failure left the ClusterObjectSet created by this invocation")
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: "sub-1"}, &ocv1.ClusterObjectSet{}); err != nil {
+		t.Fatalf("ClusterExtension failure deleted the ClusterObjectSet needed for explicit recovery: %v", err)
 	}
 }
 
@@ -1112,7 +1181,7 @@ func TestRecoverBeforeCEPreservesResourcesItDidNotCreate(t *testing.T) {
 	}
 }
 
-func TestRecoverCreatedMigrationResourcesDeletesOnlyTrackedResources(t *testing.T) {
+func TestRecoverCreatedMigrationResourcesPreservesActiveTargetResources(t *testing.T) {
 	ctx := context.Background()
 	createdSecret := corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "created-ref", Namespace: "olmv1-system"}}
 	otherSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "other-ref", Namespace: "olmv1-system"}}
@@ -1126,18 +1195,29 @@ func TestRecoverCreatedMigrationResourcesDeletesOnlyTrackedResources(t *testing.
 		secrets: []corev1.Secret{createdSecret},
 		ce:      createdCE,
 	})
-	if err == nil {
-		t.Fatal("recovery unexpectedly succeeded without a backup")
+	if err == nil || !strings.Contains(err.Error(), "preserving migration resources") {
+		t.Fatalf("recovery error = %v, want preserved target resources", err)
 	}
 	for _, object := range []client.Object{&createdSecret, createdCOS, createdCE} {
-		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(object), object); err == nil {
-			t.Fatalf("recovery left created %T %q", object, object.GetName())
+		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(object), object); err != nil {
+			t.Fatalf("recovery deleted created %T %q: %v", object, object.GetName(), err)
 		}
 	}
 	for _, object := range []client.Object{otherSecret, otherCOS} {
 		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(object), object); err != nil {
 			t.Fatalf("recovery deleted untracked %T %q: %v", object, object.GetName(), err)
 		}
+	}
+}
+
+func TestWaitForClusterObjectSetAvailable(t *testing.T) {
+	ctx := context.Background()
+	cos := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "sub-1"}, Status: ocv1.ClusterObjectSetStatus{Conditions: []metav1.Condition{{
+		Type: ocv1.ClusterObjectSetTypeAvailable, Status: metav1.ConditionTrue,
+	}}}}
+	m := migrationTestClient(t, cos)
+	if err := m.WaitForClusterObjectSetAvailable(ctx, cos.Name); err != nil {
+		t.Fatalf("WaitForClusterObjectSetAvailable() error = %v", err)
 	}
 }
 

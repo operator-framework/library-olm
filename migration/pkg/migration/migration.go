@@ -61,10 +61,10 @@ const migrationInvocationAnnotation = "olm.operatorframework.io/migration-invoca
 //  1. Profile the Operator (Subscription/CSV/InstallPlan)
 //  2. Determine Compatibility and Readiness
 //  3. Determine Target ClusterCatalog
-//  4. Backup resources
-//  5. Prepare for Migration (delete Sub/CSV with orphan cascade)
-//  6. Collect Operator Resources
-//  7. Create ClusterObjectSet (wait Succeeded=True)
+//  4. Collect and preflight operator resources
+//  5. Backup resources
+//  6. Prepare for Migration (delete Sub/CSV with orphan cascade)
+//  7. Create ClusterObjectSet (wait Succeeded=True and Available=True)
 //  8. Create ClusterExtension (wait Installed=True)
 //  9. Clean Up OLMv0 Resources
 func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
@@ -112,6 +112,19 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
+	objects, err := m.CollectResources(ctx, opts, csv, ip, info.PackageName)
+	if err != nil {
+		return fmt.Errorf("failed to collect resources: %w", err)
+	}
+	sourceObjects := make([]unstructured.Unstructured, len(objects))
+	for i := range objects {
+		sourceObjects[i] = *objects[i].DeepCopy()
+	}
+	RewriteInstallNamespace(objects, opts.SubscriptionNamespace, opts.InstallNamespace)
+	if err := m.EnsureTargetNamespaceResourcesAbsent(ctx, sourceObjects, objects, opts); err != nil {
+		return err
+	}
+	info.CollectedObjects = objects
 	if err := m.PrepareInstallNamespace(ctx, opts); err != nil {
 		return err
 	}
@@ -145,17 +158,6 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 		}
 		return fmt.Errorf("preparation failed (recovered): %w", err)
 	}
-
-	objects, err := m.CollectResources(ctx, opts, csv, ip, info.PackageName)
-	if err != nil {
-		return fmt.Errorf("failed to collect resources: %w", err)
-	}
-	sourceObjects := make([]unstructured.Unstructured, len(objects))
-	for i := range objects {
-		sourceObjects[i] = *objects[i].DeepCopy()
-	}
-	RewriteInstallNamespace(objects, opts.SubscriptionNamespace, opts.InstallNamespace)
-	info.CollectedObjects = objects
 
 	// R9: warn about TLS certificate pivot. OLMv0 manages certs directly via its own
 	// cert rotation; OLMv1 delegates to cert-manager (upstream) or openshift-service-ca
@@ -374,10 +376,11 @@ func (m *Migrator) RecoverBeforeCE(ctx context.Context, opts Options, backup *Ba
 	return m.RecoverFromBackup(ctx, opts, backup)
 }
 
-// recoverCreatedMigrationResources removes objects created by this invocation
-// in reverse dependency order. Once a COS may have reconciled, it refuses to
-// restore the OLMv0 Subscription automatically because orphaned target objects
-// can still be running while deletion propagates.
+// recoverCreatedMigrationResources restores OLMv0 only while no target
+// ClusterObjectSet can be active. Once a COS may have reconciled, it preserves
+// the COS, its Secrets, and the ClusterExtension (including its backup
+// annotations) for explicit operator recovery rather than deleting evidence
+// needed to roll the migration back safely.
 func (m *Migrator) recoverCreatedMigrationResources(ctx context.Context, opts Options, backup *Backup, resources *createdMigrationResources) error {
 	recoveryCtx, cancel := NewRecoveryContext(ctx)
 	defer cancel()
@@ -387,20 +390,15 @@ func (m *Migrator) recoverCreatedMigrationResources(ctx context.Context, opts Op
 	if resources.ownershipUnknown {
 		return fmt.Errorf("migration resource creation outcome is unknown; refusing automatic recovery")
 	}
+	if resources.cos != nil {
+		return fmt.Errorf("target ClusterObjectSet may have reconciled; preserving migration resources and refusing automatic OLMv0 recovery")
+	}
 	if resources.ce != nil {
 		if err := m.deleteTrackedResource(recoveryCtx, resources.ce); err != nil && client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("delete created ClusterExtension during recovery: %w", err)
 		}
 	}
-	if resources.cos != nil {
-		if err := m.deleteTrackedResource(recoveryCtx, resources.cos, client.PropagationPolicy(metav1.DeletePropagationOrphan)); err != nil && client.IgnoreNotFound(err) != nil {
-			return fmt.Errorf("delete created ClusterObjectSet during recovery: %w", err)
-		}
-	}
 	cleanupErr := m.cleanupCreatedSecrets(recoveryCtx, resources.secrets)
-	if resources.cos != nil {
-		return errors.Join(cleanupErr, fmt.Errorf("target ClusterObjectSet may have reconciled; refusing automatic OLMv0 recovery"))
-	}
 	recoverErr := m.RecoverFromBackup(recoveryCtx, opts, backup)
 	return errors.Join(cleanupErr, recoverErr)
 }
@@ -629,6 +627,9 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 	if err := m.WaitForCOSSucceeded(ctx, cosName); err != nil {
 		return resources, err
 	}
+	if err := m.WaitForClusterObjectSetAvailable(ctx, cosName); err != nil {
+		return resources, err
+	}
 	return resources, nil
 }
 
@@ -812,6 +813,27 @@ func (m *Migrator) WaitForClusterExtensionInstalled(ctx context.Context, ceName 
 		}
 
 		m.progress(fmt.Sprintf("Waiting for ClusterExtension %s to reach Installed=True...", ceName))
+		return false, nil
+	})
+}
+
+// WaitForClusterObjectSetAvailable waits until the migration COS has observed
+// its workload as available. It runs before the ClusterExtension can replace
+// the migration revision with a catalog revision, so an Installed=True result
+// alone cannot allow source resources to be removed prematurely.
+func (m *Migrator) WaitForClusterObjectSetAvailable(ctx context.Context, cosName string) error {
+	return wait.PollUntilContextTimeout(ctx, cosWaitPollInterval, cosWaitTimeout, true, func(ctx context.Context) (bool, error) {
+		var cos ocv1.ClusterObjectSet
+		if err := m.Client.Get(ctx, types.NamespacedName{Name: cosName}, &cos); err != nil {
+			m.progress(fmt.Sprintf("Waiting for migration COS %s (not found yet)", cosName))
+			return false, err
+		}
+		for _, condition := range cos.Status.Conditions {
+			if condition.Type == ocv1.ClusterObjectSetTypeAvailable && condition.Status == metav1.ConditionTrue {
+				return true, nil
+			}
+		}
+		m.progress(fmt.Sprintf("Waiting for migration ClusterObjectSet %s to reach Available=True...", cosName))
 		return false, nil
 	})
 }

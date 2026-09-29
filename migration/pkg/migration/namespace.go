@@ -12,6 +12,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -105,10 +107,43 @@ func unsafePSAEnforcement(targetLabels, sourceLabels map[string]string) bool {
 		return true
 	}
 	if target == source {
-		return false
+		targetVersion, targetVersionSet := targetLabels["pod-security.kubernetes.io/enforce-version"]
+		sourceVersion, sourceVersionSet := sourceLabels["pod-security.kubernetes.io/enforce-version"]
+		// A policy version can change which controls are enforced at a given
+		// level. Do not overwrite an explicit target policy version (or an
+		// unknown target default) with a different source version.
+		return sourceVersionSet && (!targetVersionSet || targetVersion != sourceVersion)
 	}
 	levels := map[string]int{"privileged": 0, "baseline": 1, "restricted": 2}
 	return levels[source] < levels[target]
+}
+
+// EnsureTargetNamespaceResourcesAbsent prevents CollisionProtection=None from
+// overwriting a resource already managed in the install namespace. It runs
+// before OLMv0 management is removed, so an operator can choose a different
+// target namespace without requiring recovery.
+func (m *Migrator) EnsureTargetNamespaceResourcesAbsent(ctx context.Context, sourceObjects, targetObjects []unstructured.Unstructured, opts Options) error {
+	if opts.InstallNamespace == opts.SubscriptionNamespace {
+		return nil
+	}
+	if len(sourceObjects) != len(targetObjects) {
+		return fmt.Errorf("source and target resource collections differ in length")
+	}
+	for i := range sourceObjects {
+		if sourceObjects[i].GetNamespace() != opts.SubscriptionNamespace {
+			continue
+		}
+		target := &unstructured.Unstructured{}
+		target.SetGroupVersionKind(targetObjects[i].GroupVersionKind())
+		err := m.Client.Get(ctx, client.ObjectKeyFromObject(&targetObjects[i]), target)
+		if err == nil {
+			return fmt.Errorf("target namespace resource collision: %s %s/%s already exists", targetObjects[i].GroupVersionKind().String(), targetObjects[i].GetNamespace(), targetObjects[i].GetName())
+		}
+		if client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("check target namespace resource %s %s/%s: %w", targetObjects[i].GetKind(), targetObjects[i].GetNamespace(), targetObjects[i].GetName(), err)
+		}
+	}
+	return nil
 }
 
 // RewriteInstallNamespace moves collected namespaced objects from the
@@ -245,7 +280,8 @@ func clearServiceAllocations(obj *unstructured.Unstructured) {
 
 // DeleteSourceNamespaceResources removes the old copies of objects that were
 // applied in a different install namespace. It runs only after the target CE
-// has reached Installed=True, so a failed handoff retains the OLMv0 workload.
+// has reached Installed=True and the migration COS reported Available=True, so
+// a failed handoff retains the OLMv0 workload.
 // It intentionally does not delete the Namespace itself; that requires the
 // separate AcknowledgeNamespaceDelete opt-in.
 func (m *Migrator) DeleteSourceNamespaceResources(ctx context.Context, objects []unstructured.Unstructured, opts Options) error {
@@ -323,11 +359,48 @@ func (m *Migrator) ScaleSourceDeployments(ctx context.Context, objects []unstruc
 		if original != nil {
 			originals = append(originals, *original)
 		}
+		if err := m.waitForSourceDeploymentPodsTerminated(ctx, sourceDeploymentReplica{name: obj.GetName(), namespace: obj.GetNamespace()}); err != nil {
+			restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			restoreErr := restoreSourceDeploymentReplicas(restoreCtx, m, originals)
+			cancel()
+			if restoreErr != nil {
+				return noRestore, fmt.Errorf("wait for source Deployment %s/%s to terminate Pods: %w; restore scaled Deployments: %v", obj.GetNamespace(), obj.GetName(), err, restoreErr)
+			}
+			return noRestore, fmt.Errorf("wait for source Deployment %s/%s to terminate Pods: %w", obj.GetNamespace(), obj.GetName(), err)
+		}
 	}
 
 	return func(restoreCtx context.Context) error {
 		return restoreSourceDeploymentReplicas(restoreCtx, m, originals)
 	}, nil
+}
+
+// waitForSourceDeploymentPodsTerminated ensures source Pods cannot overlap
+// with the target workload during a cross-namespace cutover.
+func (m *Migrator) waitForSourceDeploymentPodsTerminated(ctx context.Context, deployment sourceDeploymentReplica) error {
+	return wait.PollUntilContextTimeout(ctx, time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
+		var current appsv1.Deployment
+		if err := m.Client.Get(ctx, client.ObjectKey{Namespace: deployment.namespace, Name: deployment.name}, &current); err != nil {
+			return false, err
+		}
+		if current.Status.Replicas != 0 {
+			return false, nil
+		}
+		selector, err := metav1.LabelSelectorAsSelector(current.Spec.Selector)
+		if err != nil {
+			return false, fmt.Errorf("build selector: %w", err)
+		}
+		var pods corev1.PodList
+		if err := m.Client.List(ctx, &pods, client.InNamespace(deployment.namespace)); err != nil {
+			return false, err
+		}
+		for i := range pods.Items {
+			if selector.Matches(labels.Set(pods.Items[i].Labels)) {
+				return false, nil
+			}
+		}
+		return true, nil
+	})
 }
 
 // restoreSourceDeploymentReplicas returns scaled source Deployments to their
