@@ -340,10 +340,26 @@ func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.
 	}
 	success(fmt.Sprintf("ClusterObjectSet API established; using operator-controller namespace %s", opts.SystemNamespace))
 
+	_, _, readiness, compatibility, err := m.EnsurePrerequisites(ctx, opts)
+	if err != nil {
+		return fmt.Errorf("pre-migration checks failed: %w", err)
+	}
+	printCheckResults(readiness.Checks)
+	printCheckResults(compatibility.Checks)
+	if !readiness.Passed() || !compatibility.Passed() {
+		return fmt.Errorf("operator is not eligible for migration (%d checks failed)", len(readiness.FailedChecks())+len(compatibility.FailedChecks()))
+	}
+
 	info, err := m.GatherMigrationInfo(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("failed to gather migration info: %w", err)
 	}
+	catalogName, err := m.ResolveClusterCatalog(ctx, info, m.RESTConfig)
+	if err != nil {
+		return fmt.Errorf("failed to resolve ClusterCatalog: %w", err)
+	}
+	info.ResolvedCatalogName = catalogName
+	success(fmt.Sprintf("Selected ClusterCatalog: %s", catalogName))
 
 	success(fmt.Sprintf("Package: %s  Version: %s  Channel: %s", info.PackageName, info.Version, valueOrDefault(info.Channel, "(default)")))
 	fmt.Printf("\n  Resources that would be created:\n")

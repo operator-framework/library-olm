@@ -141,6 +141,22 @@ multiple conversion/preview failures to verify stop-on-error, continuation, and
 nonzero results after partial failure (V1.7). Unit tests also verify that batch
 classification applies acknowledgment flags and rejects `-n` or `--ce-name` with `--all`.
 
+After `make migration/e2e-fixture-setup`, run
+`make migration/test-e2e-acknowledgments` for V2.1–V2.10. Each of twelve cases
+replays the ecr-secret snapshot independently. Soft checks cover scoped target
+namespaces, a namespace selector, OperatorCondition usage, OLMv0 API access,
+a scoped ServiceAccount, Subscription state, and CSV phase. Each refuses
+conversion without the matching flag (including an unrelated-flag attempt),
+accepts a non-mutating preview with the correct flag, then converts and verifies
+the CE's audit annotation. Dependency properties, APIServices, generated dependency
+Subscriptions, and missing catalog packages remain blocked even with all soft
+acknowledgments enabled. Refusals preserve source Subscription/CSV/OperatorGroup
+identity and content and create no CE/COS. The fixture CI job collects each case's
+instrumented CLI coverage under `coverage/fixture/acknowledgments`, automatically
+included by `make migration/report-coverage-all`.
+Dry-run now runs readiness, compatibility, and catalog resolution rather than
+previewing an operator that actual conversion would reject.
+
 1. The `migration-test` workflow runs unit coverage, fixture E2E, live-operator E2E, COS
    supersession E2E, and the in-cluster Job E2E independently. Unit, fixture, and live tests
    collect CLI coverage; COS supersession collects direct `migration/...` package coverage. A
@@ -185,6 +201,8 @@ controllers. It replays the committed OLMv0 snapshots.
 ```bash
 make migration/e2e-fixture-setup
 make migration/test-e2e-fixture-matrix
+make migration/test-e2e-batch
+make migration/test-e2e-acknowledgments
 make migration/test-e2e-cross-namespace
 E2E_CLUSTER_NAME=library-olm-fixture-e2e make migration/e2e-teardown
 ```
