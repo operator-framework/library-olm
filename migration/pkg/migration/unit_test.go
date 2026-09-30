@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -670,9 +671,11 @@ func TestScaleSourceDeploymentsWaitsForSourcePodsAndRestoresOnFailure(t *testing
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	replicas := int32(1)
-	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "operator", Namespace: "source"}, Spec: appsv1.DeploymentSpec{Replicas: &replicas, Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "operator"}}}}
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "operator-pod", Namespace: "source", Labels: map[string]string{"app": "operator"}, OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: "operator-abc"}}}}
-	m := migrationTestClient(t, deployment, pod)
+	controller := true
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "operator", Namespace: "source", UID: types.UID("deployment-uid")}, Spec: appsv1.DeploymentSpec{Replicas: &replicas}}
+	replicaSet := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "operator-abc", Namespace: "source", UID: types.UID("replicaset-uid"), OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: deployment.Name, UID: deployment.UID, Controller: &controller}}}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "operator-pod", Namespace: "source", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: replicaSet.Name, UID: replicaSet.UID, Controller: &controller}}}}
+	m := migrationTestClient(t, deployment, replicaSet, pod)
 	objects := []unstructured.Unstructured{{Object: map[string]interface{}{
 		"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]interface{}{"name": "operator", "namespace": "source"},
 	}}}
@@ -685,6 +688,24 @@ func TestScaleSourceDeploymentsWaitsForSourcePodsAndRestoresOnFailure(t *testing
 	}
 	if restored.Spec.Replicas == nil || *restored.Spec.Replicas != replicas {
 		t.Fatalf("restored Deployment replicas = %v, want %d", restored.Spec.Replicas, replicas)
+	}
+}
+
+func TestScaleSourceDeploymentsIgnoresUnrelatedMatchingPods(t *testing.T) {
+	ctx := context.Background()
+	replicas := int32(1)
+	controller := true
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "operator", Namespace: "source", UID: types.UID("deployment-uid")}, Spec: appsv1.DeploymentSpec{Replicas: &replicas, Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "operator"}}}}
+	ownedReplicaSet := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "operator-abc", Namespace: "source", UID: types.UID("owned-replicaset-uid"), OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: deployment.Name, UID: deployment.UID, Controller: &controller}}}}
+	unrelatedReplicaSet := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "unrelated-abc", Namespace: "source", UID: types.UID("unrelated-replicaset-uid")}}
+	unrelatedPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "unrelated-pod", Namespace: "source", Labels: map[string]string{"app": "operator"}, OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: unrelatedReplicaSet.Name, UID: unrelatedReplicaSet.UID, Controller: &controller}}}}
+	m := migrationTestClient(t, deployment, ownedReplicaSet, unrelatedReplicaSet, unrelatedPod)
+	objects := []unstructured.Unstructured{{Object: map[string]interface{}{
+		"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]interface{}{"name": "operator", "namespace": "source"},
+	}}}
+
+	if _, err := m.ScaleSourceDeployments(ctx, objects, Options{SubscriptionNamespace: "source", InstallNamespace: "target"}); err != nil {
+		t.Fatalf("ScaleSourceDeployments() error = %v, want unrelated Pod to be ignored", err)
 	}
 }
 

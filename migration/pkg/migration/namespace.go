@@ -12,7 +12,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -386,17 +386,26 @@ func (m *Migrator) waitForSourceDeploymentPodsTerminated(ctx context.Context, de
 		if current.Status.Replicas != 0 {
 			return false, nil
 		}
-		selector, err := metav1.LabelSelectorAsSelector(current.Spec.Selector)
-		if err != nil {
-			return false, fmt.Errorf("build selector: %w", err)
+		var replicaSets appsv1.ReplicaSetList
+		if err := m.Client.List(ctx, &replicaSets, client.InNamespace(deployment.namespace)); err != nil {
+			return false, err
+		}
+		ownedReplicaSets := make(map[types.UID]struct{})
+		for i := range replicaSets.Items {
+			if metav1.IsControlledBy(&replicaSets.Items[i], &current) {
+				ownedReplicaSets[replicaSets.Items[i].UID] = struct{}{}
+			}
 		}
 		var pods corev1.PodList
 		if err := m.Client.List(ctx, &pods, client.InNamespace(deployment.namespace)); err != nil {
 			return false, err
 		}
 		for i := range pods.Items {
-			if selector.Matches(labels.Set(pods.Items[i].Labels)) {
-				return false, nil
+			controller := metav1.GetControllerOf(&pods.Items[i])
+			if controller != nil {
+				if _, ok := ownedReplicaSets[controller.UID]; ok {
+					return false, nil
+				}
 			}
 		}
 		return true, nil
