@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -447,6 +448,14 @@ func (m *Migrator) CleanupConflict(ctx context.Context, ceName string) error {
 	if err != nil {
 		return fmt.Errorf("invalid migrated-from-subscription annotation %q: %w", subRef, err)
 	}
+	if ce.Spec.Source.Catalog == nil || ce.Spec.Source.Catalog.PackageName == "" {
+		return fmt.Errorf("ClusterExtension %s has no catalog package for conflict cleanup", ceName)
+	}
+	packageName := ce.Spec.Source.Catalog.PackageName
+	csvNames, err := m.conflictCSVNames(ctx, ns, name, packageName)
+	if err != nil {
+		return err
+	}
 
 	// Delete Subscription (orphan)
 	sub := &operatorsv1alpha1.Subscription{}
@@ -467,12 +476,88 @@ func (m *Migrator) CleanupConflict(ctx context.Context, ceName string) error {
 		InstallNamespace:      ns,
 	}
 
-	// Try to get package name from CE annotations
-	packageName := ce.Spec.Source.Catalog.PackageName
-	csvName := "" // best effort
-	m.CleanupOLMv0Resources(ctx, opts, packageName, csvName)
-
+	// A conflicting Subscription may have reinstalled its primary CSV. Leaving
+	// that CSV behind makes a subsequent rollback Subscription unsatisfiable:
+	// OLMv0 treats the installed but unreferenced CSV as an independent provider.
+	for _, csvName := range csvNames {
+		csv := &operatorsv1alpha1.ClusterServiceVersion{}
+		csv.Name, csv.Namespace = csvName, ns
+		if err := m.Client.Delete(ctx, csv, client.PropagationPolicy("Orphan")); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete conflict CSV %s/%s: %w", ns, csvName, err)
+		}
+		if err := m.CleanupOLMv0Resources(ctx, opts, packageName, csvName).Err(); err != nil {
+			return fmt.Errorf("clean up conflict artifacts: %w", err)
+		}
+	}
+	if len(csvNames) == 0 {
+		return m.CleanupOLMv0Resources(ctx, opts, packageName, "").Err()
+	}
 	return nil
+}
+
+// conflictCSVNames discovers primary CSVs before removing their Subscription.
+// Package metadata also finds CSVs when a recreated Subscription has no status.
+// Never remove a CSV that another Subscription in this namespace still uses.
+func (m *Migrator) conflictCSVNames(ctx context.Context, namespace, subscription, packageName string) ([]string, error) {
+	var subscriptions operatorsv1alpha1.SubscriptionList
+	if err := m.Client.List(ctx, &subscriptions, client.InNamespace(namespace)); err != nil {
+		return nil, fmt.Errorf("list Subscriptions before conflict cleanup: %w", err)
+	}
+	names := make(map[string]bool)
+	for _, sub := range subscriptions.Items {
+		if sub.Name != subscription {
+			continue
+		}
+		if sub.Spec != nil && sub.Spec.Package != packageName {
+			return nil, fmt.Errorf("conflict Subscription package does not match ClusterExtension package %q", packageName)
+		}
+		for _, name := range []string{sub.Status.InstalledCSV, sub.Status.CurrentCSV} {
+			if name != "" {
+				names[name] = true
+			}
+		}
+	}
+	var csvs operatorsv1alpha1.ClusterServiceVersionList
+	if err := m.Client.List(ctx, &csvs, client.InNamespace(namespace)); err != nil {
+		return nil, fmt.Errorf("list CSVs before conflict cleanup: %w", err)
+	}
+	for _, csv := range csvs.Items {
+		properties, err := parseProperties(csv.Annotations["operatorframework.io/properties"])
+		if err != nil {
+			continue
+		}
+		for _, property := range properties {
+			if property.Type != "olm.package" {
+				continue
+			}
+			var value struct {
+				PackageName string `json:"packageName"`
+			}
+			if err := json.Unmarshal(property.Value, &value); err != nil {
+				continue
+			}
+			if names[csv.Name] && value.PackageName != "" && value.PackageName != packageName {
+				return nil, fmt.Errorf("conflict CSV %s/%s belongs to package %q, not %q", namespace, csv.Name, value.PackageName, packageName)
+			}
+			if value.PackageName == packageName {
+				names[csv.Name] = true
+			}
+		}
+	}
+	for _, sub := range subscriptions.Items {
+		if sub.Name == subscription {
+			continue
+		}
+		if names[sub.Status.InstalledCSV] || names[sub.Status.CurrentCSV] || sub.Spec != nil && sub.Spec.Package == packageName {
+			return nil, fmt.Errorf("cannot clean up package %q: Subscription %s/%s still references its CSVs", packageName, namespace, sub.Name)
+		}
+	}
+	result := make([]string, 0, len(names))
+	for name := range names {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 // splitSubRef splits a "namespace/name" subscription reference into its components.

@@ -152,28 +152,29 @@ func assertRollbackRestored(t *testing.T, kubeClient client.Client, snapshot *ro
 	// reconciliation, a healthy CSV/workload, and removal of OLMv1 management.
 	var pending string
 	err := wait.PollUntilContextTimeout(t.Context(), 2*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
-		pending = "ClusterExtension deletion"
-		if err := kubeClient.Get(ctx, client.ObjectKeyFromObject(&management.extension), &ocv1.ClusterExtension{}); err == nil {
+		var extension ocv1.ClusterExtension
+		if err := kubeClient.Get(ctx, client.ObjectKeyFromObject(&management.extension), &extension); err == nil {
+			pending = fmt.Sprintf("ClusterExtension deletion (finalizers=%v)", extension.Finalizers)
 			return false, nil
 		} else if !apierrors.IsNotFound(err) {
 			return false, err
 		}
-		pending = "ClusterObjectSet deletion"
 		var revisions ocv1.ClusterObjectSetList
 		if err := kubeClient.List(ctx, &revisions, client.MatchingLabels{migration.LabelOwnerName: management.extension.Name}); err != nil {
 			return false, err
 		}
 		if len(revisions.Items) != 0 {
+			pending = fmt.Sprintf("ClusterObjectSet deletion (%d revisions remain)", len(revisions.Items))
 			return false, nil
 		}
 		for i := range management.revisions {
 			if err := kubeClient.Get(ctx, client.ObjectKeyFromObject(&management.revisions[i]), &ocv1.ClusterObjectSet{}); err == nil {
+				pending = "ClusterObjectSet deletion (" + management.revisions[i].Name + ")"
 				return false, nil
 			} else if !apierrors.IsNotFound(err) {
 				return false, err
 			}
 		}
-		pending = "OLMv0 Subscription reconciliation"
 		var sub operatorsv1alpha1.Subscription
 		if err := kubeClient.Get(ctx, client.ObjectKeyFromObject(&snapshot.subscription), &sub); err != nil {
 			return false, err
@@ -182,20 +183,26 @@ func assertRollbackRestored(t *testing.T, kubeClient client.Client, snapshot *ro
 			return false, fmt.Errorf("restored Subscription spec differs from its original backup: got %#v, want %#v", sub.Spec, snapshot.subscription.Spec)
 		}
 		if sub.Status.State != operatorsv1alpha1.SubscriptionStateAtLatest || sub.Status.InstalledCSV == "" {
+			pending = fmt.Sprintf("OLMv0 Subscription reconciliation (state=%q, installedCSV=%q, currentCSV=%q)", sub.Status.State, sub.Status.InstalledCSV, sub.Status.CurrentCSV)
 			return false, nil
 		}
-		pending = "restored CSV health"
 		var csv operatorsv1alpha1.ClusterServiceVersion
 		if err := kubeClient.Get(ctx, client.ObjectKey{Namespace: sub.Namespace, Name: sub.Status.InstalledCSV}, &csv); err != nil {
+			if apierrors.IsNotFound(err) {
+				pending = "restored CSV creation (" + sub.Status.InstalledCSV + ")"
+			}
 			return false, client.IgnoreNotFound(err)
 		}
 		if csv.Status.Phase != operatorsv1alpha1.CSVPhaseSucceeded {
+			pending = fmt.Sprintf("restored CSV health (phase=%q, reason=%q)", csv.Status.Phase, csv.Status.Reason)
 			return false, nil
 		}
-		pending = "restored Deployment readiness"
 		for _, name := range snapshot.deployments {
 			var deployment appsv1.Deployment
 			if err := kubeClient.Get(ctx, client.ObjectKey{Namespace: sub.Namespace, Name: name}, &deployment); err != nil {
+				if apierrors.IsNotFound(err) {
+					pending = "restored Deployment creation (" + name + ")"
+				}
 				return false, client.IgnoreNotFound(err)
 			}
 			replicas := int32(1)
@@ -203,6 +210,7 @@ func assertRollbackRestored(t *testing.T, kubeClient client.Client, snapshot *ro
 				replicas = *deployment.Spec.Replicas
 			}
 			if deployment.DeletionTimestamp != nil || deployment.Status.ObservedGeneration < deployment.Generation || deployment.Status.AvailableReplicas < replicas {
+				pending = fmt.Sprintf("restored Deployment readiness (%s: available=%d, desired=%d)", name, deployment.Status.AvailableReplicas, replicas)
 				return false, nil
 			}
 		}

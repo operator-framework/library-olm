@@ -434,6 +434,7 @@ func TestMigration(t *testing.T) {
 	}
 	var rollbackState *rollbackSnapshot
 	if os.Getenv("E2E_SUITE") == "real-operator" {
+		waitForCompletedInstallPlan(t, namespace, subscription)
 		rollbackState = captureRollbackSnapshot(t, namespace, subscription, strings.TrimSpace(csvName))
 	}
 
@@ -469,12 +470,25 @@ func TestMigration(t *testing.T) {
 		t.Fatal("Subscription still exists after successful conversion")
 	}
 	if os.Getenv("E2E_SUITE") == "real-operator" {
+		// Pause the injected conflict at manual approval: an automatic install
+		// can recreate its CSV during cleanup and leave an unreferenced provider
+		// that prevents the rollback Subscription from resolving.
 		restoreSubscriptionForConflict(t, subscriptionJSON)
+		run(t, "kubectl", "wait", "--for=jsonpath={.status.conditions[?(@.type=='InstallPlanPending')].reason}=RequiresApproval", "subscription/"+subscription, "-n", namespace, "--timeout=10m")
+		conflictPlan, err := output("kubectl", "get", "subscription/"+subscription, "-n", namespace, "-o", "jsonpath={.status.installPlanRef.name}")
+		if err != nil || strings.TrimSpace(conflictPlan) == "" {
+			t.Fatalf("get unapproved conflict InstallPlan: %v (%s)", err, conflictPlan)
+		}
+		run(t, "kubectl", "wait", "--for=jsonpath={.status.phase}=RequiresApproval", "installplan/"+strings.TrimSpace(conflictPlan), "-n", namespace, "--timeout=10m")
 		run(t, binary(t, "migrate-operators-v0-to-v1"), "cleanup", subscription, "--kubeconfig", os.Getenv("KUBECONFIG"))
 		run(t, "kubectl", "get", "clusterextension", subscription)
 		if _, err := output("kubectl", "get", "subscription", subscription, "-n", namespace); err == nil {
 			t.Fatal("cleanup left the conflict Subscription in place")
 		}
+		// Remove only the test-injected, unapproved plan. Otherwise the original
+		// automatic Subscription restored by rollback would inherit this manual
+		// approval requirement rather than exercising automatic recovery.
+		run(t, "kubectl", "delete", "installplan/"+strings.TrimSpace(conflictPlan), "-n", namespace, "--cascade=orphan")
 		assertRollbackResourcesRetained(t, rollbackState)
 		_, kubeClient, _ := newMigrator(t)
 		beforeRefusal := captureRollbackManagement(t, kubeClient, subscription)
@@ -626,8 +640,20 @@ func escapeJSONPathLabel(label string) string {
 	return strings.ReplaceAll(label, ".", `\.`)
 }
 
+// waitForCompletedInstallPlan checks the source plan itself: a Subscription can
+// reach AtLatestKnown before its InstallPlan finishes applying resources.
+func waitForCompletedInstallPlan(t *testing.T, namespace, subscription string) {
+	t.Helper()
+	plan, err := output("kubectl", "get", "subscription/"+subscription, "-n", namespace, "-o", "jsonpath={.status.installPlanRef.name}")
+	if err != nil || strings.TrimSpace(plan) == "" {
+		t.Fatalf("get InstallPlan for Subscription %s/%s: %v (%s)", namespace, subscription, err, plan)
+	}
+	run(t, "kubectl", "wait", "--for=jsonpath={.status.phase}=Complete", "installplan/"+strings.TrimSpace(plan), "-n", namespace, "--timeout=10m")
+}
+
 // restoreSubscriptionForConflict replays the pre-migration Subscription without
-// its API-assigned state, creating the Conflict state exercised by cleanup.
+// its API-assigned state. Manual approval creates the Conflict state exercised
+// by cleanup without launching an automatic reinstall of OLMv1-owned workloads.
 func restoreSubscriptionForConflict(t *testing.T, raw string) {
 	t.Helper()
 	var subscription map[string]interface{}
@@ -635,6 +661,11 @@ func restoreSubscriptionForConflict(t *testing.T, raw string) {
 		t.Fatalf("decode captured Subscription: %v", err)
 	}
 	delete(subscription, "status")
+	spec, ok := subscription["spec"].(map[string]interface{})
+	if !ok {
+		t.Fatal("captured Subscription has no spec")
+	}
+	spec["installPlanApproval"] = "Manual"
 	metadata, ok := subscription["metadata"].(map[string]interface{})
 	if !ok {
 		t.Fatal("captured Subscription has no metadata")
@@ -732,6 +763,7 @@ func collectArtifacts(t *testing.T, namespace string) {
 	}
 	for _, resource := range [][]string{
 		{"get", "all", "-n", namespace, "-o", "yaml"},
+		{"get", "subscriptions,clusterserviceversions,installplans,operatorgroups,operatorconditions", "-n", namespace, "-o", "yaml"},
 		{"get", "events", "-n", namespace, "-o", "yaml"},
 		{"get", "clusterextensions,clusterobjectsets,clustercatalogs", "-o", "yaml"},
 		{"get", "events", "-n", "olmv1-system", "-o", "yaml"},

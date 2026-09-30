@@ -112,12 +112,20 @@ coverage while still showing which migration paths the E2E suite executes.
 ## CI rollout
 
 The live matrix's `TestMigration` verifies conflict cleanup and rollback. Cleanup retains
-operator Deployments, CRDs, OperatorGroups, and the ClusterExtension. An unacknowledged rollback
+operator Deployments, CRDs, OperatorGroups, and the ClusterExtension, while orphan-deleting
+the conflicting primary CSV and removing its OLMv0 artifacts. The injected conflict uses
+manual approval to prevent an automatic install from racing cleanup. Its unapproved test-only
+InstallPlan is removed before rollback; the original source InstallPlan is retained.
+An unacknowledged rollback
 preserves CE backup annotations and COS revisions; an acknowledged rollback must remove all
 CE/COS management and restore the original Subscription spec, an `AtLatestKnown` Subscription,
 a `Succeeded` CSV, and available Deployments within ten minutes. Unit tests additionally verify
 orphan deletion policies, preservation of unrelated revisions, revision-list preflight failures,
-and recovery creation/reconciliation failures without changing the backup.
+and recovery creation/reconciliation failures without changing the backup. Conflict-cleanup
+regressions cover CSV discovery without Subscription status, refusal to remove shared or
+mismatched-package CSVs, and propagation of discovery/deletion errors. Failure artifacts
+include OLMv0 Subscriptions, CSVs, InstallPlans, OperatorGroups, and OperatorConditions, and
+rollback timeouts identify the resource and reconciliation state still blocking recovery.
 
 1. The `migration-test` workflow runs unit coverage, fixture E2E, live-operator E2E, COS
    supersession E2E, and the in-cluster Job E2E independently. Unit, fixture, and live tests

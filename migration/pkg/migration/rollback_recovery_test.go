@@ -220,20 +220,142 @@ func TestCleanupConflictPreservesSharedOperatorGroupAndOLMv1Management(t *testin
 		MigratedFromSubscriptionAnnotation: "source/sub",
 	}}, Spec: ocv1.ClusterExtensionSpec{Source: ocv1.SourceConfig{Catalog: &ocv1.CatalogFilter{PackageName: "widgets"}}}}
 	cos := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-2", Labels: map[string]string{LabelOwnerName: ce.Name}}}
-	sub := &operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: "sub", Namespace: "source"}}
+	sub := &operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: "sub", Namespace: "source"}, Status: operatorsv1alpha1.SubscriptionStatus{InstalledCSV: "widgets.v1"}}
+	csv := &operatorsv1alpha1.ClusterServiceVersion{ObjectMeta: metav1.ObjectMeta{Name: "widgets.v1", Namespace: "source"}}
+	condition := &operatorsv1.OperatorCondition{ObjectMeta: metav1.ObjectMeta{Name: csv.Name, Namespace: csv.Namespace}}
+	copied := &operatorsv1alpha1.ClusterServiceVersion{ObjectMeta: metav1.ObjectMeta{Name: csv.Name, Namespace: "other", Labels: map[string]string{"olm.managed": "true", "olm.copiedFrom": csv.Name}}}
 	otherSub := &operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "source"}}
 	group := &operatorsv1.OperatorGroup{ObjectMeta: metav1.ObjectMeta{Name: "shared", Namespace: "source"}}
 	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "operator", Namespace: "source"}}
-	m := migrationTestClient(t, ce, cos, sub, otherSub, group, deployment)
+	m := migrationTestClient(t, ce, cos, sub, otherSub, group, deployment, csv, condition, copied)
+	policies := make(map[string]metav1.DeletionPropagation)
+	m.Client = orphanRecordingClient{Client: m.Client, policies: policies}
 	if err := m.CleanupConflict(ctx, ce.Name); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(sub), &operatorsv1alpha1.Subscription{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("cleanup retained conflicting Subscription: %v", err)
 	}
+	for _, object := range []client.Object{csv, condition, copied} {
+		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(object), object); !apierrors.IsNotFound(err) {
+			t.Fatalf("cleanup retained conflict artifact %T: %v", object, err)
+		}
+	}
+	if policies[csv.Name] != metav1.DeletePropagationOrphan {
+		t.Fatal("conflict cleanup must orphan CSV workloads")
+	}
 	for _, object := range []client.Object{ce, cos, otherSub, group, deployment} {
 		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(object), object); err != nil {
 			t.Fatalf("cleanup deleted retained %T %s: %v", object, object.GetName(), err)
 		}
+	}
+}
+
+func TestCleanupConflictFindsCSVWithoutSubscriptionStatus(t *testing.T) {
+	for _, properties := range []string{
+		`[{"type":"olm.package","value":{"packageName":"widgets"}}]`,
+		`{"properties":[{"type":"olm.package","value":{"packageName":"widgets"}}]}`,
+	} {
+		t.Run(properties, func(t *testing.T) {
+			ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "widgets", Annotations: map[string]string{MigratedFromSubscriptionAnnotation: "source/sub"}}, Spec: ocv1.ClusterExtensionSpec{Source: ocv1.SourceConfig{Catalog: &ocv1.CatalogFilter{PackageName: "widgets"}}}}
+			sub := &operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: "sub", Namespace: "source"}}
+			csv := &operatorsv1alpha1.ClusterServiceVersion{ObjectMeta: metav1.ObjectMeta{Name: "widgets.v1", Namespace: "source", Annotations: map[string]string{"operatorframework.io/properties": properties}}}
+			unrelated := csv.DeepCopy()
+			unrelated.Name = "other.v1"
+			unrelated.Annotations["operatorframework.io/properties"] = `[{"type":"olm.package","value":{"packageName":"other"}}]`
+			otherNamespace := csv.DeepCopy()
+			otherNamespace.Namespace = "elsewhere"
+			m := migrationTestClient(t, ce, sub, csv, unrelated, otherNamespace)
+			if err := m.CleanupConflict(t.Context(), ce.Name); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.Client.Get(t.Context(), client.ObjectKeyFromObject(csv), &operatorsv1alpha1.ClusterServiceVersion{}); !apierrors.IsNotFound(err) {
+				t.Fatalf("cleanup retained unreferenced package CSV: %v", err)
+			}
+			for _, object := range []client.Object{ce, unrelated, otherNamespace} {
+				if err := m.Client.Get(t.Context(), client.ObjectKeyFromObject(object), object); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestCleanupConflictRejectsUnsafeCSVDiscovery(t *testing.T) {
+	for _, scenario := range []string{"shared CSV", "shared package", "wrong Subscription package", "wrong CSV package"} {
+		t.Run(scenario, func(t *testing.T) {
+			ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "widgets", Annotations: map[string]string{MigratedFromSubscriptionAnnotation: "source/sub"}}, Spec: ocv1.ClusterExtensionSpec{Source: ocv1.SourceConfig{Catalog: &ocv1.CatalogFilter{PackageName: "widgets"}}}}
+			sub := &operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: "sub", Namespace: "source"}, Spec: &operatorsv1alpha1.SubscriptionSpec{Package: "widgets"}, Status: operatorsv1alpha1.SubscriptionStatus{InstalledCSV: "widgets.v1"}}
+			csv := &operatorsv1alpha1.ClusterServiceVersion{ObjectMeta: metav1.ObjectMeta{Name: "widgets.v1", Namespace: "source"}}
+			other := &operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "source"}}
+			switch scenario {
+			case "shared CSV":
+				other.Status.CurrentCSV = csv.Name
+			case "shared package":
+				other.Spec = &operatorsv1alpha1.SubscriptionSpec{Package: "widgets"}
+			case "wrong Subscription package":
+				sub.Spec.Package = "different"
+			case "wrong CSV package":
+				csv.Annotations = map[string]string{"operatorframework.io/properties": `[{"type":"olm.package","value":{"packageName":"different"}}]`}
+			}
+			m := migrationTestClient(t, ce, sub, csv, other)
+			if err := m.CleanupConflict(t.Context(), ce.Name); err == nil {
+				t.Fatal("unsafe conflict cleanup unexpectedly succeeded")
+			}
+			for _, object := range []client.Object{ce, sub, csv, other} {
+				if err := m.Client.Get(t.Context(), client.ObjectKeyFromObject(object), object); err != nil {
+					t.Fatalf("cleanup preflight mutated resources: %v", err)
+				}
+			}
+		})
+	}
+}
+
+type conflictCleanupFailureClient struct {
+	client.Client
+	listCSV, deleteCSV, deleteCondition bool
+}
+
+func (c conflictCleanupFailureClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*operatorsv1alpha1.ClusterServiceVersionList); ok && c.listCSV {
+		return errors.New("CSV listing forbidden")
+	}
+	return c.Client.List(ctx, list, opts...)
+}
+
+func (c conflictCleanupFailureClient) Delete(ctx context.Context, object client.Object, opts ...client.DeleteOption) error {
+	switch object.(type) {
+	case *operatorsv1alpha1.ClusterServiceVersion:
+		if c.deleteCSV {
+			return errors.New("CSV deletion forbidden")
+		}
+	case *operatorsv1.OperatorCondition:
+		if c.deleteCondition {
+			return errors.New("condition deletion forbidden")
+		}
+	}
+	return c.Client.Delete(ctx, object, opts...)
+}
+
+func TestCleanupConflictReportsCSVAndArtifactFailures(t *testing.T) {
+	for _, scenario := range []string{"list", "delete CSV", "delete condition"} {
+		t.Run(scenario, func(t *testing.T) {
+			ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "widgets", Annotations: map[string]string{MigratedFromSubscriptionAnnotation: "source/sub"}}, Spec: ocv1.ClusterExtensionSpec{Source: ocv1.SourceConfig{Catalog: &ocv1.CatalogFilter{PackageName: "widgets"}}}}
+			sub := &operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: "sub", Namespace: "source"}, Status: operatorsv1alpha1.SubscriptionStatus{InstalledCSV: "widgets.v1"}}
+			csv := &operatorsv1alpha1.ClusterServiceVersion{ObjectMeta: metav1.ObjectMeta{Name: "widgets.v1", Namespace: "source"}}
+			m := migrationTestClient(t, ce, sub, csv)
+			m.Client = conflictCleanupFailureClient{Client: m.Client, listCSV: scenario == "list", deleteCSV: scenario == "delete CSV", deleteCondition: scenario == "delete condition"}
+			if err := m.CleanupConflict(t.Context(), ce.Name); err == nil || !strings.Contains(err.Error(), "forbidden") {
+				t.Fatalf("cleanup error = %v", err)
+			}
+			if err := m.Client.Get(t.Context(), client.ObjectKeyFromObject(ce), &ocv1.ClusterExtension{}); err != nil {
+				t.Fatal("failed cleanup removed OLMv1 management")
+			}
+			if scenario == "list" {
+				if err := m.Client.Get(t.Context(), client.ObjectKeyFromObject(sub), &operatorsv1alpha1.Subscription{}); err != nil {
+					t.Fatal("discovery failure deleted Subscription")
+				}
+			}
+		})
 	}
 }
