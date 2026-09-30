@@ -171,6 +171,20 @@ included by `make migration/report-coverage-all`.
 Dry-run now runs readiness, compatibility, and catalog resolution rather than
 previewing an operator that actual conversion would reject.
 
+After `make migration/e2e-fixture-setup`, run `make migration/test-e2e-backup`
+for V3.18. Three independently replayed ecr-secret cases verify that dry-run
+does not write files; successful conversion creates the requested directory
+and preserves source GVK, identity, spec, and status in Subscription,
+OperatorGroup, CSV, and associated InstallPlan YAML; and a deterministic disk
+write failure warns but still installs the CE with authoritative backup annotations.
+An impersonated read-only user can inspect resources and port-forward catalogd,
+but cannot delete the Subscription: the CLI reaches that denial only after all
+backup files exist, with source resources and OLMv1 management unchanged.
+An extra associated plan is saved; an unrelated plan is excluded. Unit tests
+cover each filesystem failure, private file permissions, optional resources,
+snapshot isolation, and informational plan-list failures. Fixture CI collects
+CLI coverage under `coverage/fixture/backup`, included in combined reporting.
+
 1. The `migration-test` workflow runs unit coverage, fixture E2E, live-operator E2E, COS
    supersession E2E, and the in-cluster Job E2E independently. Unit, fixture, and live tests
    collect CLI coverage; COS supersession collects direct `migration/...` package coverage. A
@@ -217,6 +231,7 @@ make migration/e2e-fixture-setup
 make migration/test-e2e-fixture-matrix
 make migration/test-e2e-batch
 make migration/test-e2e-acknowledgments
+make migration/test-e2e-backup
 make migration/test-e2e-cross-namespace
 make migration/test-e2e-system-managed-namespace
 E2E_CLUSTER_NAME=library-olm-fixture-e2e make migration/e2e-teardown

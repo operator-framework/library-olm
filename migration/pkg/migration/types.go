@@ -170,6 +170,9 @@ type Backup struct {
 	ClusterServiceVersion *operatorsv1alpha1.ClusterServiceVersion
 	OperatorGroup         *operatorsv1.OperatorGroup
 	InstallPlan           *operatorsv1alpha1.InstallPlan
+	// InstallPlans includes all plans associated with the installed CSV for disk
+	// auditing. InstallPlan remains the profiled plan for existing callers.
+	InstallPlans []*operatorsv1alpha1.InstallPlan
 }
 
 // SaveToDisk writes backup files to dir, creating it if absent. Per R2.6,
@@ -195,15 +198,26 @@ func (b *Backup) SaveToDisk(dir string) error {
 	if err := writeYAMLFile(filepath.Join(dir, "clusterserviceversion.yaml"), csv); err != nil {
 		return fmt.Errorf("failed to write clusterserviceversion.yaml: %w", err)
 	}
+	plans := b.InstallPlans
 	if b.InstallPlan != nil {
+		plans = append(append([]*operatorsv1alpha1.InstallPlan{}, plans...), b.InstallPlan)
+	}
+	if len(plans) > 0 {
 		ipDir := filepath.Join(dir, "installplans")
 		if err := os.MkdirAll(ipDir, 0o750); err != nil {
 			return fmt.Errorf("failed to create installplans directory: %w", err)
 		}
-		installPlan := b.InstallPlan.DeepCopy()
-		installPlan.TypeMeta = metav1.TypeMeta{APIVersion: "operators.coreos.com/v1alpha1", Kind: "InstallPlan"}
-		if err := writeYAMLFile(filepath.Join(ipDir, b.InstallPlan.Name+".yaml"), installPlan); err != nil {
-			return fmt.Errorf("failed to write installplan: %w", err)
+		seen := make(map[string]bool)
+		for _, plan := range plans {
+			if plan == nil || seen[plan.Name] {
+				continue
+			}
+			seen[plan.Name] = true
+			installPlan := plan.DeepCopy()
+			installPlan.TypeMeta = metav1.TypeMeta{APIVersion: "operators.coreos.com/v1alpha1", Kind: "InstallPlan"}
+			if err := writeYAMLFile(filepath.Join(ipDir, plan.Name+".yaml"), installPlan); err != nil {
+				return fmt.Errorf("failed to write installplan: %w", err)
+			}
 		}
 	}
 	return nil
