@@ -88,7 +88,7 @@ allocation; an item is not considered complete merely because it is allocated he
 |---|---|---|
 | V1.1–V1.3, V3.1–V3.7 | Unit plus fixture/live E2E | Baseline check, dry-run, conversion, and catalog path implemented; full mapping assertions remain. |
 | V1.4–V1.5, V3.18 | Unit plus fixture/live E2E | Live cleanup/rollback asserts resource retention, acknowledgment refusal, removal of all COS revisions, original Subscription spec, and healthy OLMv0 recovery. Unit tests cover shared OperatorGroup retention and recovery failures. Backup-directory E2E assertions remain. |
-| V1.6–V1.8 | Unit and CLI tests | Batch ordering, stop/continue, and command-name edge case remain to be completed. |
+| V1.6–V1.8 | Unit and fixture CLI tests | Four-state scan ordering, Eligible-only conversion, non-mutating batch preview, and stop/continue failure semantics are covered. Command-name collision remains to be completed. |
 | V2.1–V2.10, V4.3–V4.5 | Focused unit tests; fixture refusal tests | Non-steady-state and unresolved-package refusal are covered in fixture E2E; complete acknowledgement and four-state matrix remains. |
 | V3.8–V3.11, V3.13–V3.17, V3.19 | Catalog unit tests plus fixture/live E2E | Basic CatalogSource migration covered; edge, adoption, overflow, and deletion-reference cases remain. |
 | V3.12, V4.1–V4.2, V4.6 | Unit plus live E2E | Planned; requires deployment upgrade, shared-resource, and large-payload scenarios. |

@@ -132,6 +132,14 @@ mismatched-package CSVs, and propagation of discovery/deletion errors. Failure a
 include OLMv0 Subscriptions, CSVs, InstallPlans, OperatorGroups, and OperatorConditions, and
 rollback timeouts identify the resource and reconciliation state still blocking recovery.
 
+After `make migration/e2e-fixture-setup`, run `make migration/test-e2e-batch`
+to exercise four-state `check --all`, non-mutating `convert --all --dry-run`, and
+conversion of Eligible operators only (V1.6/V5.9). The target replays a fresh
+ecr-secret fixture and collects CLI coverage in `coverage/fixture/batch`; the fixture
+CI job runs it and includes its data in combined coverage. Unit tests inject
+multiple conversion/preview failures to verify stop-on-error, continuation, and
+nonzero results after partial failure (V1.7).
+
 1. The `migration-test` workflow runs unit coverage, fixture E2E, live-operator E2E, COS
    supersession E2E, and the in-cluster Job E2E independently. Unit, fixture, and live tests
    collect CLI coverage; COS supersession collects direct `migration/...` package coverage. A

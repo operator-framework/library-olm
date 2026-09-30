@@ -101,43 +101,17 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 			fmt.Printf(format, a...)
 		})
 
-		eligible := migration.EligibleFromScan(results)
-		if len(eligible) == 0 {
-			info("No eligible operators to migrate.")
-			return nil
-		}
-
-		fmt.Printf("\n%s%sMigrating %d eligible operator(s)...%s\n", colorBold, colorCyan, len(eligible), colorReset)
-
-		var firstErr error
-		for _, r := range eligible {
-			info(fmt.Sprintf("Migrating %s/%s...", r.SubscriptionNamespace, r.SubscriptionName))
-			opts := migration.Options{
-				SubscriptionName:                r.SubscriptionName,
-				SubscriptionNamespace:           r.SubscriptionNamespace,
-				BackupDirectory:                 convertBackupDir,
-				DeleteOperatorGroup:             convertDeleteOG,
-				AcknowledgeWatchScopeChange:     convertAckWatchScope,
-				AcknowledgeOperatorCondition:    convertAckOpCond,
-				AcknowledgeOLMv0APIAccess:       convertAckOLMv0API,
-				AcknowledgeScopedServiceAccount: convertAckScopedSA,
-				AcknowledgeNotSteadyState:       convertAckNotSteady,
-			}
-			opts.ApplyDefaults()
-
-			if err := m.Migrate(ctx, opts); err != nil {
-				fail(fmt.Sprintf("%s/%s: %v", r.SubscriptionNamespace, r.SubscriptionName, err))
-				if !convertContinueOnErr {
-					return err
-				}
-				if firstErr == nil {
-					firstErr = err
-				}
-			} else {
-				success(fmt.Sprintf("%s/%s migrated", r.SubscriptionNamespace, r.SubscriptionName))
-			}
-		}
-		return firstErr
+		return convertBatch(ctx, results, migration.Options{
+			BackupDirectory:                 convertBackupDir,
+			DeleteOperatorGroup:             convertDeleteOG,
+			AcknowledgeWatchScopeChange:     convertAckWatchScope,
+			AcknowledgeOperatorCondition:    convertAckOpCond,
+			AcknowledgeOLMv0APIAccess:       convertAckOLMv0API,
+			AcknowledgeScopedServiceAccount: convertAckScopedSA,
+			AcknowledgeNotSteadyState:       convertAckNotSteady,
+		}, convertDryRun, convertContinueOnErr, m.Migrate, func(opts migration.Options) error {
+			return runConvertDryRun(cmd, m, opts)
+		})
 	}
 
 	// Single operator
