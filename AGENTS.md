@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-`library-olm` is a Go module intended to host multiple OLM libraries and tools. Keep each component self-contained: production packages belong under its top-level directory, component CLIs under `<component>/examples/cmd/`, component tests under `test/e2e/<component>/`, and supporting scripts under `hack/e2e/<component>/`.
+`library-olm` is a Go module intended to host multiple OLM libraries and tools. Keep each component self-contained: production packages belong under its top-level directory, component CLIs under `<component>/examples/cmd/`, component E2E tests under `test/e2e/<component>/`, and supporting scripts under `hack/e2e/<component>/`.
 
 The current component is `migration/`: reusable OLMv0-to-OLMv1 code is in `migration/pkg/`, and its CLIs are in `migration/examples/cmd/`. Its E2E fixtures live in `test/e2e/migration/fixtures/`. Migration specifications are in `specs/20260821-migration-v0-to-v1/`; update requirements, plan, validation, and E2E documentation together when changing migration behavior.
 
