@@ -432,6 +432,10 @@ func TestMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("capture source Subscription for conflict cleanup: %v\n%s", err, subscriptionJSON)
 	}
+	var rollbackState *rollbackSnapshot
+	if os.Getenv("E2E_SUITE") == "real-operator" {
+		rollbackState = captureRollbackSnapshot(t, namespace, subscription, strings.TrimSpace(csvName))
+	}
 
 	// Catalog migration is deliberately run before the operator check: C7 is a
 	// hard prerequisite and this verifies the prescribed command sequence.
@@ -471,11 +475,15 @@ func TestMigration(t *testing.T) {
 		if _, err := output("kubectl", "get", "subscription", subscription, "-n", namespace); err == nil {
 			t.Fatal("cleanup left the conflict Subscription in place")
 		}
+		assertRollbackResourcesRetained(t, rollbackState)
+		_, kubeClient, _ := newMigrator(t)
+		beforeRefusal := captureRollbackManagement(t, kubeClient, subscription)
 		if _, err := output(binary(t, "migrate-operators-v0-to-v1"), "rollback", subscription, "--kubeconfig", os.Getenv("KUBECONFIG")); err == nil {
 			t.Fatal("rollback of an installed ClusterExtension succeeded without acknowledgment")
 		}
+		assertRollbackManagementRetained(t, kubeClient, beforeRefusal)
 		run(t, binary(t, "migrate-operators-v0-to-v1"), "rollback", subscription, "--acknowledge-installed", "--kubeconfig", os.Getenv("KUBECONFIG"))
-		run(t, "kubectl", "get", "subscription", subscription, "-n", namespace)
+		assertRollbackRestored(t, kubeClient, rollbackState, beforeRefusal)
 	}
 }
 

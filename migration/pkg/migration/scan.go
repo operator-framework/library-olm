@@ -372,6 +372,34 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 		return fmt.Errorf("source namespace %q must exist before rollback can restore Subscription: %w", ns, err)
 	}
 
+	// Snapshot every revision before deleting the extension. The controller
+	// creates catalog revisions after the initial migration revision, and orphan
+	// propagation leaves those revisions alive unless rollback removes them too.
+	var revisions ocv1.ClusterObjectSetList
+	if err := m.Client.List(ctx, &revisions, client.MatchingLabels{LabelOwnerName: ceName}); err != nil {
+		return fmt.Errorf("failed to list ClusterObjectSets for rollback: %w", err)
+	}
+	// Preserve support for old migration revisions without the owner label.
+	cosName := fmt.Sprintf("%s-1", ceName)
+	foundMigrationRevision := false
+	for i := range revisions.Items {
+		if revisions.Items[i].Name == cosName {
+			foundMigrationRevision = true
+			break
+		}
+	}
+	var cos ocv1.ClusterObjectSet
+	getErr := m.Client.Get(ctx, client.ObjectKey{Name: cosName}, &cos)
+	if client.IgnoreNotFound(getErr) != nil {
+		return fmt.Errorf("failed to get migration ClusterObjectSet: %w", getErr)
+	}
+	if getErr == nil && !foundMigrationRevision {
+		if owner := cos.Labels[LabelOwnerName]; owner != "" && owner != ceName {
+			return fmt.Errorf("migration ClusterObjectSet %s belongs to another extension %q", cosName, owner)
+		}
+		revisions.Items = append(revisions.Items, cos)
+	}
+
 	// Delete CE (orphan cascade — preserves operator workloads)
 	if err := m.Client.Delete(ctx, &ce, client.PropagationPolicy("Orphan")); err != nil {
 		if client.IgnoreNotFound(err) != nil {
@@ -379,13 +407,11 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 		}
 	}
 
-	// Delete COS (orphan cascade)
-	cosName := fmt.Sprintf("%s-1", ceName)
-	var cos ocv1.ClusterObjectSet
-	if err := m.Client.Get(ctx, client.ObjectKey{Name: cosName}, &cos); err == nil {
-		if err := m.Client.Delete(ctx, &cos, client.PropagationPolicy("Orphan")); err != nil {
+	// Delete all COS revisions with orphan propagation to preserve workloads.
+	for i := range revisions.Items {
+		if err := m.Client.Delete(ctx, &revisions.Items[i], client.PropagationPolicy("Orphan")); err != nil {
 			if client.IgnoreNotFound(err) != nil {
-				return fmt.Errorf("failed to delete ClusterObjectSet: %w", err)
+				return fmt.Errorf("failed to delete ClusterObjectSet %s: %w", revisions.Items[i].Name, err)
 			}
 		}
 	}

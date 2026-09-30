@@ -1269,14 +1269,18 @@ func TestRecoverCreatedMigrationResourcesPreservesActiveTargetResources(t *testi
 	otherCOS := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "other-1"}}
 	createdCE := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "created"}}
 	m := migrationTestClient(t, &createdSecret, otherSecret, createdCOS, otherCOS, createdCE)
+	sub, _ := healthySubscriptionFixtures()
 
-	err := m.recoverCreatedMigrationResources(ctx, Options{}, nil, &createdMigrationResources{
+	err := m.recoverCreatedMigrationResources(ctx, Options{SubscriptionName: sub.Name, SubscriptionNamespace: sub.Namespace}, &Backup{Subscription: sub}, &createdMigrationResources{
 		cos:     createdCOS,
 		secrets: []corev1.Secret{createdSecret},
 		ce:      createdCE,
 	})
 	if err == nil || !strings.Contains(err.Error(), "preserving migration resources") {
 		t.Fatalf("recovery error = %v, want preserved target resources", err)
+	}
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(sub), &operatorsv1alpha1.Subscription{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("recovery restored OLMv0 despite a potentially active COS: %v", err)
 	}
 	for _, object := range []client.Object{&createdSecret, createdCOS, createdCE} {
 		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(object), object); err != nil {

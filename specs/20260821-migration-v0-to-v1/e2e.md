@@ -11,7 +11,7 @@ pushes to `main`.
 | Suite | Cluster | Catalog content | Purpose |
 |---|---|---|---|
 | `fixture` | kind + OLMv1 + OLMv0 CRDs only (no OLMv0 controllers) | Committed OLMv0-install snapshots and a digest-pinned CatalogSource | Deterministic coverage of V1, V2, V3, V4. |
-| `real-operator` | separate kind cluster with OLMv0 + OLMv1 | OLMv0's installed OperatorHub catalog | Proves V5.2–V5.8 with real deployed operators. |
+| `real-operator` | separate kind cluster with OLMv0 + OLMv1 | OLMv0's installed OperatorHub catalog | Covers V5.2–V5.6 plus cleanup and healthy rollback (V5.8). V5.7 upgrade remains a gap. |
 | `in-cluster-job` | fixture cluster | A replayed ecr-secret-operator installation | Proves both CLIs authenticate and migrate using only a Pod ServiceAccount. |
 | `kind-only` | kind + OLMv1 | Local fixture objects, no OLMv0 controllers | Fast contract tests for resource rendering and COS adoption prerequisites. |
 
@@ -110,6 +110,14 @@ and failure artifacts, but do not impose an E2E percentage threshold; the unit s
 coverage while still showing which migration paths the E2E suite executes.
 
 ## CI rollout
+
+The live matrix's `TestMigration` verifies conflict cleanup and rollback. Cleanup retains
+operator Deployments, CRDs, OperatorGroups, and the ClusterExtension. An unacknowledged rollback
+preserves CE backup annotations and COS revisions; an acknowledged rollback must remove all
+CE/COS management and restore the original Subscription spec, an `AtLatestKnown` Subscription,
+a `Succeeded` CSV, and available Deployments within ten minutes. Unit tests additionally verify
+orphan deletion policies, preservation of unrelated revisions, revision-list preflight failures,
+and recovery creation/reconciliation failures without changing the backup.
 
 1. The `migration-test` workflow runs unit coverage, fixture E2E, live-operator E2E, COS
    supersession E2E, and the in-cluster Job E2E independently. Unit, fixture, and live tests
