@@ -1072,6 +1072,25 @@ func TestScanAllSubscriptionsWithOptionsAppliesAcknowledgments(t *testing.T) {
 	}
 }
 
+func TestMigrateEmitsStructuredProgressOnFailure(t *testing.T) {
+	m := migrationTestClient(t)
+	var events []ProgressEvent
+	m.Progress = func(event ProgressEvent) { events = append(events, event) }
+	err := m.Migrate(context.Background(), Options{SubscriptionName: "missing", SubscriptionNamespace: "ns"})
+	if err == nil {
+		t.Fatal("Migrate() unexpectedly succeeded")
+	}
+	if len(events) != 2 {
+		t.Fatalf("got %d progress events, want 2: %#v", len(events), events)
+	}
+	if events[0].Step != ProgressStepProfile || events[0].Status != ProgressStarted || events[0].Message == "" {
+		t.Fatalf("unexpected start event: %#v", events[0])
+	}
+	if events[1].Step != ProgressStepProfile || events[1].Status != ProgressFailed || events[1].Err == nil || events[1].Message != err.Error() {
+		t.Fatalf("unexpected failure event: %#v", events[1])
+	}
+}
+
 func TestPrerequisitesAndRecoveryErrors(t *testing.T) {
 	ctx := context.Background()
 	sub, csv := healthySubscriptionFixtures()

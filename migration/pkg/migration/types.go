@@ -96,8 +96,47 @@ type MigrationInfo struct {
 	OperatorGroupBackupJSON string
 }
 
-// ProgressFunc is called periodically during wait operations to report status.
-type ProgressFunc func(message string)
+// ProgressStep identifies the migration phase associated with an event.
+type ProgressStep string
+
+const (
+	ProgressStepProfile  ProgressStep = "profile"
+	ProgressStepCheck    ProgressStep = "check"
+	ProgressStepCatalog  ProgressStep = "catalog"
+	ProgressStepCollect  ProgressStep = "collect"
+	ProgressStepBackup   ProgressStep = "backup"
+	ProgressStepPrepare  ProgressStep = "prepare"
+	ProgressStepCreate   ProgressStep = "create"
+	ProgressStepCleanup  ProgressStep = "cleanup"
+	ProgressStepScan     ProgressStep = "scan"
+	ProgressStepRollback ProgressStep = "rollback"
+)
+
+// ProgressStatus describes whether a step started, completed, failed, or is
+// reporting an intermediate status. Warnings and notes do not end a step.
+type ProgressStatus string
+
+const (
+	ProgressStarted   ProgressStatus = "started"
+	ProgressWaiting   ProgressStatus = "waiting"
+	ProgressCompleted ProgressStatus = "completed"
+	ProgressFailed    ProgressStatus = "failed"
+	ProgressWarning   ProgressStatus = "warning"
+	ProgressNote      ProgressStatus = "note"
+)
+
+// ProgressEvent is emitted synchronously by Migrator. Err may be set on failed
+// or warning events; Message is suitable for display and is never a control signal.
+type ProgressEvent struct {
+	Step    ProgressStep
+	Status  ProgressStatus
+	Message string
+	Err     error
+}
+
+// ProgressFunc receives migration progress events synchronously. Callbacks
+// should not block or mutate the Migrator while an operation is in progress.
+type ProgressFunc func(event ProgressEvent)
 
 // Migrator performs the migration operations using a controller-runtime client.
 type Migrator struct {
@@ -111,9 +150,9 @@ func NewMigrator(c client.Client, cfg *rest.Config) *Migrator {
 	return &Migrator{Client: c, RESTConfig: cfg}
 }
 
-func (m *Migrator) progress(msg string) {
+func (m *Migrator) progress(event ProgressEvent) {
 	if m.Progress != nil {
-		m.Progress(msg)
+		m.Progress(event)
 	}
 }
 

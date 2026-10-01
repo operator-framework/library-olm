@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -87,7 +88,7 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	}
 
 	m := migration.NewMigrator(c, restCfg)
-	m.Progress = progressFunc
+	m.Progress = progressFuncFor("convert", "")
 	ctx := cmd.Context()
 
 	if convertAll { //nolint:nestif
@@ -100,7 +101,9 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 			AcknowledgeScopedServiceAccount: convertAckScopedSA,
 			AcknowledgeNotSteadyState:       convertAckNotSteady,
 		}
-		fmt.Printf("\n%s%s🔎 Scanning all Subscriptions for migration...%s\n", colorBold, colorCyan, colorReset)
+		if !jsonOutput() {
+			fmt.Printf("\n%s%s🔎 Scanning all Subscriptions for migration...%s\n", colorBold, colorCyan, colorReset)
+		}
 		startProgress()
 		results, err := m.ScanAllSubscriptionsWithOptions(ctx, batchOpts)
 		clearProgress()
@@ -108,11 +111,20 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 			return fmt.Errorf("scan failed: %w", err)
 		}
 
-		migration.PrintScanSummary(results, func(format string, a ...interface{}) {
-			fmt.Printf(format, a...)
-		})
+		if jsonOutput() {
+			if err := writeOutputRecord(outputRecord{Type: "scan", Command: "convert", Data: scanResultsData(results)}); err != nil {
+				return err
+			}
+		} else {
+			migration.PrintScanSummary(results, func(format string, a ...interface{}) {
+				fmt.Printf(format, a...)
+			})
+		}
 
-		return convertBatch(ctx, results, batchOpts, convertDryRun, convertContinueOnErr, m.Migrate, func(opts migration.Options) error {
+		return convertBatch(ctx, results, batchOpts, convertDryRun, convertContinueOnErr, func(ctx context.Context, opts migration.Options) error {
+			m.Progress = progressFuncFor("convert", opts.SubscriptionNamespace+"/"+opts.SubscriptionName)
+			return m.Migrate(ctx, opts)
+		}, func(opts migration.Options) error {
 			return runConvertDryRun(cmd, m, opts)
 		})
 	}
@@ -145,13 +157,19 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	if convertDryRun {
 		return runConvertDryRun(cmd, m, opts)
 	}
+	m.Progress = progressFuncFor("convert", convertNamespace+"/"+operatorName)
 
-	fmt.Printf("\n%s%s🔄 Migrating %s/%s to OLMv1...%s\n", colorBold, colorCyan, convertNamespace, operatorName, colorReset)
+	if !jsonOutput() {
+		fmt.Printf("\n%s%s🔄 Migrating %s/%s to OLMv1...%s\n", colorBold, colorCyan, convertNamespace, operatorName, colorReset)
+	}
 	startProgress()
 	err = m.Migrate(ctx, opts)
 	clearProgress()
 	if err != nil {
 		return fmt.Errorf("migration failed: %w", err)
+	}
+	if jsonOutput() {
+		return writeOutputRecord(outputRecord{Type: "result", Command: "convert", Target: convertNamespace + "/" + operatorName, Status: migration.ProgressCompleted})
 	}
 
 	banner(fmt.Sprintf("Migration complete! %s is now managed by OLMv1", operatorName))
@@ -161,14 +179,23 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 
 func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.Options) error {
 	ctx := cmd.Context()
-	fmt.Printf("\n%s%s🔍 Dry run: %s/%s%s\n", colorBold, colorCyan, opts.SubscriptionNamespace, opts.SubscriptionName, colorReset)
+	m.Progress = progressFuncFor("convert", opts.SubscriptionNamespace+"/"+opts.SubscriptionName)
+	if !jsonOutput() {
+		fmt.Printf("\n%s%s🔍 Dry run: %s/%s%s\n", colorBold, colorCyan, opts.SubscriptionNamespace, opts.SubscriptionName, colorReset)
+	}
 
 	result, err := m.Check(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("pre-migration check failed: %w", err)
 	}
 	if result.Status != migration.OperatorStatusEligible {
-		printCheckResults(result.FailedChecks)
+		if jsonOutput() {
+			if err := writeOutputRecord(outputRecord{Type: "check", Command: "convert", Target: opts.SubscriptionNamespace + "/" + opts.SubscriptionName, Data: scanResultData(*result)}); err != nil {
+				return err
+			}
+		} else {
+			printCheckResults(result.FailedChecks)
+		}
 		return fmt.Errorf("operator %s/%s is %s: %s", opts.SubscriptionNamespace, opts.SubscriptionName, result.Status, result.Reason)
 	}
 
@@ -176,6 +203,22 @@ func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.
 	info, err := m.Gather(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("failed to gather migration info: %w", err)
+	}
+	if jsonOutput() {
+		kindCounts := make(map[string]int)
+		for _, obj := range info.CollectedObjects {
+			kindCounts[obj.GetKind()]++
+		}
+		return writeOutputRecord(outputRecord{
+			Type: "dry-run", Command: "convert", Target: opts.SubscriptionNamespace + "/" + opts.SubscriptionName,
+			Data: dryRunData{
+				Package: info.PackageName, Version: info.Version, Channel: info.Channel,
+				ClusterObjectSet: opts.ClusterExtensionName + "-1", ClusterExtension: opts.ClusterExtensionName,
+				InstallNamespace: opts.InstallNamespace, SystemNamespace: info.SystemNamespace,
+				ManualApproval: info.ManualApproval, KindCounts: kindCounts,
+				CleanupActions: dryRunCleanupPlan(opts, info), BackupDirectory: opts.BackupDirectory,
+			},
+		})
 	}
 	success(fmt.Sprintf("ClusterObjectSet API established; using operator-controller namespace %s", info.SystemNamespace))
 
@@ -218,6 +261,21 @@ func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.
 	fmt.Println()
 	info2("No cluster resources were modified (dry run).")
 	return nil
+}
+
+// dryRunData intentionally excludes collected objects, which may contain Secrets.
+type dryRunData struct {
+	Package          string         `json:"package"`
+	Version          string         `json:"version"`
+	Channel          string         `json:"channel,omitempty"`
+	ClusterObjectSet string         `json:"cluster_object_set"`
+	ClusterExtension string         `json:"cluster_extension"`
+	InstallNamespace string         `json:"install_namespace"`
+	SystemNamespace  string         `json:"system_namespace"`
+	ManualApproval   bool           `json:"manual_approval"`
+	KindCounts       map[string]int `json:"kind_counts"`
+	CleanupActions   []string       `json:"cleanup_actions"`
+	BackupDirectory  string         `json:"backup_directory,omitempty"`
 }
 
 // dryRunCleanupPlan describes all OLMv0 cleanup actions performed by a normal

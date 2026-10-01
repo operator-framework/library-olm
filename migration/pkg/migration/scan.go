@@ -99,7 +99,7 @@ func (m *Migrator) ScanAllSubscriptionsWithOptions(ctx context.Context, defaults
 		opts.SubscriptionNamespace = sub.Namespace
 		opts.ApplyDefaults()
 
-		m.progress(fmt.Sprintf("Checking %s/%s (%s)...", sub.Namespace, sub.Name, sub.Spec.Package))
+		m.progress(ProgressEvent{Step: ProgressStepScan, Status: ProgressWaiting, Message: fmt.Sprintf("Checking %s/%s (%s)...", sub.Namespace, sub.Name, sub.Spec.Package)})
 
 		// Readiness checks
 		readiness, err := m.CheckReadiness(ctx, opts)
@@ -443,7 +443,7 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 		return fmt.Errorf("failed to restore Subscription %s/%s: %w", ns, name, err)
 	}
 
-	m.progress(fmt.Sprintf("Subscription %s/%s restored; operator returning to OLMv0 management", ns, name))
+	m.progress(ProgressEvent{Step: ProgressStepRollback, Status: ProgressCompleted, Message: fmt.Sprintf("Subscription %s/%s restored; operator returning to OLMv0 management", ns, name)})
 	return nil
 }
 
@@ -482,7 +482,7 @@ func (m *Migrator) CleanupConflict(ctx context.Context, ceName string) error {
 			return fmt.Errorf("failed to delete Subscription %s/%s: %w", ns, name, err)
 		}
 	}
-	m.progress(fmt.Sprintf("Deleted Subscription %s/%s", ns, name))
+	m.progress(ProgressEvent{Step: ProgressStepCleanup, Status: ProgressCompleted, Message: fmt.Sprintf("Deleted Subscription %s/%s", ns, name)})
 
 	// Cleanup remaining OLMv0 resources
 	opts := Options{

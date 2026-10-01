@@ -47,16 +47,21 @@ func runCheck(cmd *cobra.Command, args []string) error { //nolint:nestif
 	}
 
 	m := migration.NewMigrator(c, restCfg)
-	m.Progress = progressFunc
+	m.Progress = progressFuncFor("check", "")
 	ctx := cmd.Context()
 
 	if checkAll {
-		fmt.Printf("\n%s%s🔎 Scanning all Subscriptions...%s\n", colorBold, colorCyan, colorReset)
+		if !jsonOutput() {
+			fmt.Printf("\n%s%s🔎 Scanning all Subscriptions...%s\n", colorBold, colorCyan, colorReset)
+		}
 		startProgress()
 		results, err := m.ScanAll(ctx)
 		clearProgress()
 		if err != nil {
 			return fmt.Errorf("scan failed: %w", err)
+		}
+		if jsonOutput() {
+			return writeOutputRecord(outputRecord{Type: "scan", Command: "check", Data: scanResultsData(results)})
 		}
 		migration.PrintScanSummary(results, func(format string, a ...interface{}) {
 			fmt.Printf(format, a...)
@@ -69,17 +74,23 @@ func runCheck(cmd *cobra.Command, args []string) error { //nolint:nestif
 		return fmt.Errorf("-n/--namespace is required")
 	}
 
-	fmt.Printf("\n%s%s🔍 Pre-migration checks for %s/%s%s\n", colorBold, colorCyan, checkSubscriptionNamespace, operatorName, colorReset)
+	if !jsonOutput() {
+		fmt.Printf("\n%s%s🔍 Pre-migration checks for %s/%s%s\n", colorBold, colorCyan, checkSubscriptionNamespace, operatorName, colorReset)
+	}
 
 	opts := migration.Options{
 		SubscriptionName:      operatorName,
 		SubscriptionNamespace: checkSubscriptionNamespace,
 	}
 	opts.ApplyDefaults()
+	m.Progress = progressFuncFor("check", checkSubscriptionNamespace+"/"+operatorName)
 
 	result, err := m.Check(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("pre-migration check failed: %w", err)
+	}
+	if jsonOutput() {
+		return writeOutputRecord(outputRecord{Type: "check", Command: "check", Target: checkSubscriptionNamespace + "/" + operatorName, Data: scanResultData(*result)})
 	}
 	sectionHeader("Readiness, Compatibility and Catalog Checks")
 	printCheckResults(result.Checks)

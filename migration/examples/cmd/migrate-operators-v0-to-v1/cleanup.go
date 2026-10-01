@@ -48,7 +48,7 @@ func runCleanup(cmd *cobra.Command, args []string) error { //nolint:nestif
 	}
 
 	m := migration.NewMigrator(c, restCfg)
-	m.Progress = progressFunc
+	m.Progress = progressFuncFor("cleanup", "")
 	ctx := cmd.Context()
 
 	if cleanupAll { //nolint:nestif
@@ -79,19 +79,38 @@ func runCleanup(cmd *cobra.Command, args []string) error { //nolint:nestif
 		}
 
 		if len(conflictCEs) == 0 {
+			if jsonOutput() {
+				return writeOutputRecord(outputRecord{Type: "result", Command: "cleanup", Status: migration.ProgressCompleted, Message: "No Conflict-state ClusterExtensions found"})
+			}
 			info("No Conflict-state ClusterExtensions found.")
 			return nil
 		}
 
-		fmt.Printf("\nCleaning up %d Conflict-state ClusterExtension(s)...\n", len(conflictCEs))
+		if !jsonOutput() {
+			fmt.Printf("\nCleaning up %d Conflict-state ClusterExtension(s)...\n", len(conflictCEs))
+		}
 		var firstErr error
 		for _, ceName := range conflictCEs {
-			if err := m.Cleanup(ctx, migration.Options{ClusterExtensionName: ceName}); err != nil {
-				fail(fmt.Sprintf("%s: %v", ceName, err))
+			m.Progress = progressFuncFor("cleanup", ceName)
+			err := m.Cleanup(ctx, migration.Options{ClusterExtensionName: ceName})
+			if jsonOutput() {
+				record := outputRecord{Type: "result", Command: "cleanup", Target: ceName, Status: migration.ProgressCompleted}
+				if err != nil {
+					record.Status = migration.ProgressFailed
+					record.Error = err.Error()
+				}
+				if writeErr := writeOutputRecord(record); writeErr != nil {
+					return writeErr
+				}
+			}
+			if err != nil {
+				if !jsonOutput() {
+					fail(fmt.Sprintf("%s: %v", ceName, err))
+				}
 				if firstErr == nil {
 					firstErr = err
 				}
-			} else {
+			} else if !jsonOutput() {
 				success(fmt.Sprintf("%s conflict resolved", ceName))
 			}
 		}
@@ -99,11 +118,19 @@ func runCleanup(cmd *cobra.Command, args []string) error { //nolint:nestif
 	}
 
 	ceName := args[0]
-	fmt.Printf("\n%s%s🧹 Cleaning up Conflict for %s...%s\n", colorBold, colorCyan, ceName, colorReset)
+	m.Progress = progressFuncFor("cleanup", ceName)
+	if !jsonOutput() {
+		fmt.Printf("\n%s%s🧹 Cleaning up Conflict for %s...%s\n", colorBold, colorCyan, ceName, colorReset)
+	}
 
 	if err := m.Cleanup(ctx, migration.Options{ClusterExtensionName: ceName}); err != nil {
-		fail(fmt.Sprintf("Cleanup failed: %v", err))
+		if !jsonOutput() {
+			fail(fmt.Sprintf("Cleanup failed: %v", err))
+		}
 		return err
+	}
+	if jsonOutput() {
+		return writeOutputRecord(outputRecord{Type: "result", Command: "cleanup", Target: ceName, Status: migration.ProgressCompleted})
 	}
 
 	success(fmt.Sprintf("Conflict resolved for %s; OLMv0 artifacts removed, ClusterExtension intact", ceName))

@@ -1,8 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
-	"strings"
+	"os"
 	"sync"
 
 	"github.com/operator-framework/library-olm/migration/pkg/migration"
@@ -24,24 +25,117 @@ var (
 	progressMsg     string
 )
 
-func progressFunc(msg string) {
+type outputRecord struct {
+	Type    string                   `json:"type"`
+	Command string                   `json:"command,omitempty"`
+	Target  string                   `json:"target,omitempty"`
+	Step    migration.ProgressStep   `json:"step,omitempty"`
+	Status  migration.ProgressStatus `json:"status,omitempty"`
+	Message string                   `json:"message,omitempty"`
+	Error   string                   `json:"error,omitempty"`
+	Data    any                      `json:"data,omitempty"`
+}
+
+type scanResultRecord struct {
+	Namespace string                   `json:"namespace"`
+	Name      string                   `json:"name"`
+	Package   string                   `json:"package,omitempty"`
+	Version   string                   `json:"version,omitempty"`
+	Status    migration.OperatorStatus `json:"status"`
+	Reason    string                   `json:"reason,omitempty"`
+	Checks    []checkResultRecord      `json:"checks,omitempty"`
+	Warnings  []string                 `json:"warnings,omitempty"`
+	Error     string                   `json:"error,omitempty"`
+}
+
+type checkResultRecord struct {
+	Name    string `json:"name"`
+	Passed  bool   `json:"passed"`
+	Message string `json:"message"`
+}
+
+func scanResultData(result migration.OperatorScanResult) scanResultRecord {
+	data := scanResultRecord{
+		Namespace: result.SubscriptionNamespace,
+		Name:      result.SubscriptionName,
+		Package:   result.PackageName,
+		Version:   result.Version,
+		Status:    result.Status,
+		Reason:    result.Reason,
+		Warnings:  result.Warnings,
+	}
+	for _, check := range result.Checks {
+		data.Checks = append(data.Checks, checkResultRecord{Name: check.Name, Passed: check.Passed, Message: check.Message})
+	}
+	if result.Error != nil {
+		data.Error = result.Error.Error()
+	}
+	return data
+}
+
+func scanResultsData(results []migration.OperatorScanResult) []scanResultRecord {
+	data := make([]scanResultRecord, 0, len(results))
+	for _, result := range results {
+		data = append(data, scanResultData(result))
+	}
+	return data
+}
+
+func jsonOutput() bool { return outputMode == "jsonl" }
+
+func writeOutputRecord(record outputRecord) error {
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(record)
+}
+
+func progressFunc(event migration.ProgressEvent) {
+	progressFuncWithContext(event, "", "")
+}
+
+func progressFuncFor(command, target string) migration.ProgressFunc {
+	return func(event migration.ProgressEvent) { progressFuncWithContext(event, command, target) }
+}
+
+func progressFuncWithContext(event migration.ProgressEvent, command, target string) {
 	progressMu.Lock()
 	defer progressMu.Unlock()
-	if strings.HasPrefix(msg, "Warning:") || strings.HasPrefix(msg, "Note:") {
-		if progressRunning && progressMsg != "" {
-			fmt.Printf("\r%80s\r", "")
+	if jsonOutput() {
+		record := outputRecord{Type: "progress", Command: command, Target: target, Step: event.Step, Status: event.Status, Message: event.Message}
+		if event.Err != nil {
+			record.Error = event.Err.Error()
 		}
-		progressMsg = ""
-		if strings.HasPrefix(msg, "Warning:") {
-			warn(strings.TrimSpace(strings.TrimPrefix(msg, "Warning:")))
-		} else {
-			info(msg)
-		}
+		_ = writeOutputRecord(record)
 		return
 	}
-	progressMsg = msg
-	if progressRunning {
-		fmt.Printf("\r  %s%s...%s", colorDim, msg, colorReset)
+	if progressMsg != "" {
+		fmt.Printf("\r%80s\r", "")
+		progressMsg = ""
+	}
+	switch event.Status {
+	case migration.ProgressStarted:
+		fmt.Printf("\n%s%s%s%s\n", colorBold, colorCyan, event.Message, colorReset)
+	case migration.ProgressWaiting:
+		if progressRunning {
+			progressMsg = event.Message
+			fmt.Printf("\r  %s%s%s", colorDim, event.Message, colorReset)
+		}
+	case migration.ProgressCompleted:
+		if event.Message != "" {
+			success(event.Message)
+		} else {
+			success(fmt.Sprintf("%s complete", event.Step))
+		}
+	case migration.ProgressFailed:
+		fail(event.Message)
+	case migration.ProgressWarning:
+		msg := event.Message
+		if event.Err != nil {
+			msg = fmt.Sprintf("%s: %v", msg, event.Err)
+		}
+		warn(msg)
+	case migration.ProgressNote:
+		info(event.Message)
 	}
 }
 
@@ -54,6 +148,11 @@ func startProgress() {
 func clearProgress() {
 	progressMu.Lock()
 	progressRunning = false
+	if jsonOutput() {
+		progressMsg = ""
+		progressMu.Unlock()
+		return
+	}
 	if progressMsg != "" {
 		fmt.Printf("\r%80s\r", "") // clear the line
 	}
