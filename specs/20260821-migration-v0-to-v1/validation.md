@@ -68,7 +68,8 @@ flag flips it to `Eligible`:
 - **V4.7** Namespace change copies `pod-security.kubernetes.io/*` and `security.openshift.io/scc.podSecurityLabelSync` to the new namespace. An existing target with no explicit PSA `enforce` label is rejected when the source sets one, because its cluster default is not observable. Collected source Deployments scale to zero before target creation so two controllers do not overlap. They return to their original replica count only when target COS creation failed before it may have reconciled; otherwise migration reports that the target may be active, leaves the source scaled down, and refuses automatic OLMv0 recovery. The target operator resources are present and their collected source copies are removed. The fixture scenario retains the old namespace by default; the live scenario passes `--acknowledge-namespace-delete` and verifies the source namespace is deleted after OLMv0 finalizes its CSV.
 - **V4.8** System-managed namespace: against operator-controller `v1.12.0`'s experimental CRD,
   explicit system-managed conversion omits `ClusterExtension.spec.namespace`, prepares the
-  bundle-metadata namespace for the preceding COS, and lets OLMv1 manage the installation there.
+  bundle-metadata namespace for the preceding COS, includes it in the migration revision,
+  and verifies the catalog revision takes Namespace ownership while OLMv1 manages the installation there.
   The same invocation against a CRD that requires the field is rejected before mutation with an
   actionable error. A conversion with neither namespace flag continues to use the Subscription
   namespace.

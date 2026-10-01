@@ -134,7 +134,8 @@ an explicitly selected OLMv1 system-managed namespace mode when its controller A
 - Delete the source namespace only with `--acknowledge-namespace-delete`; retain it by default.
 - `--system-managed-install-namespace` uses operator-controller `v1.12.0`'s experimental
   optional-namespace CRD. It capability-gates the mode and omits the CE field. Migration
-  prepares the bundle-metadata namespace before its COS, after which OLMv1 manages it. Unit tests
+  prepares the bundle-metadata namespace before its COS and imports it for the catalog
+  revision's ownership handoff, after which OLMv1 manages it. Unit tests
   reject CRDs that require the field; the dedicated fixture E2E verifies the omitted field,
   target namespace, and source-resource cleanup.
 

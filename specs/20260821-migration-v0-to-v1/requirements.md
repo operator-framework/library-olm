@@ -52,8 +52,9 @@ namespace); `rollback`/`cleanup` target the resulting `ClusterExtension`.
 experimental-controller mode. It omits `ClusterExtension.spec.namespace` and lets OLMv1 manage
 the namespace selected from bundle metadata. Migration capability-checks the installed CRD and
 rejects controllers that require `spec.namespace` before mutation. Because the COS precedes the
-CE, migration creates that metadata-derived namespace before applying COS objects, then relocates
-them there and removes their source copies after installation. Omitting `--install-namespace` continues to mean
+CE, migration creates that metadata-derived namespace before applying COS objects and includes
+it in the migration COS so the catalog-derived COS can take over ownership. It then relocates
+the operator objects there and removes their source copies after installation. Omitting `--install-namespace` continues to mean
 the Subscription namespace and never selects this mode.
 
 For `migrate-catalogs-v0-to-v1`: `--delete-catalogsource` deletes the source `CatalogSource`
@@ -296,7 +297,8 @@ Both conditions must be met.
 - **OLMv1 system-managed namespace** → an explicit opt-in checks that the installed
   ClusterExtension CRD makes `spec.namespace` optional, then omits it. OLMv1 creates the
   bundle-metadata namespace if it is absent; migration deterministically resolves and prepares
-  the same namespace before its COS for resource relocation and source cleanup. The default
+  the same namespace before its COS, includes it in the migration revision for ownership
+  handoff, then relocates resources and cleans up source copies. The default
   source-namespace behavior is unchanged.
 - **Disconnected / mirrored** → catalogs must be migrated first; the operator tool never auto-creates catalogs.
 

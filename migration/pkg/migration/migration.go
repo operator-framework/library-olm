@@ -131,11 +131,16 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 		return err
 	}
 	info.CollectedObjects = objects
-	// The COS is applied before the CE. Ensure the metadata-derived namespace
-	// exists now so its namespaced objects can succeed; the CE itself still
-	// omits spec.namespace and lets OLMv1 manage that namespace thereafter.
+	// The migration COS is applied before the CE. Bootstrap the metadata-derived
+	// namespace so its namespaced objects can succeed, then include it in the COS
+	// so the controller's catalog-derived revision can take over its ownership.
 	if err := m.PrepareInstallNamespace(ctx, resourceOpts); err != nil {
 		return err
+	}
+	if opts.SystemManagedInstallNamespace {
+		if err := m.IncludeSystemManagedNamespace(ctx, info, resourceOpts.InstallNamespace); err != nil {
+			return err
+		}
 	}
 
 	backup, err := m.BackupResources(ctx, opts, csv, ip)
@@ -265,7 +270,7 @@ func (m *Migrator) ensureSystemManagedNamespaceSupport(ctx context.Context) erro
 		return fmt.Errorf("system-managed install namespace requires established ClusterExtension CRD %q", clusterExtensionCRDName)
 	}
 	for _, version := range crd.Spec.Versions {
-		if !version.Served || version.Schema == nil || version.Schema.OpenAPIV3Schema == nil {
+		if version.Name != ocv1.GroupVersion.Version || !version.Served || version.Schema == nil || version.Schema.OpenAPIV3Schema == nil {
 			continue
 		}
 		spec, ok := version.Schema.OpenAPIV3Schema.Properties["spec"]

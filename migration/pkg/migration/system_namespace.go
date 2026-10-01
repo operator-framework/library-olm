@@ -1,6 +1,7 @@
 package migration
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -8,7 +9,9 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/validation"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -16,6 +19,30 @@ const (
 	suggestedNamespaceAnnotation         = "operatorframework.io/suggested-namespace"
 	maxNamespaceNameLength               = 63
 )
+
+// IncludeSystemManagedNamespace adds the prepared Namespace to the imported
+// revision. Without it, the controller's catalog revision sees an unowned
+// Namespace and cannot take it over with collision protection enabled.
+func (m *Migrator) IncludeSystemManagedNamespace(ctx context.Context, info *MigrationInfo, name string) error {
+	var namespace corev1.Namespace
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: name}, &namespace); err != nil {
+		return fmt.Errorf("get prepared system-managed namespace %q: %w", name, err)
+	}
+	obj := unstructured.Unstructured{}
+	obj.SetAPIVersion("v1")
+	obj.SetKind("Namespace")
+	obj.SetName(name)
+	obj.SetLabels(namespace.Labels)
+	obj.SetAnnotations(namespace.Annotations)
+	for i := range info.CollectedObjects {
+		if info.CollectedObjects[i].GetAPIVersion() == "v1" && info.CollectedObjects[i].GetKind() == "Namespace" && info.CollectedObjects[i].GetName() == name {
+			info.CollectedObjects[i] = obj
+			return nil
+		}
+	}
+	info.CollectedObjects = append(info.CollectedObjects, obj)
+	return nil
+}
 
 // EffectiveInstallNamespace returns the namespace into which migration's COS
 // objects must be placed. System-managed mode still omits spec.namespace from

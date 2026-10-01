@@ -635,12 +635,35 @@ func TestSystemManagedNamespaceMigration(t *testing.T) {
 	}
 
 	run(t, "kubectl", "get", "namespace/"+targetNamespace)
+	namespaceJSON, err := output("kubectl", "get", "namespace/"+targetNamespace, "-o", "json")
+	if err != nil {
+		t.Fatalf("get system-managed namespace: %v\n%s", err, namespaceJSON)
+	}
+	var managedNamespace corev1.Namespace
+	if err := json.Unmarshal([]byte(namespaceJSON), &managedNamespace); err != nil {
+		t.Fatalf("decode system-managed namespace: %v", err)
+	}
+	catalogCOS := subscription + "-2"
+	ownedByCatalogCOS := false
+	for _, owner := range managedNamespace.OwnerReferences {
+		if owner.Kind == ocv1.ClusterObjectSetKind && owner.Name == catalogCOS {
+			ownedByCatalogCOS = true
+			break
+		}
+	}
+	if !ownedByCatalogCOS {
+		t.Fatalf("system-managed namespace %q ownerReferences = %#v, want catalog ClusterObjectSet %q", targetNamespace, managedNamespace.OwnerReferences, catalogCOS)
+	}
 	targetDeployments, err := output("kubectl", "get", "deployment", "-n", targetNamespace, "-o", "name")
 	if err != nil || strings.TrimSpace(targetDeployments) == "" {
 		t.Fatalf("list system-managed target deployments: %v\n%s", err, targetDeployments)
 	}
 	for _, deployment := range strings.Fields(sourceDeployments) {
-		if out, err := output("kubectl", "get", deployment, "-n", namespace); err == nil {
+		out, err := output("kubectl", "get", deployment, "-n", namespace, "--ignore-not-found", "-o", "name")
+		if err != nil {
+			t.Fatalf("check source operator resource %s: %v\n%s", deployment, err, out)
+		}
+		if strings.TrimSpace(out) != "" {
 			t.Fatalf("source operator resource %s remains after system-managed migration:\n%s", deployment, out)
 		}
 	}
