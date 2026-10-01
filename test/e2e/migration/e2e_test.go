@@ -611,6 +611,15 @@ func TestLiveCrossNamespaceDeletionMigration(t *testing.T) {
 		"pod-security.kubernetes.io/audit=restricted",
 		"security.openshift.io/scc.podSecurityLabelSync=true", "--overwrite")
 
+	// Direct invocations must also finish the source install before migration
+	// removes its CSV and scales its Deployment down for the namespace cutover.
+	waitForCompletedInstallPlan(t, namespace, subscription)
+	csvName, err := output("kubectl", "get", "subscription/"+subscription, "-n", namespace, "-o", "jsonpath={.status.installedCSV}")
+	if err != nil || strings.TrimSpace(csvName) == "" {
+		t.Fatalf("get installed source CSV: %v (%s)", err, csvName)
+	}
+	run(t, "kubectl", "wait", "--for=jsonpath={.status.phase}=Succeeded", "csv/"+strings.TrimSpace(csvName), "-n", namespace, "--timeout=10m")
+
 	// Migrate catalogs before converting the Subscription so C7 is satisfied.
 	run(t, binary(t, "migrate-catalogs-v0-to-v1"), "--kubeconfig", os.Getenv("KUBECONFIG"))
 	run(t, binary(t, "migrate-operators-v0-to-v1"), "convert", subscription,
@@ -769,7 +778,12 @@ func collectArtifacts(t *testing.T, namespace string) {
 		{"get", "events", "-n", "olmv1-system", "-o", "yaml"},
 		{"logs", "deployment/catalogd-controller-manager", "-n", "olmv1-system", "--all-containers", "--tail=-1"},
 		{"logs", "deployment/operator-controller-controller-manager", "-n", "olmv1-system", "--all-containers", "--tail=-1"},
+		{"logs", "deployment/catalog-operator", "-n", "olm", "--all-containers", "--tail=-1"},
+		{"logs", "deployment/olm-operator", "-n", "olm", "--all-containers", "--tail=-1"},
 	} {
+		if resource[0] == "logs" && resource[3] == "olm" && os.Getenv("E2E_SUITE") != "real-operator" {
+			continue // Fixture clusters deliberately have no OLMv0 controllers.
+		}
 		out, _ := output("kubectl", resource...)
 		name := strings.NewReplacer(",", "-", "/", "-").Replace(strings.Join(resource[:2], "-"))
 		for i, arg := range resource[:len(resource)-1] {

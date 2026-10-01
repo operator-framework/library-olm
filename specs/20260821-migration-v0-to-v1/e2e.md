@@ -91,6 +91,11 @@ remains unit-only. The test process invokes the built CLIs for command behavior;
 the Kubernetes client only for setup and assertions. Every wait has a bounded timeout and
 prints current objects/events on timeout.
 
+Live setup waits for the source InstallPlan to reach `Complete` before checking CSV health.
+`AtLatestKnown` alone does not prove installation has finished. The live namespace-deletion
+scenario also enforces this prerequisite when invoked directly, and failure diagnostics include
+both OLMv0 controller logs to identify installations racing the cutover.
+
 `make migration/test-e2e-fixture-matrix` runs only deterministic fixture scenarios. `make
 migration/test-e2e-live-matrix` runs only the real-operator smoke scenarios. Both use the Kind-generated
 kubeconfig by default. The

@@ -32,5 +32,10 @@ spec:
   sourceNamespace: olm
 EOF
 kubectl -n "$E2E_NAMESPACE" wait --for=jsonpath='{.status.state}'=AtLatestKnown "subscription/$E2E_PACKAGE" --timeout=15m
+# AtLatestKnown and a healthy CSV can precede InstallPlan completion. Do not
+# begin migration while an installer can still recreate CSVs or Deployments.
+install_plan=$(kubectl -n "$E2E_NAMESPACE" get "subscription/$E2E_PACKAGE" -o jsonpath='{.status.installPlanRef.name}')
+[[ -n $install_plan ]] || { echo "Subscription $E2E_PACKAGE has no InstallPlan reference" >&2; exit 1; }
+kubectl -n "$E2E_NAMESPACE" wait --for=jsonpath='{.status.phase}'=Complete "installplan/$install_plan" --timeout=15m
 csv=$(kubectl -n "$E2E_NAMESPACE" get "subscription/$E2E_PACKAGE" -o jsonpath='{.status.installedCSV}')
 kubectl -n "$E2E_NAMESPACE" wait --for=jsonpath='{.status.phase}'=Succeeded "csv/$csv" --timeout=15m
