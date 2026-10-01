@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/operator-framework/library-olm/migration/pkg/migration"
@@ -26,6 +27,18 @@ var (
 func progressFunc(msg string) {
 	progressMu.Lock()
 	defer progressMu.Unlock()
+	if strings.HasPrefix(msg, "Warning:") || strings.HasPrefix(msg, "Note:") {
+		if progressRunning && progressMsg != "" {
+			fmt.Printf("\r%80s\r", "")
+		}
+		progressMsg = ""
+		if strings.HasPrefix(msg, "Warning:") {
+			warn(strings.TrimSpace(strings.TrimPrefix(msg, "Warning:")))
+		} else {
+			info(msg)
+		}
+		return
+	}
 	progressMsg = msg
 	if progressRunning {
 		fmt.Printf("\r  %s%s...%s", colorDim, msg, colorReset)
@@ -46,10 +59,6 @@ func clearProgress() {
 	}
 	progressMsg = ""
 	progressMu.Unlock()
-}
-
-func stepHeader(n int, title string) {
-	fmt.Printf("\n%s%sStep %d: %s%s\n", colorBold, colorCyan, n, title, colorReset)
 }
 
 func sectionHeader(title string) {

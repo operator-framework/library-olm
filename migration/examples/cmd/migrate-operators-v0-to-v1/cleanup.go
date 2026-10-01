@@ -53,7 +53,7 @@ func runCleanup(cmd *cobra.Command, args []string) error { //nolint:nestif
 
 	if cleanupAll { //nolint:nestif
 		// Find all CEs that are in Conflict state
-		results, err := m.ScanAllSubscriptions(ctx)
+		results, err := m.ScanAll(ctx)
 		if err != nil {
 			return fmt.Errorf("scan failed: %w", err)
 		}
@@ -86,7 +86,7 @@ func runCleanup(cmd *cobra.Command, args []string) error { //nolint:nestif
 		fmt.Printf("\nCleaning up %d Conflict-state ClusterExtension(s)...\n", len(conflictCEs))
 		var firstErr error
 		for _, ceName := range conflictCEs {
-			if err := m.CleanupConflict(ctx, ceName); err != nil {
+			if err := m.Cleanup(ctx, migration.Options{ClusterExtensionName: ceName}); err != nil {
 				fail(fmt.Sprintf("%s: %v", ceName, err))
 				if firstErr == nil {
 					firstErr = err
@@ -101,7 +101,7 @@ func runCleanup(cmd *cobra.Command, args []string) error { //nolint:nestif
 	ceName := args[0]
 	fmt.Printf("\n%s%s🧹 Cleaning up Conflict for %s...%s\n", colorBold, colorCyan, ceName, colorReset)
 
-	if err := m.CleanupConflict(ctx, ceName); err != nil {
+	if err := m.Cleanup(ctx, migration.Options{ClusterExtensionName: ceName}); err != nil {
 		fail(fmt.Sprintf("Cleanup failed: %v", err))
 		return err
 	}

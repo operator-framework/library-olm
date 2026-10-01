@@ -83,6 +83,7 @@ type MigrationInfo struct {
 	CatalogSourceRef    types.NamespacedName
 	CatalogSourceImage  string // tag-based image from CatalogSource.Spec.Image
 	ResolvedCatalogName string
+	SystemNamespace     string // operator-controller namespace for COS reference Secrets
 	CollectedObjects    []unstructured.Unstructured
 
 	// SubscriptionConfig holds spec.config from the Subscription for mapping to CE (R4).

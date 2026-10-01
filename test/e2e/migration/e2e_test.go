@@ -450,12 +450,13 @@ func TestMigration(t *testing.T) {
 			t.Fatalf("check --all did not report %s/%s:\n%s", namespace, subscription, allChecks)
 		}
 	}
-	run(t, binary(t, "migrate-operators-v0-to-v1"), "check", subscription, "-n", namespace, "--kubeconfig", os.Getenv("KUBECONFIG"))
-	if os.Getenv("E2E_SUITE") == "real-operator" {
-		run(t, binary(t, "migrate-operators-v0-to-v1"), "convert", subscription, "-n", namespace, "--dry-run", "--kubeconfig", os.Getenv("KUBECONFIG"))
-		if _, err := output("kubectl", "get", "clusterextension", subscription); err == nil {
-			t.Fatal("convert --dry-run created a ClusterExtension")
-		}
+	checkOutput, err := output(binary(t, "migrate-operators-v0-to-v1"), "check", subscription, "-n", namespace, "--kubeconfig", os.Getenv("KUBECONFIG"))
+	if err != nil || !strings.Contains(checkOutput, "passes all readiness, compatibility, and catalog-availability checks") {
+		t.Fatalf("public Check API did not report eligibility: %v\n%s", err, checkOutput)
+	}
+	run(t, binary(t, "migrate-operators-v0-to-v1"), "convert", subscription, "-n", namespace, "--dry-run", "--kubeconfig", os.Getenv("KUBECONFIG"))
+	if _, err := output("kubectl", "get", "clusterextension", subscription); err == nil {
+		t.Fatal("convert --dry-run created a ClusterExtension")
 	}
 	run(t, binary(t, "migrate-operators-v0-to-v1"), "convert", subscription, "-n", namespace, "--kubeconfig", os.Getenv("KUBECONFIG"))
 

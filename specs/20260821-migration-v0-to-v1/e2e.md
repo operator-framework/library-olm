@@ -96,6 +96,11 @@ Live setup waits for the source InstallPlan to reach `Complete` before checking 
 scenario also enforces this prerequisite when invoked directly, and failure diagnostics include
 both OLMv0 controller logs to identify installations racing the cutover.
 
+The operator CLI routes single conversion through `Migrator.Migrate`, preview through
+`Check` and `Gather`, and rollback/cleanup through `Rollback` and `Cleanup`. Fixture
+refusal tests exercise the public check and preview paths before any mutation; live
+tests exercise the same public conversion and recovery paths against OLMv0.
+
 `make migration/test-e2e-fixture-matrix` runs only deterministic fixture scenarios. `make
 migration/test-e2e-live-matrix` runs only the real-operator smoke scenarios. Both use the Kind-generated
 kubeconfig by default. The

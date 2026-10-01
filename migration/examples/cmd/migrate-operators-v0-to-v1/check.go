@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -54,7 +53,7 @@ func runCheck(cmd *cobra.Command, args []string) error { //nolint:nestif
 	if checkAll {
 		fmt.Printf("\n%s%s🔎 Scanning all Subscriptions...%s\n", colorBold, colorCyan, colorReset)
 		startProgress()
-		results, err := m.ScanAllSubscriptions(ctx)
+		results, err := m.ScanAll(ctx)
 		clearProgress()
 		if err != nil {
 			return fmt.Errorf("scan failed: %w", err)
@@ -78,42 +77,19 @@ func runCheck(cmd *cobra.Command, args []string) error { //nolint:nestif
 	}
 	opts.ApplyDefaults()
 
-	sectionHeader("Readiness Checks")
-	readiness, readinessErr := m.CheckReadiness(ctx, opts)
-	if readinessErr != nil {
-		fail(fmt.Sprintf("Could not run readiness checks: %v", readinessErr))
-	} else {
-		printCheckResults(readiness.Checks)
+	result, err := m.Check(ctx, opts)
+	if err != nil {
+		return fmt.Errorf("pre-migration check failed: %w", err)
 	}
-
-	sectionHeader("Compatibility Checks")
-	_, csv, _, profileErr := m.GetCSVAndInstallPlan(ctx, opts)
-	if profileErr != nil { //nolint:nestif
-		fail(fmt.Sprintf("Could not profile operator: %v", profileErr))
+	sectionHeader("Readiness, Compatibility and Catalog Checks")
+	printCheckResults(result.Checks)
+	if result.Status == migration.OperatorStatusEligible {
+		success(result.Reason)
 	} else {
-		propsJSON := csv.Annotations["operatorframework.io/properties"]
-		compat, compatErr := m.CheckCompatibility(ctx, opts, csv, propsJSON)
-		if compatErr != nil {
-			fail(fmt.Sprintf("Could not run compatibility checks: %v", compatErr))
-		} else {
-			printCheckResults(compat.Checks)
-		}
-
-		sectionHeader("ClusterCatalog Availability")
-		bundleInfo, _ := m.GetBundleInfo(ctx, opts, csv, nil)
-		if bundleInfo != nil {
-			catalogName, catalogErr := m.ResolveClusterCatalog(ctx, bundleInfo, restCfg)
-			if catalogErr != nil {
-				var notFound *migration.PackageNotFoundError
-				if errors.As(catalogErr, &notFound) {
-					warn(fmt.Sprintf("No ClusterCatalog found for package %q — run migrate-catalogs-v0-to-v1 first", bundleInfo.PackageName))
-				} else {
-					warn(fmt.Sprintf("Catalog resolution error: %v", catalogErr))
-				}
-			} else {
-				success(fmt.Sprintf("ClusterCatalog available: %s", catalogName))
-			}
-		}
+		fail(fmt.Sprintf("%s: %s", result.Status, result.Reason))
+	}
+	for _, warning := range result.Warnings {
+		warn(warning)
 	}
 
 	fmt.Println()

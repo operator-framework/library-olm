@@ -75,7 +75,7 @@ func runRollback(cmd *cobra.Command, args []string) error { //nolint:nestif
 		fmt.Printf("\nRolling back %d migrated ClusterExtension(s)...\n", len(targets))
 		var firstErr error
 		for _, name := range targets {
-			if err := m.RollbackClusterExtension(ctx, name, rollbackAcknowledgeInstalled); err != nil {
+			if err := m.Rollback(ctx, migration.Options{ClusterExtensionName: name, AcknowledgeInstalled: rollbackAcknowledgeInstalled}); err != nil {
 				fail(fmt.Sprintf("%s: %v", name, err))
 				if firstErr == nil {
 					firstErr = err
@@ -90,7 +90,7 @@ func runRollback(cmd *cobra.Command, args []string) error { //nolint:nestif
 	ceName := args[0]
 	fmt.Printf("\n%s%s🔄 Rolling back ClusterExtension %s...%s\n", colorBold, colorCyan, ceName, colorReset)
 
-	if err := m.RollbackClusterExtension(ctx, ceName, rollbackAcknowledgeInstalled); err != nil {
+	if err := m.Rollback(ctx, migration.Options{ClusterExtensionName: ceName, AcknowledgeInstalled: rollbackAcknowledgeInstalled}); err != nil {
 		fail(fmt.Sprintf("Rollback failed: %v", err))
 		return err
 	}

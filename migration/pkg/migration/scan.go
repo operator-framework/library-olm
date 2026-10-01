@@ -30,6 +30,7 @@ type OperatorScanResult struct {
 	// Example: other installed operators declare a dependency on this package.
 	Warnings     []string
 	Error        error
+	Checks       []CheckResult // all evaluated checks, including passing checks
 	FailedChecks []CheckResult
 }
 
@@ -109,6 +110,7 @@ func (m *Migrator) ScanAllSubscriptionsWithOptions(ctx context.Context, defaults
 			results = append(results, result)
 			continue
 		}
+		result.Checks = append(result.Checks, readiness.Checks...)
 
 		// Get CSV for compatibility checks
 		_, csv, _, err := m.GetCSVAndInstallPlan(ctx, opts)
@@ -132,6 +134,7 @@ func (m *Migrator) ScanAllSubscriptionsWithOptions(ctx context.Context, defaults
 			results = append(results, result)
 			continue
 		}
+		result.Checks = append(result.Checks, compat.Checks...)
 
 		// Merge readiness + compat failed checks
 		result.FailedChecks = append(readiness.FailedChecks(), compat.FailedChecks()...)
@@ -145,16 +148,18 @@ func (m *Migrator) ScanAllSubscriptionsWithOptions(ctx context.Context, defaults
 				Version:     result.Version,
 			}, m.RESTConfig)
 			if catalogErr != nil {
-				result.FailedChecks = append(result.FailedChecks, CheckResult{
+				catalogCheck := CheckResult{
 					Name:    "Catalog availability",
 					Passed:  false,
-					Message: fmt.Sprintf("package not found in any serving ClusterCatalog; run migrate-catalogs-v0-to-v1 first: %v", catalogErr),
-				})
+					Message: fmt.Sprintf("No ClusterCatalog found for package %q; run migrate-catalogs-v0-to-v1 first: %v", sub.Spec.Package, catalogErr),
+				}
+				result.Checks = append(result.Checks, catalogCheck)
+				result.FailedChecks = append(result.FailedChecks, catalogCheck)
 				result.Status = OperatorStatusIneligible
 				result.Reason = fmt.Sprintf("package %q not found in any serving ClusterCatalog", sub.Spec.Package)
 				result.Eligible = false
 			} else {
-				result.FailedChecks = append(result.FailedChecks, CheckResult{
+				result.Checks = append(result.Checks, CheckResult{
 					Name:    "Catalog availability",
 					Passed:  true,
 					Message: fmt.Sprintf("package available in ClusterCatalog %s", catalogName),
@@ -221,6 +226,7 @@ func (m *Migrator) ScanSubscription(ctx context.Context, opts Options) (*Operato
 	if err != nil {
 		return nil, err
 	}
+	result.Checks = append(result.Checks, readiness.Checks...)
 
 	sub, csv, _, err := m.GetCSVAndInstallPlan(ctx, opts)
 	if err != nil {
@@ -242,6 +248,7 @@ func (m *Migrator) ScanSubscription(ctx context.Context, opts Options) (*Operato
 		result.Error = err
 		return result, nil
 	}
+	result.Checks = append(result.Checks, compat.Checks...)
 
 	result.FailedChecks = append(readiness.FailedChecks(), compat.FailedChecks()...)
 	if len(result.FailedChecks) > 0 {
@@ -257,17 +264,19 @@ func (m *Migrator) ScanSubscription(ctx context.Context, opts Options) (*Operato
 		Version:     result.Version,
 	}, m.RESTConfig)
 	if catalogErr != nil {
-		result.FailedChecks = append(result.FailedChecks, CheckResult{
+		catalogCheck := CheckResult{
 			Name:    "Catalog availability",
 			Passed:  false,
-			Message: fmt.Sprintf("package not found in any serving ClusterCatalog; run migrate-catalogs-v0-to-v1 first: %v", catalogErr),
-		})
+			Message: fmt.Sprintf("No ClusterCatalog found for package %q; run migrate-catalogs-v0-to-v1 first: %v", result.PackageName, catalogErr),
+		}
+		result.Checks = append(result.Checks, catalogCheck)
+		result.FailedChecks = append(result.FailedChecks, catalogCheck)
 		result.Status = OperatorStatusIneligible
 		result.Reason = fmt.Sprintf("package %q not found in any serving ClusterCatalog", result.PackageName)
 		return result, nil
 	}
 
-	result.FailedChecks = append(result.FailedChecks, CheckResult{
+	result.Checks = append(result.Checks, CheckResult{
 		Name:    "Catalog availability",
 		Passed:  true,
 		Message: fmt.Sprintf("package available in ClusterCatalog %s", catalogName),
@@ -645,11 +654,20 @@ func (m *Migrator) findDependents(ctx context.Context, packageName string) []str
 	return dependents
 }
 
-// Gather collects and returns everything that would be migrated without making
-// any cluster mutations — backs the CLI convert --dry-run (R1.1).
+// Gather checks the target COS prerequisites and collects everything that would
+// be migrated without making cluster mutations — backs convert --dry-run (R1.1).
 func (m *Migrator) Gather(ctx context.Context, opts Options) (*MigrationInfo, error) {
 	opts.ApplyDefaults()
-	return m.GatherMigrationInfo(ctx, opts)
+	prepared, err := m.PrepareClusterObjectSet(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	info, err := m.GatherMigrationInfo(ctx, prepared)
+	if err != nil {
+		return nil, err
+	}
+	info.SystemNamespace = prepared.SystemNamespace
+	return info, nil
 }
 
 // Rollback restores an operator to OLMv0 management (R1.1).
