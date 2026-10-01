@@ -140,6 +140,49 @@ func TestRollbackRevisionListFailurePreservesBackup(t *testing.T) {
 	}
 }
 
+type revisionDeleteFailureClient struct {
+	client.Client
+	failName string
+	failOnce bool
+}
+
+func (c *revisionDeleteFailureClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	if _, ok := obj.(*ocv1.ClusterObjectSet); ok && obj.GetName() == c.failName && c.failOnce {
+		c.failOnce = false
+		return errors.New("revision deletion forbidden")
+	}
+	return c.Client.Delete(ctx, obj, opts...)
+}
+
+func TestRollbackRevisionDeleteFailureKeepsBackupForRetry(t *testing.T) {
+	ctx := context.Background()
+	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "widgets", Annotations: map[string]string{
+		MigratedFromSubscriptionAnnotation:    "source/sub",
+		MigrationSubscriptionBackupAnnotation: `{"name":"widgets","source":"catalog","sourceNamespace":"olm"}`,
+	}}}
+	first := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-1", Labels: map[string]string{LabelOwnerName: ce.Name}}}
+	second := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-2", Labels: map[string]string{LabelOwnerName: ce.Name}}}
+	m := migrationTestClient(t, ce, first, second, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "source"}})
+	m.Client = &revisionDeleteFailureClient{Client: m.Client, failName: second.Name, failOnce: true}
+	if err := m.Rollback(ctx, Options{ClusterExtensionName: ce.Name, AcknowledgeInstalled: true}); err == nil || !strings.Contains(err.Error(), "revision deletion forbidden") {
+		t.Fatalf("Rollback() error = %v, want revision deletion failure", err)
+	}
+	var retained ocv1.ClusterExtension
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(ce), &retained); err != nil {
+		t.Fatalf("failed rollback removed the ClusterExtension backup: %v", err)
+	}
+	if retained.Annotations[MigrationSubscriptionBackupAnnotation] != ce.Annotations[MigrationSubscriptionBackupAnnotation] {
+		t.Fatal("failed rollback changed the Subscription backup")
+	}
+	if err := m.Rollback(ctx, Options{ClusterExtensionName: ce.Name, AcknowledgeInstalled: true}); err != nil {
+		t.Fatalf("retry Rollback(): %v", err)
+	}
+	var restored operatorsv1alpha1.Subscription
+	if err := m.Client.Get(ctx, client.ObjectKey{Namespace: "source", Name: "sub"}, &restored); err != nil {
+		t.Fatalf("retry did not restore Subscription: %v", err)
+	}
+}
+
 type reconcilingSubscriptionClient struct {
 	client.Client
 	createError error
@@ -223,11 +266,13 @@ func TestCleanupConflictPreservesSharedOperatorGroupAndOLMv1Management(t *testin
 	sub := &operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: "sub", Namespace: "source"}, Status: operatorsv1alpha1.SubscriptionStatus{InstalledCSV: "widgets.v1"}}
 	csv := &operatorsv1alpha1.ClusterServiceVersion{ObjectMeta: metav1.ObjectMeta{Name: "widgets.v1", Namespace: "source"}}
 	condition := &operatorsv1.OperatorCondition{ObjectMeta: metav1.ObjectMeta{Name: csv.Name, Namespace: csv.Namespace}}
-	copied := &operatorsv1alpha1.ClusterServiceVersion{ObjectMeta: metav1.ObjectMeta{Name: csv.Name, Namespace: "other", Labels: map[string]string{"olm.managed": "true", "olm.copiedFrom": csv.Name}}}
+	copied := &operatorsv1alpha1.ClusterServiceVersion{ObjectMeta: metav1.ObjectMeta{Name: csv.Name, Namespace: "other", Labels: map[string]string{"olm.managed": "true", operatorsv1alpha1.CopiedLabelKey: csv.Namespace}}}
+	unrelatedCopy := &operatorsv1alpha1.ClusterServiceVersion{ObjectMeta: metav1.ObjectMeta{Name: "unrelated.v1", Namespace: "other", Labels: map[string]string{"olm.managed": "true", operatorsv1alpha1.CopiedLabelKey: csv.Namespace}}}
+	foreignCopy := &operatorsv1alpha1.ClusterServiceVersion{ObjectMeta: metav1.ObjectMeta{Name: csv.Name, Namespace: "foreign", Labels: map[string]string{"olm.managed": "true", operatorsv1alpha1.CopiedLabelKey: "different-source"}}}
 	otherSub := &operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "source"}}
 	group := &operatorsv1.OperatorGroup{ObjectMeta: metav1.ObjectMeta{Name: "shared", Namespace: "source"}}
 	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "operator", Namespace: "source"}}
-	m := migrationTestClient(t, ce, cos, sub, otherSub, group, deployment, csv, condition, copied)
+	m := migrationTestClient(t, ce, cos, sub, otherSub, group, deployment, csv, condition, copied, unrelatedCopy, foreignCopy)
 	policies := make(map[string]metav1.DeletionPropagation)
 	m.Client = orphanRecordingClient{Client: m.Client, policies: policies}
 	if err := m.CleanupConflict(ctx, ce.Name); err != nil {
@@ -244,7 +289,7 @@ func TestCleanupConflictPreservesSharedOperatorGroupAndOLMv1Management(t *testin
 	if policies[csv.Name] != metav1.DeletePropagationOrphan {
 		t.Fatal("conflict cleanup must orphan CSV workloads")
 	}
-	for _, object := range []client.Object{ce, cos, otherSub, group, deployment} {
+	for _, object := range []client.Object{ce, cos, otherSub, group, deployment, unrelatedCopy, foreignCopy} {
 		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(object), object); err != nil {
 			t.Fatalf("cleanup deleted retained %T %s: %v", object, object.GetName(), err)
 		}

@@ -895,7 +895,7 @@ func (m *Migrator) CleanupOLMv0Resources(ctx context.Context, opts Options, pack
 		})
 
 		// 3. Delete copied CSVs
-		copiedCount, err := m.deleteCopiedCSVs(ctx, csvName)
+		copiedCount, err := m.deleteCopiedCSVs(ctx, csvName, opts.SubscriptionNamespace)
 		if copiedCount > 0 {
 			result.Actions = append(result.Actions, CleanupAction{
 				Description: fmt.Sprintf("Delete %d copied CSV(s)", copiedCount),
@@ -917,12 +917,12 @@ func (m *Migrator) CleanupOLMv0Resources(ctx context.Context, opts Options, pack
 	return result
 }
 
-func (m *Migrator) deleteCopiedCSVs(ctx context.Context, csvName string) (int, error) {
+func (m *Migrator) deleteCopiedCSVs(ctx context.Context, csvName, sourceNamespace string) (int, error) {
 	var csvList operatorsv1alpha1.ClusterServiceVersionList
 	if err := m.Client.List(ctx, &csvList,
 		client.MatchingLabels{
-			"olm.managed":    "true",
-			"olm.copiedFrom": csvName,
+			"olm.managed":                    "true",
+			operatorsv1alpha1.CopiedLabelKey: sourceNamespace,
 		},
 	); err != nil {
 		return 0, err
@@ -930,6 +930,11 @@ func (m *Migrator) deleteCopiedCSVs(ctx context.Context, csvName string) (int, e
 
 	deleted := 0
 	for i := range csvList.Items {
+		// The label identifies a source namespace, not a CSV. Preserve copies
+		// of other operators installed in that same namespace.
+		if csvList.Items[i].Name != csvName {
+			continue
+		}
 		if err := m.Client.Delete(ctx, &csvList.Items[i], client.PropagationPolicy(metav1.DeletePropagationOrphan)); err != nil {
 			if client.IgnoreNotFound(err) != nil {
 				return deleted, err

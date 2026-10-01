@@ -401,19 +401,20 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 		revisions.Items = append(revisions.Items, cos)
 	}
 
-	// Delete CE (orphan cascade — preserves operator workloads)
-	if err := m.Client.Delete(ctx, &ce, client.PropagationPolicy("Orphan")); err != nil {
-		if client.IgnoreNotFound(err) != nil {
-			return fmt.Errorf("failed to delete ClusterExtension: %w", err)
-		}
-	}
-
-	// Delete all COS revisions with orphan propagation to preserve workloads.
+	// Delete revisions before the CE so a failed revision deletion leaves the
+	// authoritative Subscription backup available for a later rollback attempt.
 	for i := range revisions.Items {
 		if err := m.Client.Delete(ctx, &revisions.Items[i], client.PropagationPolicy("Orphan")); err != nil {
 			if client.IgnoreNotFound(err) != nil {
 				return fmt.Errorf("failed to delete ClusterObjectSet %s: %w", revisions.Items[i].Name, err)
 			}
+		}
+	}
+
+	// Delete CE (orphan cascade — preserves operator workloads).
+	if err := m.Client.Delete(ctx, &ce, client.PropagationPolicy("Orphan")); err != nil {
+		if client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete ClusterExtension: %w", err)
 		}
 	}
 
