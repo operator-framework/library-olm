@@ -5,8 +5,8 @@
 **Identifier:** `OPRUN-4715-TP-001`  
 **Feature:** [OPRUN-4715 — OLMv0 → OLMv1 Migration library & CLIs (prototype)](https://redhat.atlassian.net/browse/OPRUN-4715)  
 **Version:** 1.0  
-**Date:** 2026-09-18  
-**Status:** Active; Phase 8 test implementation is in progress.
+**Date:** 2026-09-23
+**Status:** Active; the Phase 8 test foundation is implemented, with validation expansion in progress.
 
 This plan follows the IEEE 829 test-plan structure. It is the executable-test companion to
 [requirements.md](requirements.md), [validation.md](validation.md),
@@ -61,11 +61,14 @@ tests. A focused in-cluster Job test verifies that the CLIs can also run using P
 ### 4.3 Migration, recovery, and mappings
 
 - COS creation and `Succeeded=True` before ClusterExtension creation; no client-written OLMv1
-  status; `IfNoController` collision protection and CRD adoption.
+  status; migration revision `None` collision protection and the controller's `Prevent`
+  superseding revision.
 - Subscription, OperatorGroup, ClusterExtension, CatalogSource, and ClusterCatalog field mappings
   defined in requirements R4, R6, R7, and R8.
-- Backup annotations and optional on-disk backup; rollback acknowledgement and restoration;
-  Conflict cleanup while retaining the ClusterExtension and shared OperatorGroup where required.
+- Backup annotations and optional on-disk backup; rollback acknowledgement, release of
+  OLMv1 ownership metadata from preserved resources, Subscription restoration, and
+  remigration adoption; Conflict cleanup while retaining the ClusterExtension and shared
+  OperatorGroup where required.
 - Resource collection, deduplication, shared CRD adoption, and SecretPacker behavior for a large
   bundle.
 
@@ -87,20 +90,26 @@ allocation; an item is not considered complete merely because it is allocated he
 | Validation coverage | Primary test type | Current implementation status |
 |---|---|---|
 | V1.1–V1.3, V3.1–V3.7 | Unit plus fixture/live E2E | Baseline check, dry-run, conversion, and catalog path implemented. Unit tests assert manual/automatic version pinning, channel and catalog selector mapping, omitted service account, backup/audit annotations, and inline deployment config; full E2E mapping assertions remain. |
-| V1.4–V1.5, V3.18 | Unit plus fixture/live E2E | Live cleanup/rollback asserts resource retention, acknowledgment refusal, removal of all COS revisions, original Subscription spec, and healthy OLMv0 recovery. Unit tests cover shared OperatorGroup retention and recovery failures. Backup-directory E2E verifies content, directory creation, associated plans, dry-run non-writing, writes before deletion, and non-fatal write failures. |
-| V1.6–V1.8 | Unit and fixture CLI tests | Four-state scan ordering, acknowledgment-aware batch classification, rejection of ignored `--all` flags, Eligible-only conversion, non-mutating batch preview, and stop/continue failure semantics are covered. CLI parser tests also accept operator names matching command verbs; an in-cluster conversion of such a name remains untested. |
-| V2.1–V2.10, V4.3–V4.5 | Focused unit tests; fixture acknowledgment matrix | Twelve fixture cases exercise every soft acknowledgment, wrong-flag refusal, source preservation, CE audit annotations, and hard-block refusal with all soft flags enabled. Four-state batch is covered separately; a unit test detects installed dependent operators, but dependents-warning E2E assertions remain. |
-| V2.11 | Unit; fixture E2E pending | Scan/check, dry-run, and conversion reject a Subscription referencing a non-image CatalogSource before mutation, even when another catalog serves the package. |
-| V3.8–V3.11, V3.13–V3.17, V3.19–V3.21 | Catalog unit tests plus fixture/live E2E | Basic CatalogSource migration, deterministic existing-catalog selection, conflicting-name rejection, and safe per-source cleanup are covered by unit tests; fixture/live adoption, overflow, and deletion-reference cases remain. |
-| V3.12, V4.1–V4.2, V4.6 | Unit plus live E2E | Planned; requires deployment upgrade, shared-resource, and large-payload scenarios. |
-| V5.1–V5.9 | Live kind E2E | Bootstrap, real installation, catalog conversion, check, conversion, cleanup, and healthy rollback are covered. Upgrade and the four-state batch scenario remain. |
+| V1.4–V1.5, V3.18 | Unit plus fixture/live E2E | Live cleanup/rollback asserts resource retention, acknowledgment refusal, removal of all COS revisions and ownership metadata, original Subscription spec, and healthy OLMv0 recovery. It then remigrates and verifies that new CE/COS revisions adopt the same Deployment UIDs. Unit tests cover finalizer and snapshot retention, in-flight revision removal, changed-label refusal, shared OperatorGroup retention, and recovery failures. Backup-directory E2E verifies content, directory creation, associated plans, dry-run non-writing, writes before deletion, and non-fatal write failures. |
+| V1.6–V1.8 | Unit and fixture CLI tests | Four-state scan ordering, acknowledgment-aware batch classification, rejection of ignored `--all` flags, Eligible-only conversion, non-mutating batch preview, and stop/continue failure semantics are covered. CLI parser tests and fixture conversion accept operator names matching command verbs. |
+| V2.1–V2.10, V4.3–V4.5 | Focused unit tests; fixture acknowledgment matrix | Twelve fixture cases exercise every soft acknowledgment, wrong-flag refusal, source preservation, CE audit annotations, and hard-block refusal with all soft flags enabled. Four-state batch is covered separately; fixture acceptance tests verify dependent warnings during check, dry-run, and conversion. |
+| V2.11 | Unit and fixture E2E | Scan/check, dry-run, and conversion reject a missing or non-image CatalogSource referenced by the Subscription or an InstallPlan bundle lookup before mutation, even when another catalog serves the package. Fixture E2E verifies non-image Subscription source refusal without mutation. |
+| V3.8–V3.11, V3.13–V3.17, V3.19–V3.21 | Catalog unit tests plus fixture/live E2E | CatalogSource migration, deterministic existing-catalog selection, conflicting-name/image rejection, priority overflow, and fresh-reference cleanup are covered by unit tests; fixture/live adoption, overflow, and deletion-reference cases remain. Shared text/JSONL progress and argument-error usage are also unit-tested. |
+| V3.12, V4.1–V4.2, V4.6 | Unit plus fixture/live E2E | Unit tests cover inline DeploymentConfig mapping and large-bundle SecretPacker packing. Fixture E2E verifies the mapped CE config and operator Deployment. Post-upgrade persistence, shared-resource adoption, and large-payload E2E remain. |
+| V5.1–V5.9 | Live kind E2E | Bootstrap, real installation, catalog conversion, check, conversion, cleanup, healthy rollback followed by remigration, and a four-state batch with two eligible operators are covered; a 2026-09-23 live `logging-operator` migration confirmed the COS handoff and workload availability. Upgrade remains untested. |
 | V4.7–V4.8 | Fixture and live E2E plus unit tests | Explicit cross-namespace and acknowledged source-namespace deletion are covered. System-managed namespace mode is covered against the experimental controller CRD, including omitted CE namespace and unsupported-CRD rejection. |
 | V6.* | Product / downstream qualification | Not a Kind CI gate; topology, architecture, and restricted-network coverage require separate environments. |
 
 ## 5. Features Not to Be Tested
 
-- APIService-based operator migration is excluded while C3 remains a hard block; it is revisited
-  only after OPRUN-4723 has complete operator-controller renderer support.
+- APIService-based operator migration is permanently out of scope. OLMv1 does not support
+  APIService-owning operators; C3 must continue to reject them with no acknowledgement or
+  override. The C3 negative tests are required regression coverage.
+- OLMv0 dependency resolution is also outside OLMv1's supported behavior. C2 and C9
+  refusals are expected safety behavior, not incomplete migration features.
+- Standard-manifest availability of the system-managed namespace mode is not a separate
+  migration gap: this prototype already requires the experimental controller for its COS API.
+  V4.8 verifies the explicit mode and its capability gate within that profile.
 - Hosted Control Planes are out of scope. SNO, compact, multi-node, non-x86 architectures, and
   restricted/disconnected network qualification are downstream/product-environment work, not
   kind CI coverage.
@@ -136,7 +145,7 @@ logs.
 Run `make migration/e2e-setup`, `make migration/test-e2e-live-matrix`, then
 `make migration/e2e-teardown`. This uses a separate Kind cluster with OLMv0 and OLMv1 installed.
 The suite installs packages through OLMv0, creates/migrates a CatalogSource, invokes the CLIs,
-and verifies actual controller reconciliation and adoption. It is a smoke/integration layer, not
+and verifies actual controller reconciliation. It is a smoke/integration layer, not
 a substitute for exhaustive fixture cases. Pin the Kind, Kubernetes node, OLMv0, and OLMv1
 versions documented in `e2e.md`.
 
@@ -150,15 +159,18 @@ does not upload coverage or diagnostic artifacts.
 ### 6.5 Coverage and CI
 
 Build E2E CLIs with `go build -cover`. Fixture and live suites collect CLI coverage under
-`artifacts/e2e/coverage`; unit tests write their profile under `artifacts/coverage`. After all
+`artifacts/e2e/coverage`; the focused COS-supersession E2E writes a package coverage profile
+there too. Unit tests write their profile under `artifacts/coverage`. After all
 coverage-producing suites, run `make migration/report-coverage-all` to merge and display a
 single report. The in-cluster Job is deliberately excluded from coverage collection.
 
-CI runs unit coverage, fixture E2E, and live E2E independently, retains their diagnostics and
-coverage inputs, and then runs a dependent aggregate-report job. The Job E2E is an independent
-functional check. The unit suite owns the minimum 80% `migration/pkg/...` gate; E2E coverage is
-reported for visibility rather than used as a percentage gate. Provisioning or image-pull errors
-may be retried once, but assertion failures must not be retried automatically.
+CI runs unit coverage, fixture E2E, COS-supersession E2E, and live E2E independently, retains
+their diagnostics and coverage inputs, and then runs a dependent aggregate-report job. The Job E2E is an independent
+functional check. The minimum 80% target applies to `migration/pkg/...` statements in the
+merged unit and coverage-producing E2E profiles, not to unit tests alone. There is no separate
+unit or E2E percentage minimum. The combined threshold is not yet enforced by the Make target
+or CI. Provisioning or image-pull errors may be retried once, but assertion failures must not be
+retried automatically.
 
 ## 7. Item Pass/Fail Criteria
 
@@ -173,8 +185,9 @@ may be retried once, but assertion failures must not be retried automatically.
   resources, and restored Subscription where applicable.
 - A catalog test passes only when the resulting ClusterCatalog is `Serving=True`, its mapping and
   adoption/deduplication behavior match V3, and deletion conditions are honored.
-- A CI run passes only when required jobs pass, the coverage report is generated from available
-  unit/fixture/live data, and the unit coverage threshold is met.
+- Current CI passes when required jobs pass and the combined coverage report is generated from
+  unit and coverage-producing E2E data. Phase 8 exit additionally requires the unenforced
+  combined `migration/pkg/...` coverage threshold to be met.
 
 ## 8. Suspension Criteria and Resumption Requirements
 
@@ -184,8 +197,8 @@ the fixture registry/catalog cannot serve its content. Preserve artifacts and cl
 enough to diagnose the failure, then tear down the known cluster explicitly.
 
 Resume after the failed prerequisite is corrected and a clean, correctly version-pinned cluster
-has been created. Do not mask functional failures by re-running assertions. Phase-6 and
-APIService test work resumes only after their documented upstream dependencies are available.
+has been created. Do not mask functional failures by re-running assertions. Run the COS and
+system-managed namespace scenarios against the experimental controller profile.
 
 ## 9. Test Deliverables
 
@@ -205,7 +218,8 @@ APIService test work resumes only after their documented upstream dependencies a
 3. Implement and run unit tests for every library branch, acknowledgement, recovery ownership
    decision, and catalog mapping boundary.
 4. Implement fixture E2E cases for every remaining V1–V4 validation row.
-5. Maintain live tests for representative real operators and controller-adoption behavior.
+5. Maintain live tests for representative real operators and controller reconciliation; retain
+   the focused fixture COS-supersession check for the migration-to-catalog handoff.
 6. Run the in-cluster Job test to protect the in-cluster authentication path.
 7. Publish/inspect combined coverage and prioritize unexecuted migration and catalog paths.
 8. Triage failures as product defects, fixture drift, environment/provisioning failures, or test
@@ -231,7 +245,7 @@ APIService test work resumes only after their documented upstream dependencies a
 | Migration-library maintainers | Implement fixes, unit tests, and regression coverage. |
 | E2E/CI maintainers | Maintain fixtures, bootstrap scripts, workflow reliability, artifacts, and coverage aggregation. |
 | Reviewers | Verify test-to-requirement traceability, safety assertions, fixture sanitization, and no false coverage claims. |
-| Operator-controller maintainers | Resolve upstream Phase 6/APIService prerequisites and provide compatibility guidance. |
+| Operator-controller maintainers | Resolve upstream Phase 6 prerequisites and provide compatibility guidance. |
 
 ## 13. Staffing and Training Needs
 
@@ -245,11 +259,11 @@ snapshots are committed test inputs and may not contain credentials or cluster-s
 Testing follows implementation milestones rather than fixed dates:
 
 1. Keep the merged unit, fixture, and live foundations passing on every change.
-2. Merge pending Phase 8 negative/recovery, in-cluster Job, documentation, and coverage work.
-3. Close the remaining V1–V5 rows in priority order: safety/rejection and recovery first,
+2. Close the remaining V1–V5 rows in priority order: safety/rejection and recovery first,
    catalog edge cases and mapping next, then upgrade/large-payload/shared-resource scenarios.
-4. Revisit deferred V4.7 and APIService scenarios when their upstream work lands.
-5. Declare Phase 8 complete only after its coverage target and applicable validation inventory
+3. Keep the merged V4.7 namespace and experimental V4.8 system-managed scenarios passing.
+   Retain C3 refusal coverage because APIService migration is permanently unsupported.
+4. Declare Phase 8 complete only after its coverage target and applicable validation inventory
    pass in CI.
 
 ## 15. Risks and Contingencies
@@ -261,8 +275,8 @@ Testing follows implementation milestones rather than fixed dates:
 | Real operator external dependencies | Live smoke test instability | Select self-contained operators; move deterministic semantics to fixtures. |
 | Fixture drift from a real OLMv0 install | False confidence | Deliberately refresh, sanitize, review, and commit snapshots only from a healthy live installation. |
 | Unsafe migration cleanup | Workload/resource loss | Require refusal-before-mutation, backup/recovery tests, orphan-cascade assertions, and regression tests. |
-| Upstream OLMv1 dependencies | Validation scope blocked | Keep C3 and install-namespace scenarios explicitly deferred; track OPRUN-4723 and Phase 6 prerequisites. |
-| Coverage-only confidence | Untested controller behavior | Require both unit threshold and fixture/live functional gates; report merged E2E coverage separately. |
+| Experimental OLMv1 namespace API | Controller compatibility | Retain the system-managed mode's capability gate and verify unsupported CRDs refuse before mutation. Explicit namespace migration is merged; APIService migration remains unsupported and covered by C3 refusal tests. |
+| Coverage-only confidence | Untested controller behavior | Require both the combined unit-plus-E2E threshold and fixture/live functional gates; retain per-suite reports for diagnosis. |
 
 ## 16. Approvals
 
