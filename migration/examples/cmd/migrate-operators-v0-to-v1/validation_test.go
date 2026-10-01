@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -54,6 +55,42 @@ func TestCommandRejectsAmbiguousAndMissingTargets(t *testing.T) {
 			checkAll, convertAll, cleanupAll, rollbackAll = true, true, true, true
 			if err := tt.run([]string{"operator"}); err == nil {
 				t.Fatal("target combined with --all unexpectedly reached the Kubernetes client")
+			}
+		})
+	}
+}
+
+func TestConvertAllRejectsSingleOperatorFlags(t *testing.T) {
+	oldAll, oldNamespace, oldCEName := convertAll, convertNamespace, convertCEName
+	t.Cleanup(func() {
+		convertAll, convertNamespace, convertCEName = oldAll, oldNamespace, oldCEName
+	})
+	cmd := &cobra.Command{}
+	for _, tt := range []struct {
+		name, namespace, ceName, want string
+	}{
+		{name: "namespace", namespace: "operators", want: "--all scans every namespace"},
+		{name: "CE name", ceName: "custom", want: "--ce-name cannot be combined with --all"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			convertAll = true
+			convertNamespace, convertCEName = tt.namespace, tt.ceName
+			if err := runConvert(cmd, nil); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("runConvert(--all) error = %v, want %q before client creation", err, tt.want)
+			}
+		})
+	}
+	for _, flag := range []string{"namespace", "ce-name"} {
+		t.Run("explicit empty "+flag, func(t *testing.T) {
+			convertAll = true
+			convertNamespace, convertCEName = "", ""
+			cmd := &cobra.Command{}
+			cmd.Flags().String(flag, "", "")
+			if err := cmd.Flags().Set(flag, ""); err != nil {
+				t.Fatal(err)
+			}
+			if err := runConvert(cmd, nil); err == nil || !strings.Contains(err.Error(), "cannot be combined with --all") {
+				t.Fatalf("runConvert(--all --%s '') error = %v, want flag rejection", flag, err)
 			}
 		})
 	}

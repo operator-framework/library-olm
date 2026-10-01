@@ -138,7 +138,8 @@ conversion of Eligible operators only (V1.6/V5.9). The target replays a fresh
 ecr-secret fixture and collects CLI coverage in `coverage/fixture/batch`; the fixture
 CI job runs it and includes its data in combined coverage. Unit tests inject
 multiple conversion/preview failures to verify stop-on-error, continuation, and
-nonzero results after partial failure (V1.7).
+nonzero results after partial failure (V1.7). Unit tests also verify that batch
+classification applies acknowledgment flags and rejects `-n` or `--ce-name` with `--all`.
 
 1. The `migration-test` workflow runs unit coverage, fixture E2E, live-operator E2E, COS
    supersession E2E, and the in-cluster Job E2E independently. Unit, fixture, and live tests

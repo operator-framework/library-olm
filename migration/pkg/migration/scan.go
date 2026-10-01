@@ -36,6 +36,13 @@ type OperatorScanResult struct {
 // ScanAllSubscriptions discovers all Subscriptions on the cluster, checks each for migration
 // eligibility, and also detects AlreadyMigrated and Conflict states from ClusterExtensions.
 func (m *Migrator) ScanAllSubscriptions(ctx context.Context) ([]OperatorScanResult, error) {
+	return m.ScanAllSubscriptionsWithOptions(ctx, Options{})
+}
+
+// ScanAllSubscriptionsWithOptions classifies all Subscriptions using the supplied
+// acknowledgment overrides. Per-operator names and namespaces come from each
+// Subscription; other options are shared across the batch.
+func (m *Migrator) ScanAllSubscriptionsWithOptions(ctx context.Context, defaults Options) ([]OperatorScanResult, error) {
 	// List all Subscriptions
 	var subList operatorsv1alpha1.SubscriptionList
 	if err := m.Client.List(ctx, &subList); err != nil {
@@ -86,10 +93,9 @@ func (m *Migrator) ScanAllSubscriptions(ctx context.Context) ([]OperatorScanResu
 			continue
 		}
 
-		opts := Options{
-			SubscriptionName:      sub.Name,
-			SubscriptionNamespace: sub.Namespace,
-		}
+		opts := defaults
+		opts.SubscriptionName = sub.Name
+		opts.SubscriptionNamespace = sub.Namespace
 		opts.ApplyDefaults()
 
 		m.progress(fmt.Sprintf("Checking %s/%s (%s)...", sub.Namespace, sub.Name, sub.Spec.Package))

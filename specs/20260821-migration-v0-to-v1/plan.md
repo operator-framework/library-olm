@@ -103,7 +103,8 @@ flag is set; CE carries the matching annotation.
   ownerRef query, InstallPlan steps; dedup by GVK+ns+name — see R5) → create COS (wait
   `Succeeded=True`) → create CE → cleanup.
   `--dry-run` previews via `Gather`. `--all` prints the four-section summary, then converts
-  each Eligible operator; `--continue-on-error` to keep going.
+  each Eligible operator; `--continue-on-error` to keep going. Batch classification uses
+  the requested acknowledgment overrides; `-n` and `--ce-name` are rejected with `--all`.
 - `rollback <ce-name> | --all`: require `--acknowledge-installed` when CE is `Installed=True`; delete CE
   then COS with orphan cascade (fallback: new COS revision → `Succeeded=True` → orphan delete);
   restore Subscription from the backup annotation (`startingCSV` → `installedCSV`).

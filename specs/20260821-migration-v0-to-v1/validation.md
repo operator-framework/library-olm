@@ -15,7 +15,7 @@ with both OLMv0 and OLMv1 installed.
 - **V1.3** `convert <operator> -n <ns>` results in a `ClusterExtension` reaching `Installed=True`; the `Subscription` and `CSV` are deleted; CRDs remain and are adopted by OLMv1; the COS reached `Succeeded=True` **before** the CE was created.
 - **V1.4** `rollback <ce-name> --acknowledge-installed` deletes the CE and COS (orphan cascade), recreates the `Subscription` from the backup annotation, and the operator returns to OLMv0 management (`AtLatestKnown`/`UpgradePending`). Without `--acknowledge-installed` on an `Installed=True` CE, rollback refuses and exits non-zero.
 - **V1.5** `cleanup <ce-name>` on a Conflict state deletes the `Subscription` and OLMv0 artifacts (Operator CR, OperatorCondition, copied CSVs, OperatorGroup if last) and leaves the CE intact.
-- **V1.6** `check --all` and `convert --all` print sections in order Conflict → Ineligible → AlreadyMigrated → Eligible; Conflicts are never auto-migrated; `convert --all` migrates only the Eligible operators.
+- **V1.6** `check --all` and `convert --all` print sections in order Conflict → Ineligible → AlreadyMigrated → Eligible; Conflicts are never auto-migrated; `convert --all` migrates only the Eligible operators. Batch acknowledgment flags affect classification before selection; `convert --all` rejects `-n` and `--ce-name` rather than ignoring them.
 - **V1.7** `convert --all` stops on the first failure by default; with `--continue-on-error` it logs the failure and continues, exiting non-zero if any operator failed.
 - **V1.8** No command ever blocks on interactive input. An operator whose name collides with a verb (e.g. `check`) is migratable as a positional argument (`convert check -n <ns>`).
 

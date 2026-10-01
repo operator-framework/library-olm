@@ -1003,6 +1003,45 @@ func TestScanAllKeepsMixedUnsafeOperatorsOutOfEligibleResults(t *testing.T) {
 	}
 }
 
+func TestScanAllSubscriptionsWithOptionsAppliesAcknowledgments(t *testing.T) {
+	ctx := context.Background()
+	sub, csv := healthySubscriptionFixtures()
+	sub.Status.State = operatorsv1alpha1.SubscriptionStateUpgradeAvailable
+	og := &operatorsv1.OperatorGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "scoped", Namespace: sub.Namespace},
+		Spec:       operatorsv1.OperatorGroupSpec{TargetNamespaces: []string{sub.Namespace}},
+	}
+	m := migrationTestClient(t, sub, csv, og, establishedClusterObjectSetCRD())
+
+	without, err := m.ScanAllSubscriptions(ctx)
+	if err != nil || len(without) != 1 {
+		t.Fatalf("ScanAllSubscriptions() = %#v, %v", without, err)
+	}
+	with, err := m.ScanAllSubscriptionsWithOptions(ctx, Options{
+		AcknowledgeNotSteadyState:   true,
+		AcknowledgeWatchScopeChange: true,
+	})
+	if err != nil || len(with) != 1 {
+		t.Fatalf("ScanAllSubscriptionsWithOptions() = %#v, %v", with, err)
+	}
+	failed := func(result OperatorScanResult, name string) bool {
+		for _, check := range result.FailedChecks {
+			if check.Name == name {
+				return true
+			}
+		}
+		return false
+	}
+	for _, name := range []string{"Subscription state", "AllNamespaces mode"} {
+		if !failed(without[0], name) {
+			t.Fatalf("default scan did not fail %q: %#v", name, without[0])
+		}
+		if failed(with[0], name) {
+			t.Fatalf("acknowledged scan still failed %q: %#v", name, with[0])
+		}
+	}
+}
+
 func TestPrerequisitesAndRecoveryErrors(t *testing.T) {
 	ctx := context.Background()
 	sub, csv := healthySubscriptionFixtures()

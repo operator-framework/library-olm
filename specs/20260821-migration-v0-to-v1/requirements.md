@@ -68,7 +68,10 @@ conditions required. Default: leave the `CatalogSource` in place.
 **R1.4 — `--all` output ordering.** For `check --all` and `convert --all`, sections are
 printed in order: **Conflict** (warn prominently; never auto-migrate) → **Ineligible**
 (reason per operator) → **AlreadyMigrated** → **Eligible**. `convert --all` then migrates
-the Eligible operators sequentially.
+the Eligible operators sequentially. Eligibility classification applies the supplied
+`--acknowledge-*` overrides before selecting operators. Because `--all` scans every
+namespace and uses each Subscription name for its CE, it rejects `-n/--namespace` and
+`--ce-name` rather than silently ignoring them.
 
 **R1.5 — Batch failure handling.** `convert --all` stops on the first failure by default;
 pass `--continue-on-error` to log the failure and continue with the remaining operators.
