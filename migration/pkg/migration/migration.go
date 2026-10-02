@@ -299,12 +299,42 @@ func (m *Migrator) BackupResources(ctx context.Context, opts Options, csv *opera
 		og = ogList.Items[0].DeepCopy()
 	}
 
-	return &Backup{
+	backup := &Backup{
 		Subscription:          sub.DeepCopy(),
 		ClusterServiceVersion: csv.DeepCopy(),
 		OperatorGroup:         og,
-		InstallPlan:           ip,
-	}, nil
+		InstallPlan:           ip.DeepCopy(),
+	}
+	// Disk backups include every plan associated with this CSV, not just the
+	// current Subscription reference. Listing is informational and must not add
+	// a new migration prerequisite when disk backup was not requested.
+	if opts.BackupDirectory != "" {
+		var plans operatorsv1alpha1.InstallPlanList
+		if err := m.Client.List(ctx, &plans, client.InNamespace(opts.SubscriptionNamespace)); err != nil {
+			m.progress(fmt.Sprintf("Warning: could not list InstallPlans for disk backup (current plan is retained): %v", err))
+		} else {
+			for i := range plans.Items {
+				if installPlanReferencesCSV(&plans.Items[i], csv.Name) {
+					backup.InstallPlans = append(backup.InstallPlans, plans.Items[i].DeepCopy())
+				}
+			}
+		}
+	}
+	return backup, nil
+}
+
+func installPlanReferencesCSV(plan *operatorsv1alpha1.InstallPlan, csvName string) bool {
+	for _, name := range plan.Spec.ClusterServiceVersionNames {
+		if name == csvName {
+			return true
+		}
+	}
+	for _, step := range plan.Status.Plan {
+		if step != nil && step.Resolving == csvName {
+			return true
+		}
+	}
+	return false
 }
 
 // PrepareForMigration removes OLMv0 management of the operator by deleting
