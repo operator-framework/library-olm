@@ -1114,6 +1114,105 @@ func TestMigrateRejectsUnsafeOperatorsWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestNonImageCatalogSourceRejectsOperatorMigration(t *testing.T) {
+	ctx := context.Background()
+	for _, tt := range []struct {
+		name       string
+		sourceType operatorsv1alpha1.SourceType
+		image      string
+		missing    bool
+		wantReason string
+	}{
+		{name: "configmap", sourceType: operatorsv1alpha1.SourceTypeConfigmap, wantReason: "non-image CatalogSource catalogs/source"},
+		{name: "internal", sourceType: operatorsv1alpha1.SourceTypeInternal, wantReason: "non-image CatalogSource catalogs/source"},
+		{name: "address-only grpc", sourceType: operatorsv1alpha1.SourceTypeGrpc, wantReason: "non-image CatalogSource catalogs/source"},
+		{name: "non-grpc with image", sourceType: operatorsv1alpha1.SourceTypeConfigmap, image: "registry.example/catalog:latest", wantReason: "non-image CatalogSource catalogs/source"},
+		{name: "missing source", missing: true, wantReason: "references CatalogSource catalogs/source"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sub, csv := healthySubscriptionFixtures()
+			sub.Spec.CatalogSource = "source"
+			sub.Spec.CatalogSourceNamespace = "catalogs"
+			cs := &operatorsv1alpha1.CatalogSource{
+				ObjectMeta: metav1.ObjectMeta{Name: "source", Namespace: "catalogs"},
+				Spec:       operatorsv1alpha1.CatalogSourceSpec{SourceType: tt.sourceType, Image: tt.image},
+			}
+			objects := []runtime.Object{sub, csv, establishedClusterObjectSetCRD()}
+			if !tt.missing {
+				objects = append(objects, cs)
+			}
+			m := migrationTestClient(t, objects...)
+			opts := Options{SubscriptionName: sub.Name, SubscriptionNamespace: sub.Namespace}
+
+			for name, scan := range map[string]func() (*OperatorScanResult, error){
+				"check": func() (*OperatorScanResult, error) { return m.Check(ctx, opts) },
+				"scan all": func() (*OperatorScanResult, error) {
+					results, err := m.ScanAll(ctx)
+					if err != nil || len(results) != 1 {
+						return nil, fmt.Errorf("ScanAll() returned %d results: %w", len(results), err)
+					}
+					return &results[0], nil
+				},
+			} {
+				result, err := scan()
+				if err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+				if result.Status != OperatorStatusIneligible || result.Eligible {
+					t.Fatalf("%s accepted non-image CatalogSource: %#v", name, result)
+				}
+				found := false
+				for _, check := range result.FailedChecks {
+					if check.Name == "CatalogSource type" && strings.Contains(check.Message, tt.wantReason) {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("%s omitted the CatalogSource reason: %#v", name, result.FailedChecks)
+				}
+			}
+
+			if _, err := m.Gather(ctx, opts); err == nil || !strings.Contains(err.Error(), tt.wantReason) {
+				t.Fatalf("Gather() error = %v, want %q", err, tt.wantReason)
+			}
+			if err := m.Migrate(ctx, opts); err == nil || !strings.Contains(err.Error(), tt.wantReason) {
+				t.Fatalf("Migrate() error = %v, want %q", err, tt.wantReason)
+			}
+			if err := m.Client.Get(ctx, client.ObjectKeyFromObject(sub), &operatorsv1alpha1.Subscription{}); err != nil {
+				t.Fatalf("rejected migration deleted Subscription: %v", err)
+			}
+			if err := m.Client.Get(ctx, client.ObjectKeyFromObject(csv), &operatorsv1alpha1.ClusterServiceVersion{}); err != nil {
+				t.Fatalf("rejected migration deleted CSV: %v", err)
+			}
+			if err := m.Client.Get(ctx, client.ObjectKey{Name: sub.Name}, &ocv1.ClusterExtension{}); err == nil {
+				t.Fatal("rejected migration created a ClusterExtension")
+			}
+		})
+	}
+}
+
+func TestSubscriptionCatalogSourceMustExistAndBeImageBacked(t *testing.T) {
+	ctx := context.Background()
+	sub, _ := healthySubscriptionFixtures()
+	sub.Spec.CatalogSource = "source"
+	sub.Spec.CatalogSourceNamespace = "catalogs"
+	m := migrationTestClient(t, sub)
+	if err := m.validateSubscriptionCatalogSource(ctx, sub); err == nil || !strings.Contains(err.Error(), "CatalogSource catalogs/source") {
+		t.Fatalf("missing source error = %v", err)
+	}
+	cs := &operatorsv1alpha1.CatalogSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "source", Namespace: "catalogs"},
+		Spec: operatorsv1alpha1.CatalogSourceSpec{
+			SourceType: operatorsv1alpha1.SourceTypeGrpc,
+			Image:      "registry.example/catalog:latest",
+		},
+	}
+	m = migrationTestClient(t, sub, cs)
+	if err := m.validateSubscriptionCatalogSource(ctx, sub); err != nil {
+		t.Fatalf("image-backed grpc source rejected: %v", err)
+	}
+}
+
 func TestRollbackAndCleanupRejectInvalidInputWithoutMutation(t *testing.T) {
 	ctx := context.Background()
 	installed := &ocv1.ClusterExtension{

@@ -100,8 +100,10 @@ func runCheck(cmd *cobra.Command, args []string) error { //nolint:nestif
 		}
 
 		sectionHeader("ClusterCatalog Availability")
-		bundleInfo, _ := m.GetBundleInfo(ctx, opts, csv, nil)
-		if bundleInfo != nil {
+		bundleInfo, bundleErr := m.GetBundleInfo(ctx, opts, csv, nil)
+		if bundleErr != nil {
+			fail(fmt.Sprintf("Could not use Subscription CatalogSource: %v", bundleErr))
+		} else {
 			catalogName, catalogErr := m.ResolveClusterCatalog(ctx, bundleInfo, restCfg)
 			if catalogErr != nil {
 				var notFound *migration.PackageNotFoundError

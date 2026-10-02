@@ -169,6 +169,8 @@ removal deferred until end-to-end Boxcutter support is confirmed.
   namespace rewrite, dedup), rollback/cleanup.
 - E2E on kind (OLMv0 + OLMv1): all four states, each acknowledgment override, rollback, cleanup,
   catalog migration, and the COS-adoption prerequisite.
+- C10 safety check: reject Subscriptions referencing missing or non-image CatalogSources before
+  conversion, regardless of package availability in another ClusterCatalog.
 
 **Depends on:** Phases 1–5 (via Phase 4; Phase 6 tests gated on that phase). **Exit:** unit coverage target met;
 E2E scenarios in VALIDATION pass in CI.
