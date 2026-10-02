@@ -135,6 +135,11 @@ func (m *Migrator) ScanAllSubscriptionsWithOptions(ctx context.Context, defaults
 
 		// Merge readiness + compat failed checks
 		result.FailedChecks = append(readiness.FailedChecks(), compat.FailedChecks()...)
+		if err := m.validateSubscriptionCatalogSource(ctx, &sub); err != nil {
+			result.FailedChecks = append(result.FailedChecks, CheckResult{
+				Name: "CatalogSource type", Passed: false, Message: err.Error(),
+			})
+		}
 
 		// C7: catalog availability (hard check — no override).
 		// Only run when readiness+compat pass to avoid noisy catalog errors for clearly ineligible operators.
@@ -244,6 +249,11 @@ func (m *Migrator) ScanSubscription(ctx context.Context, opts Options) (*Operato
 	}
 
 	result.FailedChecks = append(readiness.FailedChecks(), compat.FailedChecks()...)
+	if err := m.validateSubscriptionCatalogSource(ctx, sub); err != nil {
+		result.FailedChecks = append(result.FailedChecks, CheckResult{
+			Name: "CatalogSource type", Passed: false, Message: err.Error(),
+		})
+	}
 	if len(result.FailedChecks) > 0 {
 		result.Status = OperatorStatusIneligible
 		result.Reason = fmt.Sprintf("%d check(s) failed", len(result.FailedChecks))

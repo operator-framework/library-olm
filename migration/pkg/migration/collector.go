@@ -129,6 +129,9 @@ func (m *Migrator) GetBundleInfo(ctx context.Context, opts Options, csv *operato
 	}, &sub); err != nil {
 		return nil, fmt.Errorf("failed to get Subscription: %w", err)
 	}
+	if err := m.validateSubscriptionCatalogSource(ctx, &sub); err != nil {
+		return nil, err
+	}
 
 	info := &MigrationInfo{
 		PackageName:    sub.Spec.Package,
@@ -170,6 +173,21 @@ func (m *Migrator) GetBundleInfo(ctx context.Context, opts Options, csv *operato
 	}
 
 	return info, nil
+}
+
+// validateSubscriptionCatalogSource rejects sources that cannot be represented
+// as OLMv1 image-backed ClusterCatalogs, even when another catalog serves the
+// same package. Check the Subscription reference, not an InstallPlan fallback.
+func (m *Migrator) validateSubscriptionCatalogSource(ctx context.Context, sub *operatorsv1alpha1.Subscription) error {
+	ref := types.NamespacedName{Name: sub.Spec.CatalogSource, Namespace: sub.Spec.CatalogSourceNamespace}
+	var cs operatorsv1alpha1.CatalogSource
+	if err := m.Client.Get(ctx, ref, &cs); err != nil {
+		return fmt.Errorf("subscription %s/%s references CatalogSource %s: %w", sub.Namespace, sub.Name, ref, err)
+	}
+	if cs.Spec.SourceType != operatorsv1alpha1.SourceTypeGrpc || cs.Spec.Image == "" {
+		return fmt.Errorf("subscription %s/%s references non-image CatalogSource %s (sourceType %q, spec.image %q); only grpc CatalogSources with spec.image can be migrated", sub.Namespace, sub.Name, ref, cs.Spec.SourceType, cs.Spec.Image)
+	}
+	return nil
 }
 
 // parseCSVVersion extracts the version from the CSV's operatorframework.io/properties annotation.
