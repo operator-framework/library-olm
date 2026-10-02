@@ -79,6 +79,7 @@ public mutable catalog.
 | V1.5, V4.1 | Conflict cleanup | CE stays; Subscription and OLMv0 artifacts are removed; shared OperatorGroup is retained. |
 | V1.6–V1.8, V2.10 | Batch and argument behavior | Four-section ordering; only Eligible converts; stop/continue behavior; a Subscription named `check` works. |
 | V2.1–V2.9, V4.3–V4.5 | Eligibility matrix | One test per incompatibility, expected reason, no mutation on refusal, acknowledgment flips only soft cases. |
+| V2.11 | Non-image source refusal (pending fixture E2E) | A Subscription referencing a non-image CatalogSource remains ineligible even if another ClusterCatalog serves its package; conversion leaves OLMv0 resources untouched. |
 | V3.8–V3.11, V3.13–V3.17, V3.19 | Catalog migration | image, poll interval, priority, unsupported source, dedup/adoption, overflow, and deletion-reference behavior. |
 | V3.12, V4.2, V4.6 | Collection and adoption | Deployment config survives an OLMv1 upgrade, shared CRD adoption succeeds, and large payload uses Secrets. |
 | V5.1–V5.9 | Real-operator smoke | Bootstrap, install a pinned AllNamespaces operator, catalog migration, conversion, upgrade, rollback, and four-state batch scan. |

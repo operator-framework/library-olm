@@ -34,6 +34,7 @@ flag flips it to `Eligible`:
 - **V2.8 (C7, hard)** Package absent from all ClusterCatalogs → Ineligible "package not found; run migrate-catalogs-v0-to-v1 first"; no override.
 - **V2.9 (C8)** CSV not `Succeeded` or Subscription not at `AtLatestKnown`/`UpgradePending` → Ineligible "not at steady state"; `--acknowledge-not-steady-state` → Eligible.
 - **V2.10 (C9, hard)** Subscription carries `olm.generated-by` → Ineligible "OLMv0-managed dependency"; no override.
+- **V2.11 (C10, hard)** Subscription references a `configmap`, `internal`, or address-only CatalogSource → Ineligible with the source reference and reason, even if another ClusterCatalog serves the package; dry-run and conversion return an error without deleting OLMv0 resources. A missing referenced CatalogSource is also rejected.
 
 ## V3. Field-mapping assertions (R4/R6/R7/R8)
 
@@ -109,7 +110,7 @@ flag flips it to `Eligible`:
 |---|---|
 | R1.1 Library API | V1.1–V1.7 (via library calls), V3.*, V4.* |
 | R1.2 Two CLIs | V1.*, V3.8–V3.11, V3.13–V3.19, V5 |
-| R1.3 Four-state classification | V1.6, V2.1–V2.10, V5 |
+| R1.3 Four-state classification | V1.6, V2.1–V2.11, V5 |
 | R1.4 `--all` ordering | V1.6 |
 | R1.5 Batch failure / `--continue-on-error` | V1.7 |
 | R1.6 Non-interactive | V1.8 |
@@ -122,7 +123,7 @@ flag flips it to `Eligible`:
 | R2.5 CE annotations | V3.6 |
 | R2.6 `--backup <directory>` flag | V3.18 |
 | R2.7 Boxcutter phase 2 | Prerequisite note (PLAN) |
-| R3 C1–C9 | V2.1–V2.10 |
+| R3 C1–C10 | V2.1–V2.11 |
 | R4 Subscription fields | V3.1–V3.3, V3.12, V4.4 |
 | R5 Resource collection strategy | V1.3, V4.2, V4.6 |
 | R6 OperatorGroup fields | V2.1, V2.7, V3.5, V3.7, V4.7 |
