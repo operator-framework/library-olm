@@ -13,7 +13,10 @@ import (
 	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 )
 
-// CheckCompatibility runs all compatibility checks and returns a report with individual results.
+// CheckCompatibility checks whether an operator is compatible with OLMv1
+// migration under the supplied acknowledgments. Incompatible conditions appear
+// in the returned report; a returned error means the check could not complete.
+// It does not check Subscription readiness or target catalog availability.
 func (m *Migrator) CheckCompatibility(ctx context.Context, opts Options, csv *operatorsv1alpha1.ClusterServiceVersion, bundleProperties string) (*PreMigrationReport, error) {
 	report := &PreMigrationReport{}
 

@@ -9,8 +9,11 @@ import (
 	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 )
 
-// CheckReadiness verifies that the cluster is ready for migration.
-// It checks Subscription state, CSV health, uniqueness, and dependency status.
+// CheckReadiness checks Subscription state, CSV health, package uniqueness,
+// dependency ownership, and the ClusterObjectSet API without modifying the
+// cluster. Failed prerequisites appear in the returned report; a returned
+// error means the check itself could not be completed. Compatibility and
+// catalog availability are checked separately.
 func (m *Migrator) CheckReadiness(ctx context.Context, opts Options) (*PreMigrationReport, error) {
 	report := &PreMigrationReport{}
 	if err := m.ensureClusterObjectSetCRD(ctx); err != nil {
