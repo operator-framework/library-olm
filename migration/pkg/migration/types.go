@@ -26,7 +26,10 @@ const (
 	OperatorStatusConflict        OperatorStatus = "Conflict"
 )
 
-// Options configures the migration process.
+// Options identifies the source Subscription and configures migration safety
+// acknowledgments, target placement, and optional backups. Callers can leave
+// ClusterExtensionName and InstallNamespace empty to use the Subscription name
+// and namespace; library entry points apply those defaults where needed.
 type Options struct {
 	SubscriptionName      string
 	SubscriptionNamespace string
@@ -95,17 +98,21 @@ type MigrationInfo struct {
 	OperatorGroupBackupJSON string
 }
 
-// ProgressFunc is called periodically during wait operations to report status.
+// ProgressFunc receives synchronous, human-readable progress and warning
+// messages. Message text is informational and is not a stable machine protocol.
 type ProgressFunc func(message string)
 
-// Migrator performs the migration operations using a controller-runtime client.
+// Migrator performs migration operations using a controller-runtime client.
+// RESTConfig is used for catalog access; when nil, catalog access uses in-cluster
+// credentials. Progress may be nil to suppress informational messages.
 type Migrator struct {
 	Client     client.Client
 	RESTConfig *rest.Config
 	Progress   ProgressFunc
 }
 
-// NewMigrator creates a new Migrator with the given client and REST config.
+// NewMigrator creates a Migrator with the supplied Kubernetes client and REST
+// config. A nil config selects in-cluster credentials for catalog access.
 func NewMigrator(c client.Client, cfg *rest.Config) *Migrator {
 	return &Migrator{Client: c, RESTConfig: cfg}
 }
@@ -124,8 +131,9 @@ type Backup struct {
 	InstallPlan           *operatorsv1alpha1.InstallPlan
 }
 
-// SaveToDisk writes backup files to dir, creating it if absent. Per R2.6,
-// failures here are non-fatal — the CE annotation backup is the authoritative path.
+// SaveToDisk writes backup files to dir, creating it if absent. It returns a
+// write error to the caller; Migrate treats disk-backup failures as warnings
+// because the ClusterExtension annotation backup is authoritative.
 func (b *Backup) SaveToDisk(dir string) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("failed to create backup directory: %w", err)

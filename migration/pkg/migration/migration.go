@@ -56,17 +56,18 @@ type MigrationResourcesResult struct {
 
 const migrationInvocationAnnotation = "olm.operatorframework.io/migration-invocation"
 
-// Migrate performs the full migration of an OLMv0-managed operator to OLMv1.
-// Steps:
-//  1. Profile the Operator (Subscription/CSV/InstallPlan)
-//  2. Determine Compatibility and Readiness
-//  3. Determine Target ClusterCatalog
-//  4. Collect and preflight operator resources
-//  5. Backup resources
-//  6. Prepare for Migration (delete Sub/CSV with orphan cascade)
-//  7. Create ClusterObjectSet (wait Succeeded=True and Available=True)
-//  8. Create ClusterExtension (wait Installed=True)
-//  9. Clean Up OLMv0 Resources
+// Migrate transfers one eligible OLMv0-managed Subscription to OLMv1. It checks
+// readiness, compatibility, catalog availability, and target prerequisites
+// before removing OLMv0 management. It backs up the Subscription spec in the
+// ClusterExtension annotations, creates and waits for the migration
+// ClusterObjectSet, creates and waits for the ClusterExtension, then cleans up
+// OLMv0 artifacts. An optional disk backup is best-effort; failure to write it
+// is reported through Progress when configured but does not stop migration.
+//
+// Migrate attempts recovery when a failure is known to be safe to reverse.
+// Once the target may have started reconciling, it leaves source Deployments
+// scaled down rather than risk two active controllers. An error can therefore
+// represent a partial migration requiring inspection before retry or rollback.
 func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	opts.ApplyDefaults()
 

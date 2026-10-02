@@ -354,7 +354,11 @@ func extractBundleVersion(propsRaw json.RawMessage) string {
 	return ""
 }
 
-// ResolveClusterCatalog finds a ClusterCatalog that serves the package at the installed version.
+// ResolveClusterCatalog selects the highest-priority serving ClusterCatalog
+// containing the requested package and independently containing the installed
+// version and, when specified, channel. It does not verify that the installed
+// version belongs to that channel. Catalogs that cannot be queried are skipped;
+// if none match, it returns a PackageNotFoundError.
 func (m *Migrator) ResolveClusterCatalog(ctx context.Context, info *MigrationInfo, restConfig *rest.Config) (string, error) {
 	var catalogList ocv1.ClusterCatalogList
 	if err := m.Client.List(ctx, &catalogList); err != nil {
