@@ -429,7 +429,9 @@ func (m *Migrator) gatherResourcesFromOperatorCR(ctx context.Context, packageNam
 	return result, nil
 }
 
-// GatherMigrationInfo profiles the operator and collects all migration information.
+// GatherMigrationInfo profiles a Subscription and collects candidate resources
+// without mutation. Like Gather, it does not run the full eligibility,
+// catalog-resolution, or target preflight checks required before conversion.
 func (m *Migrator) GatherMigrationInfo(ctx context.Context, opts Options) (*MigrationInfo, error) {
 	_, csv, ip, err := m.GetCSVAndInstallPlan(ctx, opts)
 	if err != nil {

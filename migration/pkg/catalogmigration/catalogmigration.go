@@ -1,5 +1,8 @@
-// Package catalogmigration provides an API for migrating OLMv0 CatalogSources
-// to OLMv1 ClusterCatalogs.
+// Package catalogmigration maps image-backed OLMv0 CatalogSources to OLMv1
+// ClusterCatalogs. It can create a catalog or adopt an existing catalog with
+// the same image. Unsupported sources are reported as skipped rather than
+// converted. MigrateCatalogs returns a result for each source, so callers must
+// inspect per-source statuses as well as the returned error.
 package catalogmigration
 
 import (
@@ -23,14 +26,19 @@ const (
 	clusterCatalogServingTimeout        = 10 * time.Minute
 )
 
-// CatalogMigratorOptions configures the catalog migration.
+// CatalogMigratorOptions configures catalog migration. DryRun reports proposed
+// changes without mutating catalogs. DeleteCatalogSource requests source
+// deletion only when no Subscription references it. AcknowledgePriorityOverflow
+// permits out-of-range priorities to be capped to int32 limits.
 type CatalogMigratorOptions struct {
 	DryRun                      bool
 	DeleteCatalogSource         bool
 	AcknowledgePriorityOverflow bool
 }
 
-// CatalogMigrationResult describes the outcome for a single CatalogSource.
+// CatalogMigrationResult describes one CatalogSource outcome. Status is
+// "created", "adopted", "skipped", "error", or "dry-run". Reason explains the
+// outcome and Notes describe source settings without an OLMv1 equivalent.
 type CatalogMigrationResult struct {
 	CatalogSourceName      string
 	CatalogSourceNamespace string
@@ -50,11 +58,17 @@ func NewCatalogMigrator(c client.Client) *CatalogMigrator {
 	return &CatalogMigrator{Client: c}
 }
 
-// MigrateCatalogs processes all CatalogSources across all namespaces and maps them to ClusterCatalogs.
-// Strategy (per R8):
-//   - Same name + same image across namespaces → consolidate into a single ClusterCatalog
-//   - Same name + different image across namespaces → use <name>-<namespace> for each
-//   - Unique name → use metadata.name directly
+// MigrateCatalogs processes CatalogSources in all namespaces. Only grpc sources
+// with spec.image can become ClusterCatalogs; unsupported sources are returned
+// as skipped results. Existing catalogs with matching images are adopted, and
+// duplicate source names are consolidated when their images match or qualified
+// with the source namespace when the images differ.
+//
+// The returned slice contains one outcome per source. Per-source create,
+// annotation, or serving failures appear as results with Status "error" rather
+// than as the returned error; callers must inspect every result. The returned
+// error covers failures to list the required cluster objects. DryRun reports
+// proposed actions without creating or annotating catalogs.
 func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigratorOptions) ([]CatalogMigrationResult, error) {
 	// List all CatalogSources across all namespaces
 	var csList operatorsv1alpha1.CatalogSourceList
