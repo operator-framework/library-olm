@@ -51,7 +51,7 @@ func runRollback(cmd *cobra.Command, args []string) error { //nolint:nestif
 	}
 
 	m := migration.NewMigrator(c, restCfg)
-	m.Progress = progressFunc
+	m.Progress = progressFuncFor("rollback", "")
 	ctx := cmd.Context()
 
 	if rollbackAll { //nolint:nestif
@@ -68,19 +68,38 @@ func runRollback(cmd *cobra.Command, args []string) error { //nolint:nestif
 		}
 
 		if len(targets) == 0 {
+			if structuredOutput() {
+				return writeOutputRecord(outputRecord{Type: "result", Command: "rollback", Status: migration.ProgressCompleted, Message: "No migrated ClusterExtensions found"})
+			}
 			info("No migrated ClusterExtensions found.")
 			return nil
 		}
 
-		fmt.Printf("\nRolling back %d migrated ClusterExtension(s)...\n", len(targets))
+		if !structuredOutput() {
+			fmt.Printf("\nRolling back %d migrated ClusterExtension(s)...\n", len(targets))
+		}
 		var firstErr error
 		for _, name := range targets {
-			if err := m.RollbackClusterExtension(ctx, name, rollbackAcknowledgeInstalled); err != nil {
-				fail(fmt.Sprintf("%s: %v", name, err))
+			m.Progress = progressFuncFor("rollback", name)
+			err := m.Rollback(ctx, migration.Options{ClusterExtensionName: name, AcknowledgeInstalled: rollbackAcknowledgeInstalled})
+			if structuredOutput() {
+				record := outputRecord{Type: "result", Command: "rollback", Target: name, Status: migration.ProgressCompleted}
+				if err != nil {
+					record.Status = migration.ProgressFailed
+					record.Error = err.Error()
+				}
+				if writeErr := writeOutputRecord(record); writeErr != nil {
+					return writeErr
+				}
+			}
+			if err != nil {
+				if !structuredOutput() {
+					fail(fmt.Sprintf("%s: %v", name, err))
+				}
 				if firstErr == nil {
 					firstErr = err
 				}
-			} else {
+			} else if !structuredOutput() {
 				success(fmt.Sprintf("%s rolled back", name))
 			}
 		}
@@ -88,11 +107,19 @@ func runRollback(cmd *cobra.Command, args []string) error { //nolint:nestif
 	}
 
 	ceName := args[0]
-	fmt.Printf("\n%s%s🔄 Rolling back ClusterExtension %s...%s\n", colorBold, colorCyan, ceName, colorReset)
+	m.Progress = progressFuncFor("rollback", ceName)
+	if !structuredOutput() {
+		fmt.Printf("\n%s%s🔄 Rolling back ClusterExtension %s...%s\n", colorBold, colorCyan, ceName, colorReset)
+	}
 
-	if err := m.RollbackClusterExtension(ctx, ceName, rollbackAcknowledgeInstalled); err != nil {
-		fail(fmt.Sprintf("Rollback failed: %v", err))
+	if err := m.Rollback(ctx, migration.Options{ClusterExtensionName: ceName, AcknowledgeInstalled: rollbackAcknowledgeInstalled}); err != nil {
+		if !structuredOutput() {
+			fail(fmt.Sprintf("Rollback failed: %v", err))
+		}
 		return err
+	}
+	if structuredOutput() {
+		return writeOutputRecord(outputRecord{Type: "result", Command: "rollback", Target: ceName, Status: migration.ProgressCompleted})
 	}
 
 	success(fmt.Sprintf("ClusterExtension %s rolled back; Subscription restored", ceName))

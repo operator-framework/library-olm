@@ -48,12 +48,12 @@ func runCleanup(cmd *cobra.Command, args []string) error { //nolint:nestif
 	}
 
 	m := migration.NewMigrator(c, restCfg)
-	m.Progress = progressFunc
+	m.Progress = progressFuncFor("cleanup", "")
 	ctx := cmd.Context()
 
 	if cleanupAll { //nolint:nestif
 		// Find all CEs that are in Conflict state
-		results, err := m.ScanAllSubscriptions(ctx)
+		results, err := m.ScanAll(ctx)
 		if err != nil {
 			return fmt.Errorf("scan failed: %w", err)
 		}
@@ -79,19 +79,38 @@ func runCleanup(cmd *cobra.Command, args []string) error { //nolint:nestif
 		}
 
 		if len(conflictCEs) == 0 {
+			if structuredOutput() {
+				return writeOutputRecord(outputRecord{Type: "result", Command: "cleanup", Status: migration.ProgressCompleted, Message: "No Conflict-state ClusterExtensions found"})
+			}
 			info("No Conflict-state ClusterExtensions found.")
 			return nil
 		}
 
-		fmt.Printf("\nCleaning up %d Conflict-state ClusterExtension(s)...\n", len(conflictCEs))
+		if !structuredOutput() {
+			fmt.Printf("\nCleaning up %d Conflict-state ClusterExtension(s)...\n", len(conflictCEs))
+		}
 		var firstErr error
 		for _, ceName := range conflictCEs {
-			if err := m.CleanupConflict(ctx, ceName); err != nil {
-				fail(fmt.Sprintf("%s: %v", ceName, err))
+			m.Progress = progressFuncFor("cleanup", ceName)
+			err := m.Cleanup(ctx, migration.Options{ClusterExtensionName: ceName})
+			if structuredOutput() {
+				record := outputRecord{Type: "result", Command: "cleanup", Target: ceName, Status: migration.ProgressCompleted}
+				if err != nil {
+					record.Status = migration.ProgressFailed
+					record.Error = err.Error()
+				}
+				if writeErr := writeOutputRecord(record); writeErr != nil {
+					return writeErr
+				}
+			}
+			if err != nil {
+				if !structuredOutput() {
+					fail(fmt.Sprintf("%s: %v", ceName, err))
+				}
 				if firstErr == nil {
 					firstErr = err
 				}
-			} else {
+			} else if !structuredOutput() {
 				success(fmt.Sprintf("%s conflict resolved", ceName))
 			}
 		}
@@ -99,11 +118,19 @@ func runCleanup(cmd *cobra.Command, args []string) error { //nolint:nestif
 	}
 
 	ceName := args[0]
-	fmt.Printf("\n%s%s🧹 Cleaning up Conflict for %s...%s\n", colorBold, colorCyan, ceName, colorReset)
+	m.Progress = progressFuncFor("cleanup", ceName)
+	if !structuredOutput() {
+		fmt.Printf("\n%s%s🧹 Cleaning up Conflict for %s...%s\n", colorBold, colorCyan, ceName, colorReset)
+	}
 
-	if err := m.CleanupConflict(ctx, ceName); err != nil {
-		fail(fmt.Sprintf("Cleanup failed: %v", err))
+	if err := m.Cleanup(ctx, migration.Options{ClusterExtensionName: ceName}); err != nil {
+		if !structuredOutput() {
+			fail(fmt.Sprintf("Cleanup failed: %v", err))
+		}
 		return err
+	}
+	if structuredOutput() {
+		return writeOutputRecord(outputRecord{Type: "result", Command: "cleanup", Target: ceName, Status: migration.ProgressCompleted})
 	}
 
 	success(fmt.Sprintf("Conflict resolved for %s; OLMv0 artifacts removed, ClusterExtension intact", ceName))

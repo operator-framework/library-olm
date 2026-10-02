@@ -14,6 +14,9 @@ func convertBatch(ctx context.Context, results []migration.OperatorScanResult, d
 ) error {
 	eligible := migration.EligibleFromScan(results)
 	if len(eligible) == 0 {
+		if structuredOutput() {
+			return writeOutputRecord(outputRecord{Type: "result", Command: "convert", Status: migration.ProgressCompleted, Message: "No eligible operators to migrate"})
+		}
 		info("No eligible operators to migrate.")
 		return nil
 	}
@@ -23,17 +26,34 @@ func convertBatch(ctx context.Context, results []migration.OperatorScanResult, d
 		opts.SubscriptionName = result.SubscriptionName
 		opts.SubscriptionNamespace = result.SubscriptionNamespace
 		opts.ApplyDefaults()
-		info(fmt.Sprintf("Processing %s/%s...", opts.SubscriptionNamespace, opts.SubscriptionName))
+		target := opts.SubscriptionNamespace + "/" + opts.SubscriptionName
+		if !structuredOutput() {
+			info(fmt.Sprintf("Processing %s...", target))
+		}
 		var err error
+		startProgress()
 		if dryRun {
 			err = preview(opts)
 		} else {
 			err = migrate(ctx, opts)
 		}
+		clearProgress()
+		if structuredOutput() && (!dryRun || err != nil) {
+			record := outputRecord{Type: "result", Command: "convert", Target: target, Status: migration.ProgressCompleted}
+			if err != nil {
+				record.Status = migration.ProgressFailed
+				record.Error = err.Error()
+			}
+			if writeErr := writeOutputRecord(record); writeErr != nil {
+				return writeErr
+			}
+		}
 		if err == nil {
 			continue
 		}
-		fail(fmt.Sprintf("%s/%s: %v", opts.SubscriptionNamespace, opts.SubscriptionName, err))
+		if !structuredOutput() {
+			fail(fmt.Sprintf("%s: %v", target, err))
+		}
 		if !continueOnError {
 			return err
 		}

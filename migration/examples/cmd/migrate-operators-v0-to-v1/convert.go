@@ -2,13 +2,9 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"time"
 
 	"github.com/spf13/cobra"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/operator-framework/library-olm/migration/pkg/migration"
 )
@@ -92,7 +88,7 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	}
 
 	m := migration.NewMigrator(c, restCfg)
-	m.Progress = progressFunc
+	m.Progress = progressFuncFor("convert", "")
 	ctx := cmd.Context()
 
 	if convertAll { //nolint:nestif
@@ -105,7 +101,9 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 			AcknowledgeScopedServiceAccount: convertAckScopedSA,
 			AcknowledgeNotSteadyState:       convertAckNotSteady,
 		}
-		fmt.Printf("\n%s%s🔎 Scanning all Subscriptions for migration...%s\n", colorBold, colorCyan, colorReset)
+		if !structuredOutput() {
+			fmt.Printf("\n%s%s🔎 Scanning all Subscriptions for migration...%s\n", colorBold, colorCyan, colorReset)
+		}
 		startProgress()
 		results, err := m.ScanAllSubscriptionsWithOptions(ctx, batchOpts)
 		clearProgress()
@@ -113,11 +111,20 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 			return fmt.Errorf("scan failed: %w", err)
 		}
 
-		migration.PrintScanSummary(results, func(format string, a ...interface{}) {
-			fmt.Printf(format, a...)
-		})
+		if structuredOutput() {
+			if err := writeOutputRecord(outputRecord{Type: "scan", Command: "convert", Data: scanResultsData(results)}); err != nil {
+				return err
+			}
+		} else {
+			migration.PrintScanSummary(results, func(format string, a ...interface{}) {
+				fmt.Printf(format, a...)
+			})
+		}
 
-		return convertBatch(ctx, results, batchOpts, convertDryRun, convertContinueOnErr, m.Migrate, func(opts migration.Options) error {
+		return convertBatch(ctx, results, batchOpts, convertDryRun, convertContinueOnErr, func(ctx context.Context, opts migration.Options) error {
+			m.Progress = progressFuncFor("convert", opts.SubscriptionNamespace+"/"+opts.SubscriptionName)
+			return m.Migrate(ctx, opts)
+		}, func(opts migration.Options) error {
 			return runConvertDryRun(cmd, m, opts)
 		})
 	}
@@ -150,216 +157,72 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	if convertDryRun {
 		return runConvertDryRun(cmd, m, opts)
 	}
+	m.Progress = progressFuncFor("convert", convertNamespace+"/"+operatorName)
 
-	fmt.Printf("\n%s%s🔄 Migrating %s/%s to OLMv1...%s\n", colorBold, colorCyan, convertNamespace, operatorName, colorReset)
-
-	// TODO: the step-by-step flow below duplicates some logic from m.Migrate() to provide
-	// richer per-step output. Consider adding a progress channel to Options so the library
-	// can emit structured events that the CLI can format, avoiding the duplication.
-	stepHeader(1, "Profiling operator")
-	_, csv, ip, err := m.GetCSVAndInstallPlan(ctx, opts)
-	if err != nil {
-		return fmt.Errorf("failed to profile operator: %w", err)
+	if !structuredOutput() {
+		fmt.Printf("\n%s%s🔄 Migrating %s/%s to OLMv1...%s\n", colorBold, colorCyan, convertNamespace, operatorName, colorReset)
 	}
-	bundleInfo, err := m.GetBundleInfo(ctx, opts, csv, ip)
-	if err != nil {
-		return fmt.Errorf("failed to get bundle info: %w", err)
-	}
-	detail("Package:", bundleInfo.PackageName)
-	detail("Version:", bundleInfo.Version)
-	detail("Channel:", valueOrDefault(bundleInfo.Channel, "(default)"))
-	success("Operator profiled")
-
-	stepHeader(2, "Checking readiness and compatibility")
-	sectionHeader("Readiness")
-	readiness, err := m.CheckReadiness(ctx, opts)
-	if err != nil {
-		return fmt.Errorf("readiness check failed: %w", err)
-	}
-	printCheckResults(readiness.Checks)
-
-	sectionHeader("Compatibility")
-	propsJSON := csv.Annotations["operatorframework.io/properties"]
-	compat, err := m.CheckCompatibility(ctx, opts, csv, propsJSON)
-	if err != nil {
-		return fmt.Errorf("compatibility check failed: %w", err)
-	}
-	printCheckResults(compat.Checks)
-
-	allFailed := append(readiness.FailedChecks(), compat.FailedChecks()...)
-	if len(allFailed) > 0 {
-		return fmt.Errorf("operator is not eligible for migration (%d checks failed)", len(allFailed))
-	}
-
-	stepHeader(3, "Determining target ClusterCatalog")
 	startProgress()
-	catalogName, err := m.ResolveClusterCatalog(ctx, bundleInfo, restCfg)
+	err = m.Migrate(ctx, opts)
 	clearProgress()
 	if err != nil {
-		var notFound *migration.PackageNotFoundError
-		if errors.As(err, &notFound) {
-			fail(fmt.Sprintf("No ClusterCatalog found for package %q — run migrate-catalogs-v0-to-v1 first", bundleInfo.PackageName))
-		}
-		return fmt.Errorf("failed to resolve ClusterCatalog: %w", err)
+		return fmt.Errorf("migration failed: %w", err)
 	}
-	bundleInfo.ResolvedCatalogName = catalogName
-	success(fmt.Sprintf("Selected ClusterCatalog: %s", catalogName))
-
-	// Verify every OLMv1 prerequisite before deleting the Subscription or CSV.
-	// This also discovers the operator-controller namespace used by SecretPacker.
-	opts, err = m.PrepareClusterObjectSet(ctx, opts)
-	if err != nil {
-		return fmt.Errorf("ClusterObjectSet prerequisite check failed: %w", err)
-	}
-	success(fmt.Sprintf("ClusterObjectSet API established; using operator-controller namespace %s", opts.SystemNamespace))
-	stepHeader(4, "Collecting operator resources")
-	objects, err := m.CollectResources(ctx, opts, csv, ip, bundleInfo.PackageName)
-	if err != nil {
-		return fmt.Errorf("failed to collect resources: %w", err)
-	}
-	sourceObjects := make([]unstructured.Unstructured, len(objects))
-	for i := range objects {
-		sourceObjects[i] = *objects[i].DeepCopy()
-	}
-	migration.RewriteInstallNamespace(objects, opts.SubscriptionNamespace, opts.InstallNamespace)
-	if err := m.EnsureTargetNamespaceResourcesAbsent(ctx, sourceObjects, objects, opts); err != nil {
-		return fmt.Errorf("target namespace resource preflight failed: %w", err)
-	}
-	bundleInfo.CollectedObjects = objects
-	kindCounts := make(map[string]int)
-	for _, obj := range objects {
-		kindCounts[obj.GetKind()]++
-	}
-	success(fmt.Sprintf("Found %d resources across %d kinds", len(objects), len(kindCounts)))
-	if err := m.PrepareInstallNamespace(ctx, opts); err != nil {
-		return fmt.Errorf("install namespace preparation failed: %w", err)
+	if structuredOutput() {
+		return writeOutputRecord(outputRecord{Type: "result", Command: "convert", Target: convertNamespace + "/" + operatorName, Status: migration.ProgressCompleted})
 	}
 
-	stepHeader(5, "Backing up resources")
-	backup, err := m.BackupResources(ctx, opts, csv, ip)
-	if err != nil {
-		return fmt.Errorf("failed to backup resources: %w", err)
-	}
-	// Populate CE backup annotations (R2.5) — before PrepareForMigration deletes the Sub.
-	if backup.Subscription != nil {
-		if j, jErr := json.Marshal(backup.Subscription.Spec); jErr == nil {
-			bundleInfo.SubscriptionBackupJSON = string(j)
-		}
-	}
-	if backup.OperatorGroup != nil {
-		if j, jErr := json.Marshal(backup.OperatorGroup.Spec); jErr == nil {
-			bundleInfo.OperatorGroupBackupJSON = string(j)
-		}
-	}
-	// Disk backup (non-fatal per R2.6).
-	if convertBackupDir != "" {
-		if err := backup.SaveToDisk(convertBackupDir); err != nil {
-			warn(fmt.Sprintf("Backup to disk failed (CE annotation backup is authoritative): %v", err))
-		} else {
-			success(fmt.Sprintf("Backup written to %s", convertBackupDir))
-		}
-	}
-	success("Resources backed up in memory (CE annotation backup authoritative)")
-
-	stepHeader(6, "Preparing operator for migration")
-	info("Deleting Subscription and CSV (orphan cascade)...")
-	if err := m.PrepareForMigration(ctx, opts, csv); err != nil {
-		return fmt.Errorf("preparation failed: %w", err)
-	}
-	success("OLMv0 management removed")
-	restoreSourceDeployments, err := m.ScaleSourceDeployments(ctx, sourceObjects, opts)
-	if err != nil {
-		recoveryCtx, cancel := migration.NewRecoveryContext(ctx)
-		defer cancel()
-		if recoverErr := m.RecoverFromBackup(recoveryCtx, opts, backup); recoverErr != nil {
-			return fmt.Errorf("scale source Deployments: %w; recovery also failed: %v", err, recoverErr)
-		}
-		return fmt.Errorf("scale source Deployments failed (recovered): %w", err)
-	}
-	if opts.InstallNamespace != opts.SubscriptionNamespace {
-		success("Source Deployments scaled to zero before target cutover")
-	}
-
-	stepHeader(7, "Creating OLMv1 migration resources")
-	info(fmt.Sprintf("Applying COS %s-1 with %d objects and creating its ClusterExtension...", opts.ClusterExtensionName, len(bundleInfo.CollectedObjects)))
-	startProgress()
-	result, err := m.CreateMigrationResources(ctx, opts, bundleInfo, backup)
-	if err != nil {
-		clearProgress()
-		if result.TargetMayBeActive {
-			return fmt.Errorf("create migration resources: %w; target ClusterObjectSet may be active, so source Deployments remain scaled to zero", err)
-		}
-		restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		defer cancel()
-		if restoreErr := restoreSourceDeployments(restoreCtx); restoreErr != nil {
-			return fmt.Errorf("create migration resources: %w; restore source Deployments: %v", err, restoreErr)
-		}
-		return err
-	}
-	clearProgress()
-	success(fmt.Sprintf("ClusterObjectSet %s-1 reached Succeeded=True", opts.ClusterExtensionName))
-	success(fmt.Sprintf("ClusterExtension %s is Installed", opts.ClusterExtensionName))
-	if err := m.DeleteSourceNamespaceResources(ctx, sourceObjects, opts); err != nil {
-		return fmt.Errorf("delete source install resources: %w", err)
-	}
-
-	stepHeader(8, "Cleaning up OLMv0 resources")
-	cleanupResult := m.CleanupOLMv0Resources(ctx, opts, bundleInfo.PackageName, csv.Name)
-	for _, action := range cleanupResult.Actions {
-		switch {
-		case action.Skipped:
-			info(fmt.Sprintf("⏭  %s", action.Description))
-		case action.Error != nil:
-			warn(fmt.Sprintf("%s: %v", action.Description, action.Error))
-		case action.Succeeded:
-			success(action.Description)
-		}
-	}
-	if err := cleanupResult.Err(); err != nil {
-		return fmt.Errorf("clean up OLMv0 resources: %w", err)
-	}
-	if err := m.DeleteSourceNamespace(ctx, opts); err != nil {
-		return err
-	}
-
-	banner(fmt.Sprintf("Migration complete! %s is now managed by OLMv1", bundleInfo.PackageName))
+	banner(fmt.Sprintf("Migration complete! %s is now managed by OLMv1", operatorName))
 	fmt.Println()
 	return nil
 }
 
 func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.Options) error {
 	ctx := cmd.Context()
-	fmt.Printf("\n%s%s🔍 Dry run: %s/%s%s\n", colorBold, colorCyan, opts.SubscriptionNamespace, opts.SubscriptionName, colorReset)
+	m.Progress = progressFuncFor("convert", opts.SubscriptionNamespace+"/"+opts.SubscriptionName)
+	if !structuredOutput() {
+		fmt.Printf("\n%s%s🔍 Dry run: %s/%s%s\n", colorBold, colorCyan, opts.SubscriptionNamespace, opts.SubscriptionName, colorReset)
+	}
 
-	// Dry-run must reject a target that cannot create a COS, just as a real
-	// conversion would. This is read-only and runs before gathering the preview.
-	var err error
-	opts, err = m.PrepareClusterObjectSet(ctx, opts)
+	result, err := m.Check(ctx, opts)
 	if err != nil {
-		return fmt.Errorf("ClusterObjectSet prerequisite check failed: %w", err)
+		return fmt.Errorf("pre-migration check failed: %w", err)
 	}
-	success(fmt.Sprintf("ClusterObjectSet API established; using operator-controller namespace %s", opts.SystemNamespace))
+	if result.Status != migration.OperatorStatusEligible {
+		if structuredOutput() {
+			if err := writeOutputRecord(outputRecord{Type: "check", Command: "convert", Target: opts.SubscriptionNamespace + "/" + opts.SubscriptionName, Data: scanResultData(*result)}); err != nil {
+				return err
+			}
+		} else {
+			printCheckResults(result.FailedChecks)
+		}
+		return fmt.Errorf("operator %s/%s is not eligible for migration (%s): %s", opts.SubscriptionNamespace, opts.SubscriptionName, result.Status, result.Reason)
+	}
 
-	_, _, readiness, compatibility, err := m.EnsurePrerequisites(ctx, opts)
-	if err != nil {
-		return fmt.Errorf("pre-migration checks failed: %w", err)
+	if !structuredOutput() {
+		printCheckResults(result.Checks)
 	}
-	printCheckResults(readiness.Checks)
-	printCheckResults(compatibility.Checks)
-	if !readiness.Passed() || !compatibility.Passed() {
-		return fmt.Errorf("operator is not eligible for migration (%d checks failed)", len(readiness.FailedChecks())+len(compatibility.FailedChecks()))
-	}
-
-	info, err := m.GatherMigrationInfo(ctx, opts)
+	info, err := m.Gather(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("failed to gather migration info: %w", err)
 	}
-	catalogName, err := m.ResolveClusterCatalog(ctx, info, m.RESTConfig)
-	if err != nil {
-		return fmt.Errorf("failed to resolve ClusterCatalog: %w", err)
+	if structuredOutput() {
+		kindCounts := make(map[string]int)
+		for _, obj := range info.CollectedObjects {
+			kindCounts[obj.GetKind()]++
+		}
+		return writeOutputRecord(outputRecord{
+			Type: "dry-run", Command: "convert", Target: opts.SubscriptionNamespace + "/" + opts.SubscriptionName,
+			Data: dryRunData{
+				Package: info.PackageName, Version: info.Version, Channel: info.Channel,
+				ClusterObjectSet: opts.ClusterExtensionName + "-1", ClusterExtension: opts.ClusterExtensionName,
+				InstallNamespace: opts.InstallNamespace, SystemNamespace: info.SystemNamespace,
+				ManualApproval: info.ManualApproval, KindCounts: kindCounts,
+				CleanupActions: dryRunCleanupPlan(opts, info), BackupDirectory: opts.BackupDirectory,
+			},
+		})
 	}
-	info.ResolvedCatalogName = catalogName
-	success(fmt.Sprintf("Selected ClusterCatalog: %s", catalogName))
+	success(fmt.Sprintf("ClusterObjectSet API established; using operator-controller namespace %s", info.SystemNamespace))
 
 	success(fmt.Sprintf("Package: %s  Version: %s  Channel: %s", info.PackageName, info.Version, valueOrDefault(info.Channel, "(default)")))
 	fmt.Printf("\n  Resources that would be created:\n")
@@ -400,6 +263,21 @@ func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.
 	fmt.Println()
 	info2("No cluster resources were modified (dry run).")
 	return nil
+}
+
+// dryRunData intentionally excludes collected objects, which may contain Secrets.
+type dryRunData struct {
+	Package          string         `json:"package"`
+	Version          string         `json:"version"`
+	Channel          string         `json:"channel,omitempty"`
+	ClusterObjectSet string         `json:"cluster_object_set"`
+	ClusterExtension string         `json:"cluster_extension"`
+	InstallNamespace string         `json:"install_namespace"`
+	SystemNamespace  string         `json:"system_namespace"`
+	ManualApproval   bool           `json:"manual_approval"`
+	KindCounts       map[string]int `json:"kind_counts"`
+	CleanupActions   []string       `json:"cleanup_actions"`
+	BackupDirectory  string         `json:"backup_directory,omitempty"`
 }
 
 // dryRunCleanupPlan describes all OLMv0 cleanup actions performed by a normal

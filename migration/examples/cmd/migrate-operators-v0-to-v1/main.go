@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	appsv1 "k8s.io/api/apps/v1"
@@ -34,7 +35,10 @@ func init() {
 	utilruntime.Must(operatorsv1alpha1.AddToScheme(scheme))
 }
 
-var kubeconfig string
+var (
+	kubeconfig string
+	outputMode = "text"
+)
 
 var rootCmd = &cobra.Command{
 	Use:   "migrate-operators-v0-to-v1",
@@ -53,6 +57,12 @@ Subcommands:
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig file (default: KUBECONFIG env or ~/.kube/config)")
+	rootCmd.PersistentFlags().StringVar(&outputMode, "output", "text", "Output format: "+strings.Join(outputFormatNames(), " or ")+" (jsonl emits one JSON record per line)")
+	rootCmd.PersistentPreRunE = func(_ *cobra.Command, _ []string) error {
+		return validateOutputFormat()
+	}
+	rootCmd.SilenceErrors = true
+	rootCmd.SilenceUsage = true
 
 	rootCmd.AddCommand(checkCmd)
 	rootCmd.AddCommand(convertCmd)
@@ -62,6 +72,11 @@ func init() {
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
+		if structuredOutput() {
+			_ = writeOutputRecord(outputRecord{Type: "error", Error: err.Error()})
+		} else {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+		}
 		os.Exit(1)
 	}
 }

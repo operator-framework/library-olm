@@ -96,6 +96,20 @@ Live setup waits for the source InstallPlan to reach `Complete` before checking 
 scenario also enforces this prerequisite when invoked directly, and failure diagnostics include
 both OLMv0 controller logs to identify installations racing the cutover.
 
+The operator CLI routes single conversion through `Migrator.Migrate`, preview through
+`Check` and `Gather`, and rollback/cleanup through `Rollback` and `Cleanup`. Fixture
+refusal tests exercise the public check and preview paths before any mutation; live
+tests exercise the same public conversion and recovery paths against OLMv0.
+`Migrator.Progress` emits typed step/status events to the CLI, including warnings
+and failures; consumers should not parse message text to infer progress state.
+The operator CLI defaults to human-readable output. Use `--output=jsonl` on
+`check`, `convert` (including `--dry-run`), `rollback`, or `cleanup` to stream
+one JSON object per line. Records have a `type` (`progress`, `scan`, `check`,
+`dry-run`, `result`, or `error`); progress records include `step`, `status`,
+`command`, and, for single-operator work, `target`.
+For example, `migrate-operators-v0-to-v1 convert my-operator -n operators
+--dry-run --output=jsonl` emits a structured preview without raw resource data.
+
 `make migration/test-e2e-fixture-matrix` runs only deterministic fixture scenarios. `make
 migration/test-e2e-live-matrix` runs only the real-operator smoke scenarios. Both use the Kind-generated
 kubeconfig by default. The

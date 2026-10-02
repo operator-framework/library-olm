@@ -2,14 +2,52 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/operator-framework/library-olm/migration/pkg/migration"
 )
+
+func TestConvertBatchJSONLines(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalStdout, originalMode := os.Stdout, outputMode
+	os.Stdout, outputMode = writer, "jsonl"
+	t.Cleanup(func() {
+		os.Stdout, outputMode = originalStdout, originalMode
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+
+	results := []migration.OperatorScanResult{{SubscriptionName: "widget", SubscriptionNamespace: "operators", Status: migration.OperatorStatusEligible}}
+	if err := convertBatch(t.Context(), results, migration.Options{}, false, false,
+		func(context.Context, migration.Options) error { return nil },
+		func(migration.Options) error { t.Fatal("unexpected preview"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record outputRecord
+	if err := json.Unmarshal(output, &record); err != nil {
+		t.Fatalf("batch output is not one JSON record: %q: %v", output, err)
+	}
+	if record.Type != "result" || record.Command != "convert" || record.Target != "operators/widget" || record.Status != migration.ProgressCompleted {
+		t.Fatalf("unexpected batch result: %#v", record)
+	}
+}
 
 func TestConvertBatchSafety(t *testing.T) {
 	firstFailure := errors.New("first migration failed")

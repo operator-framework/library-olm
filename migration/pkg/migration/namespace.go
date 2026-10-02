@@ -52,7 +52,7 @@ func (m *Migrator) PrepareInstallNamespace(ctx context.Context, opts Options) er
 		if err := m.Client.Create(ctx, &target); err != nil {
 			return fmt.Errorf("create install namespace %q: %w", opts.InstallNamespace, err)
 		}
-		m.progress(fmt.Sprintf("Created install namespace %s with copied PSA/SCC labels", opts.InstallNamespace))
+		m.progress(ProgressEvent{Step: ProgressStepCollect, Status: ProgressNote, Message: fmt.Sprintf("Created install namespace %s with copied PSA/SCC labels", opts.InstallNamespace)})
 		return nil
 	}
 	if err != nil {
@@ -76,7 +76,7 @@ func (m *Migrator) PrepareInstallNamespace(ctx context.Context, opts Options) er
 		if err := m.Client.Update(ctx, &target); err != nil {
 			return fmt.Errorf("copy PSA/SCC labels to install namespace %q: %w", opts.InstallNamespace, err)
 		}
-		m.progress(fmt.Sprintf("Copied PSA/SCC labels to existing install namespace %s", opts.InstallNamespace))
+		m.progress(ProgressEvent{Step: ProgressStepCollect, Status: ProgressNote, Message: fmt.Sprintf("Copied PSA/SCC labels to existing install namespace %s", opts.InstallNamespace)})
 	}
 	return nil
 }
@@ -307,7 +307,7 @@ func (m *Migrator) DeleteSourceNamespaceResources(ctx context.Context, objects [
 		deleted++
 	}
 	if deleted > 0 {
-		m.progress(fmt.Sprintf("Deleted %d migrated resource(s) from source namespace %s", deleted, opts.SubscriptionNamespace))
+		m.progress(ProgressEvent{Step: ProgressStepCreate, Status: ProgressNote, Message: fmt.Sprintf("Deleted %d migrated resource(s) from source namespace %s", deleted, opts.SubscriptionNamespace)})
 	}
 	return nil
 }
@@ -443,6 +443,6 @@ func (m *Migrator) DeleteSourceNamespace(ctx context.Context, opts Options) erro
 	if err := m.Client.Delete(ctx, source); err != nil && client.IgnoreNotFound(err) != nil {
 		return fmt.Errorf("delete source namespace %q: %w", opts.SubscriptionNamespace, err)
 	}
-	m.progress(fmt.Sprintf("Requested deletion of source namespace %s", opts.SubscriptionNamespace))
+	m.progress(ProgressEvent{Step: ProgressStepCleanup, Status: ProgressNote, Message: fmt.Sprintf("Requested deletion of source namespace %s", opts.SubscriptionNamespace)})
 	return nil
 }

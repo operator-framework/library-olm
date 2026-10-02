@@ -148,7 +148,7 @@ func (m *Migrator) GetBundleInfo(ctx context.Context, opts Options, csv *operato
 	if sub.Spec.Config != nil {
 		cfg := sub.Spec.Config.DeepCopy()
 		if cfg.Selector != nil {
-			m.progress("Warning: Subscription spec.config.selector is not supported by OLMv1 and will be dropped during migration")
+			m.progress(ProgressEvent{Step: ProgressStepCollect, Status: ProgressWarning, Message: "Subscription spec.config.selector is not supported by OLMv1 and will be dropped during migration"})
 			cfg.Selector = nil
 		}
 		info.SubscriptionConfig = cfg
