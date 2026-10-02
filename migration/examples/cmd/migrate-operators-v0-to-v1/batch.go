@@ -14,7 +14,7 @@ func convertBatch(ctx context.Context, results []migration.OperatorScanResult, d
 ) error {
 	eligible := migration.EligibleFromScan(results)
 	if len(eligible) == 0 {
-		if jsonOutput() {
+		if structuredOutput() {
 			return writeOutputRecord(outputRecord{Type: "result", Command: "convert", Status: migration.ProgressCompleted, Message: "No eligible operators to migrate"})
 		}
 		info("No eligible operators to migrate.")
@@ -27,7 +27,7 @@ func convertBatch(ctx context.Context, results []migration.OperatorScanResult, d
 		opts.SubscriptionNamespace = result.SubscriptionNamespace
 		opts.ApplyDefaults()
 		target := opts.SubscriptionNamespace + "/" + opts.SubscriptionName
-		if !jsonOutput() {
+		if !structuredOutput() {
 			info(fmt.Sprintf("Processing %s...", target))
 		}
 		var err error
@@ -38,7 +38,7 @@ func convertBatch(ctx context.Context, results []migration.OperatorScanResult, d
 			err = migrate(ctx, opts)
 		}
 		clearProgress()
-		if jsonOutput() && (!dryRun || err != nil) {
+		if structuredOutput() && (!dryRun || err != nil) {
 			record := outputRecord{Type: "result", Command: "convert", Target: target, Status: migration.ProgressCompleted}
 			if err != nil {
 				record.Status = migration.ProgressFailed
@@ -51,7 +51,7 @@ func convertBatch(ctx context.Context, results []migration.OperatorScanResult, d
 		if err == nil {
 			continue
 		}
-		if !jsonOutput() {
+		if !structuredOutput() {
 			fail(fmt.Sprintf("%s: %v", target, err))
 		}
 		if !continueOnError {

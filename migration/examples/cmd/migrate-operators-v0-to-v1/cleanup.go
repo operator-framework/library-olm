@@ -79,21 +79,21 @@ func runCleanup(cmd *cobra.Command, args []string) error { //nolint:nestif
 		}
 
 		if len(conflictCEs) == 0 {
-			if jsonOutput() {
+			if structuredOutput() {
 				return writeOutputRecord(outputRecord{Type: "result", Command: "cleanup", Status: migration.ProgressCompleted, Message: "No Conflict-state ClusterExtensions found"})
 			}
 			info("No Conflict-state ClusterExtensions found.")
 			return nil
 		}
 
-		if !jsonOutput() {
+		if !structuredOutput() {
 			fmt.Printf("\nCleaning up %d Conflict-state ClusterExtension(s)...\n", len(conflictCEs))
 		}
 		var firstErr error
 		for _, ceName := range conflictCEs {
 			m.Progress = progressFuncFor("cleanup", ceName)
 			err := m.Cleanup(ctx, migration.Options{ClusterExtensionName: ceName})
-			if jsonOutput() {
+			if structuredOutput() {
 				record := outputRecord{Type: "result", Command: "cleanup", Target: ceName, Status: migration.ProgressCompleted}
 				if err != nil {
 					record.Status = migration.ProgressFailed
@@ -104,13 +104,13 @@ func runCleanup(cmd *cobra.Command, args []string) error { //nolint:nestif
 				}
 			}
 			if err != nil {
-				if !jsonOutput() {
+				if !structuredOutput() {
 					fail(fmt.Sprintf("%s: %v", ceName, err))
 				}
 				if firstErr == nil {
 					firstErr = err
 				}
-			} else if !jsonOutput() {
+			} else if !structuredOutput() {
 				success(fmt.Sprintf("%s conflict resolved", ceName))
 			}
 		}
@@ -119,17 +119,17 @@ func runCleanup(cmd *cobra.Command, args []string) error { //nolint:nestif
 
 	ceName := args[0]
 	m.Progress = progressFuncFor("cleanup", ceName)
-	if !jsonOutput() {
+	if !structuredOutput() {
 		fmt.Printf("\n%s%s🧹 Cleaning up Conflict for %s...%s\n", colorBold, colorCyan, ceName, colorReset)
 	}
 
 	if err := m.Cleanup(ctx, migration.Options{ClusterExtensionName: ceName}); err != nil {
-		if !jsonOutput() {
+		if !structuredOutput() {
 			fail(fmt.Sprintf("Cleanup failed: %v", err))
 		}
 		return err
 	}
-	if jsonOutput() {
+	if structuredOutput() {
 		return writeOutputRecord(outputRecord{Type: "result", Command: "cleanup", Target: ceName, Status: migration.ProgressCompleted})
 	}
 

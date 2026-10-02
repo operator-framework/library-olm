@@ -68,21 +68,21 @@ func runRollback(cmd *cobra.Command, args []string) error { //nolint:nestif
 		}
 
 		if len(targets) == 0 {
-			if jsonOutput() {
+			if structuredOutput() {
 				return writeOutputRecord(outputRecord{Type: "result", Command: "rollback", Status: migration.ProgressCompleted, Message: "No migrated ClusterExtensions found"})
 			}
 			info("No migrated ClusterExtensions found.")
 			return nil
 		}
 
-		if !jsonOutput() {
+		if !structuredOutput() {
 			fmt.Printf("\nRolling back %d migrated ClusterExtension(s)...\n", len(targets))
 		}
 		var firstErr error
 		for _, name := range targets {
 			m.Progress = progressFuncFor("rollback", name)
 			err := m.Rollback(ctx, migration.Options{ClusterExtensionName: name, AcknowledgeInstalled: rollbackAcknowledgeInstalled})
-			if jsonOutput() {
+			if structuredOutput() {
 				record := outputRecord{Type: "result", Command: "rollback", Target: name, Status: migration.ProgressCompleted}
 				if err != nil {
 					record.Status = migration.ProgressFailed
@@ -93,13 +93,13 @@ func runRollback(cmd *cobra.Command, args []string) error { //nolint:nestif
 				}
 			}
 			if err != nil {
-				if !jsonOutput() {
+				if !structuredOutput() {
 					fail(fmt.Sprintf("%s: %v", name, err))
 				}
 				if firstErr == nil {
 					firstErr = err
 				}
-			} else if !jsonOutput() {
+			} else if !structuredOutput() {
 				success(fmt.Sprintf("%s rolled back", name))
 			}
 		}
@@ -108,17 +108,17 @@ func runRollback(cmd *cobra.Command, args []string) error { //nolint:nestif
 
 	ceName := args[0]
 	m.Progress = progressFuncFor("rollback", ceName)
-	if !jsonOutput() {
+	if !structuredOutput() {
 		fmt.Printf("\n%s%s🔄 Rolling back ClusterExtension %s...%s\n", colorBold, colorCyan, ceName, colorReset)
 	}
 
 	if err := m.Rollback(ctx, migration.Options{ClusterExtensionName: ceName, AcknowledgeInstalled: rollbackAcknowledgeInstalled}); err != nil {
-		if !jsonOutput() {
+		if !structuredOutput() {
 			fail(fmt.Sprintf("Rollback failed: %v", err))
 		}
 		return err
 	}
-	if jsonOutput() {
+	if structuredOutput() {
 		return writeOutputRecord(outputRecord{Type: "result", Command: "rollback", Target: ceName, Status: migration.ProgressCompleted})
 	}
 

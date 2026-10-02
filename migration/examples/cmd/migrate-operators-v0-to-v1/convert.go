@@ -101,7 +101,7 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 			AcknowledgeScopedServiceAccount: convertAckScopedSA,
 			AcknowledgeNotSteadyState:       convertAckNotSteady,
 		}
-		if !jsonOutput() {
+		if !structuredOutput() {
 			fmt.Printf("\n%s%s🔎 Scanning all Subscriptions for migration...%s\n", colorBold, colorCyan, colorReset)
 		}
 		startProgress()
@@ -111,7 +111,7 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 			return fmt.Errorf("scan failed: %w", err)
 		}
 
-		if jsonOutput() {
+		if structuredOutput() {
 			if err := writeOutputRecord(outputRecord{Type: "scan", Command: "convert", Data: scanResultsData(results)}); err != nil {
 				return err
 			}
@@ -159,7 +159,7 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	}
 	m.Progress = progressFuncFor("convert", convertNamespace+"/"+operatorName)
 
-	if !jsonOutput() {
+	if !structuredOutput() {
 		fmt.Printf("\n%s%s🔄 Migrating %s/%s to OLMv1...%s\n", colorBold, colorCyan, convertNamespace, operatorName, colorReset)
 	}
 	startProgress()
@@ -168,7 +168,7 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	if err != nil {
 		return fmt.Errorf("migration failed: %w", err)
 	}
-	if jsonOutput() {
+	if structuredOutput() {
 		return writeOutputRecord(outputRecord{Type: "result", Command: "convert", Target: convertNamespace + "/" + operatorName, Status: migration.ProgressCompleted})
 	}
 
@@ -180,7 +180,7 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.Options) error {
 	ctx := cmd.Context()
 	m.Progress = progressFuncFor("convert", opts.SubscriptionNamespace+"/"+opts.SubscriptionName)
-	if !jsonOutput() {
+	if !structuredOutput() {
 		fmt.Printf("\n%s%s🔍 Dry run: %s/%s%s\n", colorBold, colorCyan, opts.SubscriptionNamespace, opts.SubscriptionName, colorReset)
 	}
 
@@ -189,22 +189,24 @@ func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.
 		return fmt.Errorf("pre-migration check failed: %w", err)
 	}
 	if result.Status != migration.OperatorStatusEligible {
-		if jsonOutput() {
+		if structuredOutput() {
 			if err := writeOutputRecord(outputRecord{Type: "check", Command: "convert", Target: opts.SubscriptionNamespace + "/" + opts.SubscriptionName, Data: scanResultData(*result)}); err != nil {
 				return err
 			}
 		} else {
 			printCheckResults(result.FailedChecks)
 		}
-		return fmt.Errorf("operator %s/%s is %s: %s", opts.SubscriptionNamespace, opts.SubscriptionName, result.Status, result.Reason)
+		return fmt.Errorf("operator %s/%s is not eligible for migration (%s): %s", opts.SubscriptionNamespace, opts.SubscriptionName, result.Status, result.Reason)
 	}
 
-	printCheckResults(result.Checks)
+	if !structuredOutput() {
+		printCheckResults(result.Checks)
+	}
 	info, err := m.Gather(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("failed to gather migration info: %w", err)
 	}
-	if jsonOutput() {
+	if structuredOutput() {
 		kindCounts := make(map[string]int)
 		for _, obj := range info.CollectedObjects {
 			kindCounts[obj.GetKind()]++

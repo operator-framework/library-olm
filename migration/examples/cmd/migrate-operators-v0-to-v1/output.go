@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/operator-framework/library-olm/migration/pkg/migration"
@@ -54,6 +56,62 @@ type checkResultRecord struct {
 	Message string `json:"message"`
 }
 
+// outputFormatter owns record serialization. Commands need only distinguish
+// human-readable text from structured output; another structured format can
+// be registered here without changing the command flows.
+type outputFormatter interface {
+	structured() bool
+	writeRecord(outputRecord) error
+}
+
+type textFormatter struct{}
+
+func (textFormatter) structured() bool { return false }
+
+func (textFormatter) writeRecord(outputRecord) error {
+	return fmt.Errorf("text output does not accept structured records")
+}
+
+type jsonLinesFormatter struct{}
+
+func (jsonLinesFormatter) structured() bool { return true }
+
+func (jsonLinesFormatter) writeRecord(record outputRecord) error {
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(record)
+}
+
+var outputFormatters = map[string]outputFormatter{
+	"text":  textFormatter{},
+	"jsonl": jsonLinesFormatter{},
+}
+
+func outputFormatNames() []string {
+	names := make([]string, 0, len(outputFormatters))
+	for name := range outputFormatters {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func validateOutputFormat() error {
+	if _, ok := outputFormatters[outputMode]; !ok {
+		return fmt.Errorf("invalid --output %q: expected %s", outputMode, strings.Join(outputFormatNames(), " or "))
+	}
+	return nil
+}
+
+func selectedFormatter() outputFormatter {
+	if formatter, ok := outputFormatters[outputMode]; ok {
+		return formatter
+	}
+	// Cobra reports an invalid format before a command runs. Keep its error in
+	// plain text rather than silently selecting a structured format.
+	return outputFormatters["text"]
+}
+
 func scanResultData(result migration.OperatorScanResult) scanResultRecord {
 	data := scanResultRecord{
 		Namespace: result.SubscriptionNamespace,
@@ -81,12 +139,10 @@ func scanResultsData(results []migration.OperatorScanResult) []scanResultRecord 
 	return data
 }
 
-func jsonOutput() bool { return outputMode == "jsonl" }
+func structuredOutput() bool { return selectedFormatter().structured() }
 
 func writeOutputRecord(record outputRecord) error {
-	encoder := json.NewEncoder(os.Stdout)
-	encoder.SetEscapeHTML(false)
-	return encoder.Encode(record)
+	return selectedFormatter().writeRecord(record)
 }
 
 func progressFunc(event migration.ProgressEvent) {
@@ -100,7 +156,7 @@ func progressFuncFor(command, target string) migration.ProgressFunc {
 func progressFuncWithContext(event migration.ProgressEvent, command, target string) {
 	progressMu.Lock()
 	defer progressMu.Unlock()
-	if jsonOutput() {
+	if structuredOutput() {
 		record := outputRecord{Type: "progress", Command: command, Target: target, Step: event.Step, Status: event.Status, Message: event.Message}
 		if event.Err != nil {
 			record.Error = event.Err.Error()
@@ -148,7 +204,7 @@ func startProgress() {
 func clearProgress() {
 	progressMu.Lock()
 	progressRunning = false
-	if jsonOutput() {
+	if structuredOutput() {
 		progressMsg = ""
 		progressMu.Unlock()
 		return

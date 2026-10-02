@@ -51,7 +51,7 @@ func runCheck(cmd *cobra.Command, args []string) error { //nolint:nestif
 	ctx := cmd.Context()
 
 	if checkAll {
-		if !jsonOutput() {
+		if !structuredOutput() {
 			fmt.Printf("\n%s%s🔎 Scanning all Subscriptions...%s\n", colorBold, colorCyan, colorReset)
 		}
 		startProgress()
@@ -60,7 +60,7 @@ func runCheck(cmd *cobra.Command, args []string) error { //nolint:nestif
 		if err != nil {
 			return fmt.Errorf("scan failed: %w", err)
 		}
-		if jsonOutput() {
+		if structuredOutput() {
 			return writeOutputRecord(outputRecord{Type: "scan", Command: "check", Data: scanResultsData(results)})
 		}
 		migration.PrintScanSummary(results, func(format string, a ...interface{}) {
@@ -74,7 +74,7 @@ func runCheck(cmd *cobra.Command, args []string) error { //nolint:nestif
 		return fmt.Errorf("-n/--namespace is required")
 	}
 
-	if !jsonOutput() {
+	if !structuredOutput() {
 		fmt.Printf("\n%s%s🔍 Pre-migration checks for %s/%s%s\n", colorBold, colorCyan, checkSubscriptionNamespace, operatorName, colorReset)
 	}
 
@@ -89,7 +89,7 @@ func runCheck(cmd *cobra.Command, args []string) error { //nolint:nestif
 	if err != nil {
 		return fmt.Errorf("pre-migration check failed: %w", err)
 	}
-	if jsonOutput() {
+	if structuredOutput() {
 		return writeOutputRecord(outputRecord{Type: "check", Command: "check", Target: checkSubscriptionNamespace + "/" + operatorName, Data: scanResultData(*result)})
 	}
 	sectionHeader("Readiness, Compatibility and Catalog Checks")

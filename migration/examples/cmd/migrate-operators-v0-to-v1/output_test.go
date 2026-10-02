@@ -11,6 +11,49 @@ import (
 	"github.com/operator-framework/library-olm/migration/pkg/migration"
 )
 
+type recordingFormatter struct {
+	records []outputRecord
+}
+
+func (*recordingFormatter) structured() bool { return true }
+
+func (f *recordingFormatter) writeRecord(record outputRecord) error {
+	f.records = append(f.records, record)
+	return nil
+}
+
+func TestOutputFormatterRegistration(t *testing.T) {
+	formatter := &recordingFormatter{}
+	oldMode := outputMode
+	outputFormatters["test"] = formatter
+	outputMode = "test"
+	t.Cleanup(func() {
+		outputMode = oldMode
+		delete(outputFormatters, "test")
+	})
+
+	if err := validateOutputFormat(); err != nil || !structuredOutput() {
+		t.Fatalf("registered format was not selected: %v", err)
+	}
+	progressFuncFor("convert", "operators/widget")(migration.ProgressEvent{
+		Step: migration.ProgressStepProfile, Status: migration.ProgressStarted, Message: "Profiling operator",
+	})
+	if err := writeOutputRecord(outputRecord{Type: "result", Command: "convert", Target: "operators/widget"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(formatter.records) != 2 || formatter.records[0].Type != "progress" || formatter.records[1].Type != "result" {
+		t.Fatalf("registered formatter received %#v", formatter.records)
+	}
+
+	outputMode = "unsupported"
+	if err := validateOutputFormat(); err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("invalid format validation = %v", err)
+	}
+	if structuredOutput() {
+		t.Fatal("invalid output mode should use plain-text error reporting")
+	}
+}
+
 func TestProgressFuncRendersStructuredEvents(t *testing.T) {
 	reader, writer, err := os.Pipe()
 	if err != nil {
