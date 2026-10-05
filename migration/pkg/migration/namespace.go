@@ -18,7 +18,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const sccPodSecurityLabelSync = "security.openshift.io/scc.podSecurityLabelSync"
+const (
+	sccPodSecurityLabelSync               = "security.openshift.io/scc.podSecurityLabelSync"
+	systemManagedNamespaceOwnerAnnotation = "olm.operatorframework.io/migration-system-managed-namespace-owner"
+)
 
 // sourceDeploymentReplica records a live source Deployment's desired scale for
 // restoration if target creation cannot complete.
@@ -49,6 +52,9 @@ func (m *Migrator) PrepareInstallNamespace(ctx context.Context, opts Options) er
 		target = corev1.Namespace{}
 		target.Name = opts.InstallNamespace
 		target.Labels = labels
+		if opts.SystemManagedInstallNamespace {
+			target.Annotations = map[string]string{systemManagedNamespaceOwnerAnnotation: systemManagedNamespaceOwner(opts)}
+		}
 		if err := m.Client.Create(ctx, &target); err != nil {
 			return fmt.Errorf("create install namespace %q: %w", opts.InstallNamespace, err)
 		}
@@ -59,7 +65,10 @@ func (m *Migrator) PrepareInstallNamespace(ctx context.Context, opts Options) er
 		return fmt.Errorf("get install namespace %q: %w", opts.InstallNamespace, err)
 	}
 	if opts.SystemManagedInstallNamespace {
-		return fmt.Errorf("system-managed install namespace %q already exists; refusing to adopt it", opts.InstallNamespace)
+		if target.Annotations[systemManagedNamespaceOwnerAnnotation] == systemManagedNamespaceOwner(opts) {
+			return nil
+		}
+		return fmt.Errorf("system-managed install namespace %q already exists and is not owned by this migration; refusing to adopt it", opts.InstallNamespace)
 	}
 	if unsafePSAEnforcement(target.Labels, labels) {
 		return fmt.Errorf("source namespace PSA enforcement may weaken existing target namespace %q; choose a target with an explicit equal or weaker enforcement label", opts.InstallNamespace)
@@ -82,6 +91,10 @@ func (m *Migrator) PrepareInstallNamespace(ctx context.Context, opts Options) er
 		m.progress(fmt.Sprintf("Copied PSA/SCC labels to existing install namespace %s", opts.InstallNamespace))
 	}
 	return nil
+}
+
+func systemManagedNamespaceOwner(opts Options) string {
+	return opts.SubscriptionNamespace + "/" + opts.SubscriptionName
 }
 
 // securityNamespaceLabels returns the source labels that affect workload
