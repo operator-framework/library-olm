@@ -270,6 +270,12 @@ This handles the common case where Red Hat's default catalogs (e.g. `redhat-oper
 1. **Existing ClusterCatalog, image matches** (by name or by image scan) → adopt it; report as already covered.
 2. **No match** → create a new ClusterCatalog (per the naming strategy below) and wait for `Serving=True`.
 
+When more than one existing `ClusterCatalog` has the same matching image, selection is
+deterministic: prefer the catalog with the name selected by the naming strategy; otherwise
+use the lexicographically first matching name. If the selected name already belongs to a
+`ClusterCatalog` with a different image and no image match exists, report that CatalogSource
+as an error and leave both objects unchanged.
+
 **Migration annotation:** When a ClusterCatalog is first created or first adopted by this
 tool, set `olm.operatorframework.io/migrated-from-catalogsource: <namespace>/<name>` where
 `<namespace>/<name>` is the CatalogSource being processed. The annotation is written **once
@@ -280,7 +286,9 @@ the same ClusterCatalog.
 
 The `CatalogSource` is **left in place** by default — it is deleted only when
 `--delete-catalogsource` is passed **and** no remaining `Subscription` references it.
-Both conditions must be met.
+Both conditions must be met. This is evaluated for every consolidated source, not just the
+first source that created or adopted a shared `ClusterCatalog`. A dry-run reports whether an
+unreferenced source would be deleted without changing it.
 
 | CatalogSource field | ClusterCatalog target | Notes |
 |---|---|---|

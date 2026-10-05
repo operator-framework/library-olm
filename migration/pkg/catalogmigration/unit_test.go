@@ -261,3 +261,138 @@ func TestMigrateCatalogsSkipsUnsupportedSourcesWithoutMutation(t *testing.T) {
 		t.Fatalf("unsupported CatalogSources created ClusterCatalogs: %#v", catalogs.Items)
 	}
 }
+
+func TestMigrateCatalogsReportsNameCollisionWithoutMutation(t *testing.T) {
+	scheme := catalogMigrationScheme(t)
+	source := imageCatalogSource("catalog", "tenant", "registry.example/new:1")
+	existing := &ocv1.ClusterCatalog{
+		ObjectMeta: metav1.ObjectMeta{Name: "catalog"},
+		Spec:       ocv1.ClusterCatalogSpec{Source: ocv1.CatalogSource{Image: &ocv1.ImageSource{Ref: "registry.example/old:1"}}},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(source, existing).Build()
+
+	results, err := NewCatalogMigrator(c).MigrateCatalogs(context.Background(), CatalogMigratorOptions{})
+	if err != nil || len(results) != 1 {
+		t.Fatalf("MigrateCatalogs() = %#v, %v", results, err)
+	}
+	if results[0].Status != "error" || results[0].ClusterCatalogName != "catalog" {
+		t.Fatalf("collision result = %#v", results[0])
+	}
+
+	var gotSource operatorsv1alpha1.CatalogSource
+	if err := c.Get(context.Background(), client.ObjectKey{Name: source.Name, Namespace: source.Namespace}, &gotSource); err != nil {
+		t.Fatalf("get CatalogSource after collision: %v", err)
+	}
+	var gotCatalog ocv1.ClusterCatalog
+	if err := c.Get(context.Background(), client.ObjectKey{Name: existing.Name}, &gotCatalog); err != nil {
+		t.Fatalf("get ClusterCatalog after collision: %v", err)
+	}
+	if gotCatalog.Spec.Source.Image.Ref != "registry.example/old:1" {
+		t.Fatalf("existing ClusterCatalog image = %q, want unchanged", gotCatalog.Spec.Source.Image.Ref)
+	}
+}
+
+func TestMigrateCatalogsDeletesEveryUnreferencedConsolidatedSource(t *testing.T) {
+	scheme := catalogMigrationScheme(t)
+	first := imageCatalogSource("shared", "one", "registry.example/shared:1")
+	second := imageCatalogSource("shared", "two", "registry.example/shared:1")
+	existing := &ocv1.ClusterCatalog{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared"},
+		Spec:       ocv1.ClusterCatalogSpec{Source: ocv1.CatalogSource{Image: &ocv1.ImageSource{Ref: "registry.example/shared:1"}}},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(first, second, existing).Build()
+
+	results, err := NewCatalogMigrator(c).MigrateCatalogs(context.Background(), CatalogMigratorOptions{DeleteCatalogSource: true})
+	if err != nil || len(results) != 2 {
+		t.Fatalf("MigrateCatalogs() = %#v, %v", results, err)
+	}
+	for _, result := range results {
+		if result.Status != "adopted" || !containsNote(result.Notes, "deleted unreferenced CatalogSource") {
+			t.Fatalf("consolidated source result = %#v", result)
+		}
+	}
+	for _, source := range []*operatorsv1alpha1.CatalogSource{first, second} {
+		var got operatorsv1alpha1.CatalogSource
+		if err := c.Get(context.Background(), client.ObjectKey{Name: source.Name, Namespace: source.Namespace}, &got); err == nil {
+			t.Fatalf("CatalogSource %s/%s was not deleted", source.Namespace, source.Name)
+		}
+	}
+}
+
+func TestMigrateCatalogsRetainsReferencedSource(t *testing.T) {
+	scheme := catalogMigrationScheme(t)
+	source := imageCatalogSource("catalog", "tenant", "registry.example/catalog:1")
+	existing := &ocv1.ClusterCatalog{
+		ObjectMeta: metav1.ObjectMeta{Name: "catalog"},
+		Spec:       ocv1.ClusterCatalogSpec{Source: ocv1.CatalogSource{Image: &ocv1.ImageSource{Ref: source.Spec.Image}}},
+	}
+	referenced := &operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: "operator", Namespace: "workload"}, Spec: &operatorsv1alpha1.SubscriptionSpec{CatalogSource: source.Name, CatalogSourceNamespace: source.Namespace}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(source, existing, referenced).Build()
+
+	results, err := NewCatalogMigrator(c).MigrateCatalogs(context.Background(), CatalogMigratorOptions{DeleteCatalogSource: true})
+	if err != nil || len(results) != 1 || !containsNote(results[0].Notes, "CatalogSource retained") {
+		t.Fatalf("referenced result = %#v, %v", results, err)
+	}
+	var retained operatorsv1alpha1.CatalogSource
+	if err := c.Get(context.Background(), client.ObjectKey{Name: source.Name, Namespace: source.Namespace}, &retained); err != nil {
+		t.Fatalf("referenced CatalogSource was deleted: %v", err)
+	}
+}
+
+func TestMigrateCatalogsDryRunReportsUnreferencedSourceDeletion(t *testing.T) {
+	scheme := catalogMigrationScheme(t)
+	source := imageCatalogSource("catalog", "tenant", "registry.example/catalog:1")
+	existing := &ocv1.ClusterCatalog{
+		ObjectMeta: metav1.ObjectMeta{Name: "catalog"},
+		Spec:       ocv1.ClusterCatalogSpec{Source: ocv1.CatalogSource{Image: &ocv1.ImageSource{Ref: source.Spec.Image}}},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(source, existing).Build()
+
+	results, err := NewCatalogMigrator(c).MigrateCatalogs(context.Background(), CatalogMigratorOptions{DryRun: true, DeleteCatalogSource: true})
+	if err != nil || len(results) != 1 || !containsNote(results[0].Notes, "would delete unreferenced CatalogSource") {
+		t.Fatalf("dry-run result = %#v, %v", results, err)
+	}
+	var retained operatorsv1alpha1.CatalogSource
+	if err := c.Get(context.Background(), client.ObjectKey{Name: source.Name, Namespace: source.Namespace}, &retained); err != nil {
+		t.Fatalf("dry-run deleted CatalogSource: %v", err)
+	}
+}
+
+func TestResolveExistingClusterCatalogPrefersExpectedName(t *testing.T) {
+	first := &ocv1.ClusterCatalog{ObjectMeta: metav1.ObjectMeta{Name: "a"}}
+	preferred := &ocv1.ClusterCatalog{ObjectMeta: metav1.ObjectMeta{Name: "catalog"}}
+	if got := resolveExistingClusterCatalog([]*ocv1.ClusterCatalog{first, preferred}, "catalog"); got != preferred {
+		t.Fatalf("resolved catalog = %s, want %s", got.Name, preferred.Name)
+	}
+	if got := resolveExistingClusterCatalog([]*ocv1.ClusterCatalog{preferred, first}, "other"); got != first {
+		t.Fatalf("fallback catalog = %s, want lexicographically first", got.Name)
+	}
+}
+
+func catalogMigrationScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := operatorsv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := ocv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	return scheme
+}
+
+func imageCatalogSource(name, namespace, ref string) *operatorsv1alpha1.CatalogSource {
+	return &operatorsv1alpha1.CatalogSource{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec:       operatorsv1alpha1.CatalogSourceSpec{SourceType: operatorsv1alpha1.SourceTypeGrpc, Image: ref},
+	}
+}
+
+func containsNote(notes []string, want string) bool {
+	for _, note := range notes {
+		if note == want || strings.HasPrefix(note, want) {
+			return true
+		}
+	}
+	return false
+}

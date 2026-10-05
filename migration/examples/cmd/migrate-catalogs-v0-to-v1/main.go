@@ -170,6 +170,7 @@ func reportCatalogText(results []catalogmigration.CatalogMigrationResult) error 
 			fmt.Printf("  %-40s → %s\n    %s\n",
 				r.CatalogSourceNamespace+"/"+r.CatalogSourceName,
 				r.ClusterCatalogName, r.Reason)
+			fmt.Print(formatResultNotes(r.Notes))
 		}
 	}
 
@@ -178,6 +179,7 @@ func reportCatalogText(results []catalogmigration.CatalogMigrationResult) error 
 		for _, r := range created {
 			fmt.Printf("  ✓ %s/%s → ClusterCatalog/%s\n",
 				r.CatalogSourceNamespace, r.CatalogSourceName, r.ClusterCatalogName)
+			fmt.Print(formatResultNotes(r.Notes))
 		}
 	}
 
@@ -186,6 +188,7 @@ func reportCatalogText(results []catalogmigration.CatalogMigrationResult) error 
 		for _, r := range adopted {
 			fmt.Printf("  ✓ %s/%s → ClusterCatalog/%s\n",
 				r.CatalogSourceNamespace, r.CatalogSourceName, r.ClusterCatalogName)
+			fmt.Print(formatResultNotes(r.Notes))
 		}
 	}
 
@@ -194,6 +197,7 @@ func reportCatalogText(results []catalogmigration.CatalogMigrationResult) error 
 		for _, r := range skipped {
 			fmt.Printf("  - %s/%s: %s\n",
 				r.CatalogSourceNamespace, r.CatalogSourceName, r.Reason)
+			fmt.Print(formatResultNotes(r.Notes))
 		}
 	}
 
@@ -202,6 +206,7 @@ func reportCatalogText(results []catalogmigration.CatalogMigrationResult) error 
 		for _, r := range errored {
 			fmt.Printf("  ✗ %s/%s: %s\n",
 				r.CatalogSourceNamespace, r.CatalogSourceName, r.Reason)
+			fmt.Print(formatResultNotes(r.Notes))
 		}
 		return fmt.Errorf("%d catalog source(s) failed to migrate", len(errored))
 	}
@@ -216,4 +221,15 @@ func reportCatalogText(results []catalogmigration.CatalogMigrationResult) error 
 	}
 
 	return nil
+}
+
+func formatResultNotes(notes []string) string {
+	if len(notes) == 0 {
+		return ""
+	}
+	var output strings.Builder
+	for _, note := range notes {
+		fmt.Fprintf(&output, "    note: %s\n", note)
+	}
+	return output.String()
 }
