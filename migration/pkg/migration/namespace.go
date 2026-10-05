@@ -58,6 +58,9 @@ func (m *Migrator) PrepareInstallNamespace(ctx context.Context, opts Options) er
 	if err != nil {
 		return fmt.Errorf("get install namespace %q: %w", opts.InstallNamespace, err)
 	}
+	if opts.SystemManagedInstallNamespace {
+		return fmt.Errorf("system-managed install namespace %q already exists; refusing to adopt it", opts.InstallNamespace)
+	}
 	if unsafePSAEnforcement(target.Labels, labels) {
 		return fmt.Errorf("source namespace PSA enforcement may weaken existing target namespace %q; choose a target with an explicit equal or weaker enforcement label", opts.InstallNamespace)
 	}
