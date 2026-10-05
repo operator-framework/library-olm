@@ -83,6 +83,14 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("failed to get bundle info: %w", err)
 	}
+	resourceOpts := opts
+	resourceOpts.InstallNamespace, err = opts.EffectiveInstallNamespace(info.PackageName, csv.GetAnnotations())
+	if err != nil {
+		return err
+	}
+	if err := validateSystemManagedInstallNamespace(resourceOpts); err != nil {
+		return err
+	}
 
 	readiness, err := m.CheckReadiness(ctx, opts)
 	if err != nil {
@@ -113,11 +121,6 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
-	resourceOpts := opts
-	resourceOpts.InstallNamespace, err = opts.EffectiveInstallNamespace(info.PackageName, csv.GetAnnotations())
-	if err != nil {
-		return err
-	}
 	objects, err := m.CollectResources(ctx, opts, csv, ip, info.PackageName)
 	if err != nil {
 		return fmt.Errorf("failed to collect resources: %w", err)
@@ -137,7 +140,7 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	if err := m.PrepareInstallNamespace(ctx, resourceOpts); err != nil {
 		return err
 	}
-	if shouldIncludeSystemManagedNamespace(opts, resourceOpts.InstallNamespace) {
+	if opts.SystemManagedInstallNamespace {
 		if err := m.IncludeSystemManagedNamespace(ctx, info, resourceOpts.InstallNamespace); err != nil {
 			return err
 		}

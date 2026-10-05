@@ -183,6 +183,9 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	if err != nil {
 		return err
 	}
+	if opts.SystemManagedInstallNamespace && resourceOpts.InstallNamespace == opts.SubscriptionNamespace {
+		return fmt.Errorf("system-managed install namespace resolves to source namespace %q; use standard migration without --system-managed-install-namespace", opts.SubscriptionNamespace)
+	}
 
 	stepHeader(2, "Checking readiness and compatibility")
 	sectionHeader("Readiness")
@@ -249,7 +252,7 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	if err := m.PrepareInstallNamespace(ctx, resourceOpts); err != nil {
 		return fmt.Errorf("install namespace preparation failed: %w", err)
 	}
-	if opts.SystemManagedInstallNamespace && resourceOpts.InstallNamespace != opts.SubscriptionNamespace {
+	if opts.SystemManagedInstallNamespace {
 		if err := m.IncludeSystemManagedNamespace(ctx, bundleInfo, resourceOpts.InstallNamespace); err != nil {
 			return fmt.Errorf("include system-managed Namespace in migration revision: %w", err)
 		}
@@ -360,7 +363,7 @@ func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.
 	}
 	success(fmt.Sprintf("ClusterObjectSet API established; using operator-controller namespace %s", opts.SystemNamespace))
 
-	_, _, readiness, compatibility, err := m.EnsurePrerequisites(ctx, opts)
+	csv, _, readiness, compatibility, err := m.EnsurePrerequisites(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("pre-migration checks failed: %w", err)
 	}
@@ -369,10 +372,19 @@ func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.
 	if !readiness.Passed() || !compatibility.Passed() {
 		return fmt.Errorf("operator is not eligible for migration (%d checks failed)", len(readiness.FailedChecks())+len(compatibility.FailedChecks()))
 	}
-
 	info, err := m.GatherMigrationInfo(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("failed to gather migration info: %w", err)
+	}
+	resourceOpts := opts
+	if opts.SystemManagedInstallNamespace {
+		resourceOpts.InstallNamespace, err = opts.EffectiveInstallNamespace(info.PackageName, csv.GetAnnotations())
+		if err != nil {
+			return err
+		}
+		if resourceOpts.InstallNamespace == opts.SubscriptionNamespace {
+			return fmt.Errorf("system-managed install namespace resolves to source namespace %q; use standard migration without --system-managed-install-namespace", opts.SubscriptionNamespace)
+		}
 	}
 	catalogName, err := m.ResolveClusterCatalog(ctx, info, m.RESTConfig)
 	if err != nil {
@@ -380,18 +392,6 @@ func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.
 	}
 	info.ResolvedCatalogName = catalogName
 	success(fmt.Sprintf("Selected ClusterCatalog: %s", catalogName))
-
-	resourceOpts := opts
-	if opts.SystemManagedInstallNamespace {
-		_, csv, _, getErr := m.GetCSVAndInstallPlan(ctx, opts)
-		if getErr != nil {
-			return fmt.Errorf("failed to profile operator for system-managed namespace: %w", getErr)
-		}
-		resourceOpts.InstallNamespace, getErr = opts.EffectiveInstallNamespace(info.PackageName, csv.GetAnnotations())
-		if getErr != nil {
-			return getErr
-		}
-	}
 
 	success(fmt.Sprintf("Package: %s  Version: %s  Channel: %s", info.PackageName, info.Version, valueOrDefault(info.Channel, "(default)")))
 	fmt.Printf("\n  Resources that would be created:\n")

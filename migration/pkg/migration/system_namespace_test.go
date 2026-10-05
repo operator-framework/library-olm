@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	ocv1 "github.com/operator-framework/operator-controller/api/v1"
 )
 
@@ -154,22 +155,42 @@ func TestIncludeSystemManagedNamespace(t *testing.T) {
 	}
 }
 
-func TestShouldIncludeSystemManagedNamespace(t *testing.T) {
-	for _, tt := range []struct {
-		name      string
-		opts      Options
-		installNS string
-		want      bool
-	}{
-		{name: "different target", opts: Options{SystemManagedInstallNamespace: true, SubscriptionNamespace: "operators"}, installNS: "widgets", want: true},
-		{name: "source namespace", opts: Options{SystemManagedInstallNamespace: true, SubscriptionNamespace: "operators"}, installNS: "operators"},
-		{name: "explicit namespace mode", opts: Options{SubscriptionNamespace: "operators"}, installNS: "widgets"},
+func TestMigrateRejectsSystemManagedSourceNamespaceWithoutMutation(t *testing.T) {
+	ctx := context.Background()
+	sub, csv := healthySubscriptionFixtures()
+	sub.Spec.CatalogSource = "catalog"
+	sub.Spec.CatalogSourceNamespace = "catalogs"
+	csv.Annotations = map[string]string{suggestedNamespaceAnnotation: sub.Namespace}
+	catalog := &operatorsv1alpha1.CatalogSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "catalog", Namespace: "catalogs"},
+		Spec: operatorsv1alpha1.CatalogSourceSpec{
+			SourceType: operatorsv1alpha1.SourceTypeGrpc,
+			Image:      "registry.example/catalog:latest",
+		},
+	}
+	m := migrationTestClient(t, sub, csv, catalog)
+	err := m.Migrate(ctx, Options{
+		SubscriptionName:              sub.Name,
+		SubscriptionNamespace:         sub.Namespace,
+		SystemManagedInstallNamespace: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "resolves to source namespace") {
+		t.Fatalf("Migrate() error = %v, want source-namespace rejection", err)
+	}
+	for _, object := range []client.Object{
+		&operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: sub.Name, Namespace: sub.Namespace}},
+		&operatorsv1alpha1.ClusterServiceVersion{ObjectMeta: metav1.ObjectMeta{Name: csv.Name, Namespace: csv.Namespace}},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := shouldIncludeSystemManagedNamespace(tt.opts, tt.installNS); got != tt.want {
-				t.Fatalf("shouldIncludeSystemManagedNamespace() = %t, want %t", got, tt.want)
-			}
-		})
+		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(object), object); err != nil {
+			t.Fatalf("rejected migration modified source %T: %v", object, err)
+		}
+	}
+	var extensions ocv1.ClusterExtensionList
+	if err := m.Client.List(ctx, &extensions); err != nil {
+		t.Fatal(err)
+	}
+	if len(extensions.Items) != 0 {
+		t.Fatalf("rejected migration created ClusterExtensions: %#v", extensions.Items)
 	}
 }
 

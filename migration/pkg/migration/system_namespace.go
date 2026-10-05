@@ -44,8 +44,11 @@ func (m *Migrator) IncludeSystemManagedNamespace(ctx context.Context, info *Migr
 	return nil
 }
 
-func shouldIncludeSystemManagedNamespace(opts Options, installNamespace string) bool {
-	return opts.SystemManagedInstallNamespace && installNamespace != opts.SubscriptionNamespace
+func validateSystemManagedInstallNamespace(opts Options) error {
+	if opts.SystemManagedInstallNamespace && opts.InstallNamespace == opts.SubscriptionNamespace {
+		return fmt.Errorf("system-managed install namespace resolves to source namespace %q; use standard migration without --system-managed-install-namespace", opts.SubscriptionNamespace)
+	}
+	return nil
 }
 
 // EffectiveInstallNamespace returns the namespace into which migration's COS

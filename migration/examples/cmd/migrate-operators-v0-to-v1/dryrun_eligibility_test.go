@@ -70,3 +70,85 @@ func TestDryRunRejectsIncompatibleInputs(t *testing.T) {
 		})
 	}
 }
+
+func TestDryRunRejectsSystemManagedSourceNamespace(t *testing.T) {
+	scheme := runtime.NewScheme()
+	for _, register := range []func(*runtime.Scheme) error{corev1.AddToScheme, operatorsv1.AddToScheme, operatorsv1alpha1.AddToScheme, ocv1.AddToScheme, apiextensionsv1.AddToScheme} {
+		if err := register(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sub := &operatorsv1alpha1.Subscription{
+		ObjectMeta: metav1.ObjectMeta{Name: "widgets", Namespace: "operators"},
+		Spec: &operatorsv1alpha1.SubscriptionSpec{
+			Package:                "widgets",
+			CatalogSource:          "catalog",
+			CatalogSourceNamespace: "catalogs",
+		},
+		Status: operatorsv1alpha1.SubscriptionStatus{InstalledCSV: "widgets.v1", State: operatorsv1alpha1.SubscriptionStateAtLatest},
+	}
+	csv := &operatorsv1alpha1.ClusterServiceVersion{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "widgets.v1",
+			Namespace:   sub.Namespace,
+			Annotations: map[string]string{"operatorframework.io/suggested-namespace": sub.Namespace},
+		},
+		Status: operatorsv1alpha1.ClusterServiceVersionStatus{Phase: operatorsv1alpha1.CSVPhaseSucceeded, Reason: operatorsv1alpha1.CSVReasonInstallSuccessful},
+	}
+	catalog := &operatorsv1alpha1.CatalogSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "catalog", Namespace: "catalogs"},
+		Spec: operatorsv1alpha1.CatalogSourceSpec{
+			SourceType: operatorsv1alpha1.SourceTypeGrpc,
+			Image:      "registry.example/catalog:latest",
+		},
+	}
+	operatorGroup := &operatorsv1.OperatorGroup{ObjectMeta: metav1.ObjectMeta{Name: "operators", Namespace: sub.Namespace}}
+	cosCRD := &apiextensionsv1.CustomResourceDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "clusterobjectsets.olm.operatorframework.io"},
+		Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{
+			Type:   apiextensionsv1.Established,
+			Status: apiextensionsv1.ConditionTrue,
+		}}},
+	}
+	ceCRD := &apiextensionsv1.CustomResourceDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "clusterextensions.olm.operatorframework.io"},
+		Spec: apiextensionsv1.CustomResourceDefinitionSpec{Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{
+			Name:    "v1",
+			Served:  true,
+			Storage: true,
+			Schema: &apiextensionsv1.CustomResourceValidation{OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
+				Properties: map[string]apiextensionsv1.JSONSchemaProps{"spec": {
+					Type: "object",
+					Properties: map[string]apiextensionsv1.JSONSchemaProps{
+						"namespace": {Type: "string"},
+					},
+				}},
+			}},
+		}}},
+		Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{
+			Type:   apiextensionsv1.Established,
+			Status: apiextensionsv1.ConditionTrue,
+		}}},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sub, csv, catalog, operatorGroup, cosCRD, ceCRD).Build()
+	m := migration.NewMigrator(c, nil)
+	cmd := &cobra.Command{}
+	cmd.SetContext(t.Context())
+	err := runConvertDryRun(cmd, m, migration.Options{
+		SubscriptionName:              sub.Name,
+		SubscriptionNamespace:         sub.Namespace,
+		SystemManagedInstallNamespace: true,
+		SystemNamespace:               "controller",
+	})
+	if err == nil || !strings.Contains(err.Error(), "resolves to source namespace") {
+		t.Fatalf("runConvertDryRun() error = %v, want source-namespace rejection", err)
+	}
+	for _, object := range []client.Object{
+		&operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: sub.Name, Namespace: sub.Namespace}},
+		&operatorsv1alpha1.ClusterServiceVersion{ObjectMeta: metav1.ObjectMeta{Name: csv.Name, Namespace: csv.Namespace}},
+	} {
+		if err := c.Get(t.Context(), client.ObjectKeyFromObject(object), object); err != nil {
+			t.Fatalf("rejected dry run modified source %T: %v", object, err)
+		}
+	}
+}
