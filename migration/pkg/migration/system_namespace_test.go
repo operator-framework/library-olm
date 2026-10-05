@@ -154,6 +154,25 @@ func TestIncludeSystemManagedNamespace(t *testing.T) {
 	}
 }
 
+func TestShouldIncludeSystemManagedNamespace(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		opts      Options
+		installNS string
+		want      bool
+	}{
+		{name: "different target", opts: Options{SystemManagedInstallNamespace: true, SubscriptionNamespace: "operators"}, installNS: "widgets", want: true},
+		{name: "source namespace", opts: Options{SystemManagedInstallNamespace: true, SubscriptionNamespace: "operators"}, installNS: "operators"},
+		{name: "explicit namespace mode", opts: Options{SubscriptionNamespace: "operators"}, installNS: "widgets"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldIncludeSystemManagedNamespace(tt.opts, tt.installNS); got != tt.want {
+				t.Fatalf("shouldIncludeSystemManagedNamespace() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSystemManagedClusterExtensionOmitsNamespace(t *testing.T) {
 	ctx := context.Background()
 	m := migrationTestClient(t)

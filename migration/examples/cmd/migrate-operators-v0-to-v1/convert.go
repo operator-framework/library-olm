@@ -249,7 +249,7 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	if err := m.PrepareInstallNamespace(ctx, resourceOpts); err != nil {
 		return fmt.Errorf("install namespace preparation failed: %w", err)
 	}
-	if opts.SystemManagedInstallNamespace {
+	if opts.SystemManagedInstallNamespace && resourceOpts.InstallNamespace != opts.SubscriptionNamespace {
 		if err := m.IncludeSystemManagedNamespace(ctx, bundleInfo, resourceOpts.InstallNamespace); err != nil {
 			return fmt.Errorf("include system-managed Namespace in migration revision: %w", err)
 		}

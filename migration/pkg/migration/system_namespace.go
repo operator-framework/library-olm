@@ -20,9 +20,9 @@ const (
 	maxNamespaceNameLength               = 63
 )
 
-// IncludeSystemManagedNamespace adds the prepared Namespace to the imported
-// revision. Without it, the controller's catalog revision sees an unowned
-// Namespace and cannot take it over with collision protection enabled.
+// IncludeSystemManagedNamespace adds a prepared target Namespace to the imported
+// revision. Without it, the controller's catalog revision sees the target
+// Namespace as unowned and cannot take it over with collision protection enabled.
 func (m *Migrator) IncludeSystemManagedNamespace(ctx context.Context, info *MigrationInfo, name string) error {
 	var namespace corev1.Namespace
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: name}, &namespace); err != nil {
@@ -42,6 +42,10 @@ func (m *Migrator) IncludeSystemManagedNamespace(ctx context.Context, info *Migr
 	}
 	info.CollectedObjects = append(info.CollectedObjects, obj)
 	return nil
+}
+
+func shouldIncludeSystemManagedNamespace(opts Options, installNamespace string) bool {
+	return opts.SystemManagedInstallNamespace && installNamespace != opts.SubscriptionNamespace
 }
 
 // EffectiveInstallNamespace returns the namespace into which migration's COS

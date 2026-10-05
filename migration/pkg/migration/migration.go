@@ -137,7 +137,7 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	if err := m.PrepareInstallNamespace(ctx, resourceOpts); err != nil {
 		return err
 	}
-	if opts.SystemManagedInstallNamespace {
+	if shouldIncludeSystemManagedNamespace(opts, resourceOpts.InstallNamespace) {
 		if err := m.IncludeSystemManagedNamespace(ctx, info, resourceOpts.InstallNamespace); err != nil {
 			return err
 		}
