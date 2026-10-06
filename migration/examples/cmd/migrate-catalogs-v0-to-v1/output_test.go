@@ -151,3 +151,43 @@ func TestCatalogOutputUsesRegisteredFormatter(t *testing.T) {
 		t.Fatalf("formatter records = %#v", formatter.records)
 	}
 }
+
+type catalogFailingProgressFormatter struct {
+	first, later error
+	writes       int
+}
+
+func (*catalogFailingProgressFormatter) Structured() bool { return true }
+func (f *catalogFailingProgressFormatter) WriteRecord(_ io.Writer, record clioutput.Record) error {
+	if record.Type != "progress" {
+		return nil
+	}
+	f.writes++
+	if f.writes == 1 {
+		return f.first
+	}
+	return f.later
+}
+
+func TestCatalogProgressWriteFailureWithNoResultsIsReturned(t *testing.T) {
+	first := errors.New("first progress write failed")
+	formatter := &catalogFailingProgressFormatter{first: first, later: errors.New("later progress write failed")}
+	oldMode, oldFormats := outputMode, outputFormats
+	outputFormats = clioutput.NewRegistry()
+	outputFormats.Register("failing", formatter)
+	outputMode = "failing"
+	t.Cleanup(func() {
+		outputMode, outputFormats = oldMode, oldFormats
+	})
+
+	output := selectedCatalogOutput()
+	for range 2 {
+		output.progress(migration.ProgressEvent{Step: migration.ProgressStepScan, Status: migration.ProgressStarted})
+	}
+	if err := output.results(nil); !errors.Is(err, first) {
+		t.Fatalf("empty catalog results error = %v, want first progress write failure", err)
+	}
+	if err := output.results([]catalogmigration.CatalogMigrationResult{{Status: statusError, Reason: "catalog failed"}}); err == nil || !strings.Contains(err.Error(), "catalog source(s) failed") {
+		t.Fatalf("catalog result failure was masked by progress write failure: %v", err)
+	}
+}

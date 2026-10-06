@@ -125,7 +125,8 @@ flag is set; CE carries the matching annotation.
 - Report non-image sources (configmap/internal/address) as not migratable.
 - Keep `MigrateCatalogs` result semantics while emitting typed progress, notes, and failures
   through the same callback used by operator migration. Share text/JSONL output utilities
-  across both CLIs and expose `--output` on the catalog CLI.
+  across both CLIs and expose `--output` on the catalog CLI. Treat structured progress-write
+  failures as command errors, including for an empty scan.
 
 **Depends on:** Phase 1. **Exit:** N CatalogSources → N serving ClusterCatalogs; operator scan
 then reports catalog-available.

@@ -31,6 +31,7 @@ var outputFormats = clioutput.NewRegistry()
 func selectedCatalogOutput() catalogOutput {
 	formatter := outputFormats.Select(outputMode)
 	pending := ""
+	var progressWriteErr error
 	output := catalogOutput{
 		start: func(dryRun bool) {
 			if dryRun {
@@ -50,10 +51,15 @@ func selectedCatalogOutput() catalogOutput {
 	if formatter.Structured() {
 		output.start = func(bool) {}
 		output.progress = func(event migration.ProgressEvent) {
-			_ = formatter.WriteRecord(os.Stdout, clioutput.ProgressRecord("migrate-catalogs", "", event))
+			if err := formatter.WriteRecord(os.Stdout, clioutput.ProgressRecord("migrate-catalogs", "", event)); err != nil && progressWriteErr == nil {
+				progressWriteErr = fmt.Errorf("write catalog progress: %w", err)
+			}
 		}
 		output.results = func(results []catalogmigration.CatalogMigrationResult) error {
-			return reportCatalogStructured(formatter, results)
+			if err := reportCatalogStructured(formatter, results); err != nil {
+				return err
+			}
+			return progressWriteErr
 		}
 		output.fatal = func(err error) {
 			_ = clioutput.WriteError(os.Stdout, os.Stderr, formatter, err)

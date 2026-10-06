@@ -68,6 +68,8 @@ Both CLIs accept `--output=text|jsonl` (default `text`). JSONL uses one record p
 for progress, per-target results, and terminal errors; catalog result data retains the
 per-source outcome, reason, and informational notes. Library callers can use the same
 progress callback and `migration/pkg/clioutput` rendering utilities.
+The catalog CLI must exit nonzero when a structured progress record cannot be written, even if no
+CatalogSources were found.
 
 **R1.3 — Four-state classification.** Every `Subscription` is `Eligible`, `Ineligible`,
 `AlreadyMigrated`, or `Conflict`, each with a specific human-readable reason.
