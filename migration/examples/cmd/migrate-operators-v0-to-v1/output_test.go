@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/operator-framework/library-olm/migration/pkg/clioutput"
 	"github.com/operator-framework/library-olm/migration/pkg/migration"
 )
 
@@ -15,9 +16,9 @@ type recordingFormatter struct {
 	records []outputRecord
 }
 
-func (*recordingFormatter) structured() bool { return true }
+func (*recordingFormatter) Structured() bool { return true }
 
-func (f *recordingFormatter) writeRecord(record outputRecord) error {
+func (f *recordingFormatter) WriteRecord(_ io.Writer, record outputRecord) error {
 	f.records = append(f.records, record)
 	return nil
 }
@@ -25,14 +26,16 @@ func (f *recordingFormatter) writeRecord(record outputRecord) error {
 func TestOutputFormatterRegistration(t *testing.T) {
 	formatter := &recordingFormatter{}
 	oldMode := outputMode
-	outputFormatters["test"] = formatter
+	oldFormats := outputFormats
+	outputFormats = clioutput.NewRegistry()
+	outputFormats.Register("test", formatter)
 	outputMode = "test"
 	t.Cleanup(func() {
 		outputMode = oldMode
-		delete(outputFormatters, "test")
+		outputFormats = oldFormats
 	})
 
-	if err := validateOutputFormat(); err != nil || !structuredOutput() {
+	if err := outputFormats.Validate(outputMode); err != nil || !structuredOutput() {
 		t.Fatalf("registered format was not selected: %v", err)
 	}
 	progressFuncFor("convert", "operators/widget")(migration.ProgressEvent{
@@ -46,7 +49,7 @@ func TestOutputFormatterRegistration(t *testing.T) {
 	}
 
 	outputMode = "unsupported"
-	if err := validateOutputFormat(); err == nil || !strings.Contains(err.Error(), "unsupported") {
+	if err := outputFormats.Validate(outputMode); err == nil || !strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("invalid format validation = %v", err)
 	}
 	if structuredOutput() {
@@ -57,11 +60,13 @@ func TestOutputFormatterRegistration(t *testing.T) {
 func TestCommandOutputUsesSelectedFormatter(t *testing.T) {
 	formatter := &recordingFormatter{}
 	oldMode := outputMode
-	outputFormatters["test"] = formatter
+	oldFormats := outputFormats
+	outputFormats = clioutput.NewRegistry()
+	outputFormats.Register("test", formatter)
 	outputMode = "test"
 	t.Cleanup(func() {
 		outputMode = oldMode
-		delete(outputFormatters, "test")
+		outputFormats = oldFormats
 	})
 
 	output := selectedCommandOutput()

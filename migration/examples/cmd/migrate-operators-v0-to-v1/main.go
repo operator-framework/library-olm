@@ -21,6 +21,8 @@ import (
 	operatorsv1 "github.com/operator-framework/api/pkg/operators/v1"
 	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	ocv1 "github.com/operator-framework/operator-controller/api/v1"
+
+	"github.com/operator-framework/library-olm/migration/pkg/clioutput"
 )
 
 var scheme = runtime.NewScheme()
@@ -37,7 +39,7 @@ func init() {
 
 var (
 	kubeconfig string
-	outputMode = "text"
+	outputMode = clioutput.Text
 )
 
 var rootCmd = &cobra.Command{
@@ -57,9 +59,9 @@ Subcommands:
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig file (default: KUBECONFIG env or ~/.kube/config)")
-	rootCmd.PersistentFlags().StringVar(&outputMode, "output", "text", "Output format: "+strings.Join(outputFormatNames(), " or ")+" (jsonl emits one JSON record per line)")
+	rootCmd.PersistentFlags().StringVar(&outputMode, "output", clioutput.Text, "Output format: "+strings.Join(outputFormats.Names(), " or ")+" (jsonl emits one JSON record per line)")
 	rootCmd.PersistentPreRunE = func(_ *cobra.Command, _ []string) error {
-		return validateOutputFormat()
+		return outputFormats.Validate(outputMode)
 	}
 	rootCmd.SilenceErrors = true
 

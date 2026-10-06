@@ -132,46 +132,50 @@ func selectedCommandOutput() commandOutput {
 			fmt.Println()
 			return nil
 		},
-		fatalError: func(err error) { _ = clioutput.WriteError(os.Stdout, os.Stderr, clioutput.Text, err) },
+		fatalError: func(err error) { _ = clioutput.WriteError(os.Stdout, os.Stderr, formatter, err) },
 	}
-	if formatter.structured() {
+	if formatter.Structured() {
 		output.scanStart = func(string) {}
 		output.scanResults = func(command string, results []migration.OperatorScanResult) error {
-			return formatter.writeRecord(outputRecord{Type: "scan", Command: command, Data: scanResultsData(results)})
+			return formatter.WriteRecord(os.Stdout, outputRecord{Type: "scan", Command: command, Data: scanResultsData(results)})
 		}
 		output.checkStart = func(string) {}
 		output.checkResult = func(command, target string, result migration.OperatorScanResult) error {
-			return formatter.writeRecord(outputRecord{Type: "check", Command: command, Target: target, Data: scanResultData(result)})
+			return formatter.WriteRecord(os.Stdout, outputRecord{Type: "check", Command: command, Target: target, Data: scanResultData(result)})
 		}
 		output.dryRunStart = func(string) {}
 		output.dryRunChecks = func(target string, result migration.OperatorScanResult) error {
 			if result.Status != migration.OperatorStatusEligible {
-				return formatter.writeRecord(outputRecord{Type: "check", Command: "convert", Target: target, Data: scanResultData(result)})
+				return formatter.WriteRecord(os.Stdout, outputRecord{Type: "check", Command: "convert", Target: target, Data: scanResultData(result)})
 			}
 			return nil
 		}
 		output.dryRunPreview = func(opts, resourceOpts migration.Options, info *migration.MigrationInfo) error {
-			return formatter.writeRecord(dryRunRecord(opts, resourceOpts, info))
+			return formatter.WriteRecord(os.Stdout, dryRunRecord(opts, resourceOpts, info))
 		}
-		output.dryRunDone = func(target string) error { return formatter.writeRecord(resultRecord("convert", target, nil)) }
+		output.dryRunDone = func(target string) error {
+			return formatter.WriteRecord(os.Stdout, resultRecord("convert", target, nil))
+		}
 		output.convertStart = func(string) {}
-		output.convertDone = func(target, _ string) error { return formatter.writeRecord(resultRecord("convert", target, nil)) }
+		output.convertDone = func(target, _ string) error {
+			return formatter.WriteRecord(os.Stdout, resultRecord("convert", target, nil))
+		}
 		output.noTargets = func(command, message string) error {
-			return formatter.writeRecord(outputRecord{Type: "result", Command: command, Status: migration.ProgressCompleted, Message: message})
+			return formatter.WriteRecord(os.Stdout, outputRecord{Type: "result", Command: command, Status: migration.ProgressCompleted, Message: message})
 		}
 		output.batchStart = func(string, int) {}
 		output.batchProcessing = func(string) {}
 		output.batchResult = func(command, target string, resultErr error) error {
-			return formatter.writeRecord(resultRecord(command, target, resultErr))
+			return formatter.WriteRecord(os.Stdout, resultRecord(command, target, resultErr))
 		}
 		output.singleStart = func(string, string) {}
 		output.singleResult = func(command, target string, resultErr error) error {
 			if resultErr == nil {
-				return formatter.writeRecord(resultRecord(command, target, nil))
+				return formatter.WriteRecord(os.Stdout, resultRecord(command, target, nil))
 			}
 			return nil // main emits the terminal error record
 		}
-		output.fatalError = func(err error) { _ = formatter.writeRecord(clioutput.ErrorRecord(err)) }
+		output.fatalError = func(err error) { _ = clioutput.WriteError(os.Stdout, os.Stderr, formatter, err) }
 	}
 	return output
 }

@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -68,8 +69,8 @@ func init() {
 	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print what would be created without modifying the cluster")
 	rootCmd.Flags().BoolVar(&deleteCatalogSource, "delete-catalogsource", false, "Delete source CatalogSource after migration (only when no Subscription references it)")
 	rootCmd.Flags().BoolVar(&acknowledgePriorityOverflow, "acknowledge-priority-overflow", false, "Cap out-of-range priority at MaxInt32/MinInt32 and proceed")
-	rootCmd.Flags().StringVar(&outputMode, "output", clioutput.Text, "Output format: "+clioutput.FormatNames())
-	rootCmd.PersistentPreRunE = func(_ *cobra.Command, _ []string) error { return clioutput.ValidateFormat(outputMode) }
+	rootCmd.Flags().StringVar(&outputMode, "output", clioutput.Text, "Output format: "+strings.Join(outputFormats.Names(), " or "))
+	rootCmd.PersistentPreRunE = func(_ *cobra.Command, _ []string) error { return outputFormats.Validate(outputMode) }
 	rootCmd.SilenceErrors = true
 	rootCmd.SilenceUsage = true
 }

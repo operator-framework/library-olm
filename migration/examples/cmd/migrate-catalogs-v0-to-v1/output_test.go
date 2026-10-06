@@ -106,14 +106,48 @@ func TestCatalogTextOutputKeepsSummaryAndProgress(t *testing.T) {
 
 func TestCatalogOutputFormatValidation(t *testing.T) {
 	for _, mode := range []string{clioutput.Text, clioutput.JSONL} {
-		if err := clioutput.ValidateFormat(mode); err != nil {
+		if err := outputFormats.Validate(mode); err != nil {
 			t.Errorf("valid format %q rejected: %v", mode, err)
 		}
 	}
-	if err := clioutput.ValidateFormat("json"); err == nil || !strings.Contains(err.Error(), "json") {
+	if err := outputFormats.Validate("json"); err == nil || !strings.Contains(err.Error(), "json") {
 		t.Fatalf("invalid format error = %v", err)
 	}
-	if err := clioutput.WriteError(io.Discard, io.Discard, clioutput.Text, errors.New("failure")); err != nil {
+	if err := clioutput.WriteError(io.Discard, io.Discard, outputFormats.Select(clioutput.Text), errors.New("failure")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+type catalogRecordingFormatter struct{ records []clioutput.Record }
+
+func (*catalogRecordingFormatter) Structured() bool { return true }
+func (f *catalogRecordingFormatter) WriteRecord(_ io.Writer, record clioutput.Record) error {
+	f.records = append(f.records, record)
+	return nil
+}
+
+func TestCatalogOutputUsesRegisteredFormatter(t *testing.T) {
+	formatter := &catalogRecordingFormatter{}
+	oldMode := outputMode
+	oldFormats := outputFormats
+	outputFormats = clioutput.NewRegistry()
+	outputFormats.Register("test", formatter)
+	outputMode = "test"
+	t.Cleanup(func() {
+		outputMode = oldMode
+		outputFormats = oldFormats
+	})
+	if err := outputFormats.Validate(outputMode); err != nil {
+		t.Fatal(err)
+	}
+	output := selectedCatalogOutput()
+	output.start(true)
+	output.progress(migration.ProgressEvent{Step: migration.ProgressStepScan, Status: migration.ProgressStarted, Message: "scanning"})
+	if err := output.results([]catalogmigration.CatalogMigrationResult{{CatalogSourceNamespace: "ns", CatalogSourceName: "source", Status: statusDryRun, Reason: "would create"}}); err != nil {
+		t.Fatal(err)
+	}
+	output.fatal(errors.New("failed"))
+	if len(formatter.records) != 3 || formatter.records[0].Type != "progress" || formatter.records[1].Type != "result" || formatter.records[2].Type != "error" {
+		t.Fatalf("formatter records = %#v", formatter.records)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/operator-framework/library-olm/migration/pkg/migration"
@@ -38,12 +39,68 @@ type Record struct {
 	Data    any                      `json:"data,omitempty"`
 }
 
-// ValidateFormat accepts the text and JSON Lines CLI output modes.
-func ValidateFormat(mode string) error {
-	if mode != Text && mode != JSONL {
-		return fmt.Errorf("invalid --output %q: expected %s or %s", mode, JSONL, Text)
+// Formatter serializes structured records. Text presentation is handled by
+// each command; a text formatter therefore does not accept records.
+type Formatter interface {
+	Structured() bool
+	WriteRecord(io.Writer, Record) error
+}
+
+type textFormatter struct{}
+
+func (textFormatter) Structured() bool { return false }
+func (textFormatter) WriteRecord(io.Writer, Record) error {
+	return fmt.Errorf("text output does not accept structured records")
+}
+
+type jsonLinesFormatter struct{}
+
+func (jsonLinesFormatter) Structured() bool { return true }
+func (jsonLinesFormatter) WriteRecord(out io.Writer, record Record) error {
+	return WriteJSONLine(out, record)
+}
+
+// Registry holds available CLI formats. Both migration commands use registries
+// initialized here, so adding a built-in format supports both command flows.
+type Registry struct {
+	formats map[string]Formatter
+}
+
+// NewRegistry returns the built-in text and JSON Lines formats.
+func NewRegistry() *Registry {
+	return &Registry{formats: map[string]Formatter{Text: textFormatter{}, JSONL: jsonLinesFormatter{}}}
+}
+
+// Register adds or replaces a named formatter.
+func (r *Registry) Register(name string, formatter Formatter) {
+	r.formats[name] = formatter
+}
+
+// Names returns format names in stable order for CLI help and errors.
+func (r *Registry) Names() []string {
+	names := make([]string, 0, len(r.formats))
+	for name := range r.formats {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// Validate reports an unsupported output format.
+func (r *Registry) Validate(name string) error {
+	if _, ok := r.formats[name]; !ok {
+		return fmt.Errorf("invalid --output %q: expected %s", name, strings.Join(r.Names(), " or "))
 	}
 	return nil
+}
+
+// Select returns the named formatter, falling back to text for validation
+// errors so an invalid format never produces a misleading structured record.
+func (r *Registry) Select(name string) Formatter {
+	if formatter, ok := r.formats[name]; ok {
+		return formatter
+	}
+	return r.formats[Text]
 }
 
 // WriteJSONLine encodes one record without escaping HTML in messages.
@@ -122,14 +179,12 @@ func ClearTextProgress(out io.Writer, pending *string) {
 	*pending = ""
 }
 
-// WriteError writes a terminal error to stdout as JSONL or to stderr as text.
-func WriteError(out, errOut io.Writer, mode string, err error) error {
-	if mode == JSONL {
-		return WriteJSONLine(out, ErrorRecord(err))
+// WriteError writes a terminal error using the selected formatter, or to
+// stderr for text output.
+func WriteError(out, errOut io.Writer, formatter Formatter, err error) error {
+	if formatter.Structured() {
+		return formatter.WriteRecord(out, ErrorRecord(err))
 	}
 	_, writeErr := fmt.Fprintln(errOut, "Error:", err)
 	return writeErr
 }
-
-// FormatNames returns supported output modes for CLI help text.
-func FormatNames() string { return strings.Join([]string{JSONL, Text}, " or ") }

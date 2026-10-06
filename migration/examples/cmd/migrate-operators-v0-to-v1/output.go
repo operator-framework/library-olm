@@ -3,8 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"sort"
-	"strings"
 	"sync"
 
 	"github.com/operator-framework/library-olm/migration/pkg/clioutput"
@@ -47,59 +45,9 @@ type checkResultRecord struct {
 	Message string `json:"message"`
 }
 
-// outputFormatter owns record serialization. Command presentation is selected
-// separately in selectedCommandOutput; another structured format can be
-// registered here without changing the command flows.
-type outputFormatter interface {
-	structured() bool
-	writeRecord(outputRecord) error
-}
+var outputFormats = clioutput.NewRegistry()
 
-type textFormatter struct{}
-
-func (textFormatter) structured() bool { return false }
-
-func (textFormatter) writeRecord(outputRecord) error {
-	return fmt.Errorf("text output does not accept structured records")
-}
-
-type jsonLinesFormatter struct{}
-
-func (jsonLinesFormatter) structured() bool { return true }
-
-func (jsonLinesFormatter) writeRecord(record outputRecord) error {
-	return clioutput.WriteJSONLine(os.Stdout, record)
-}
-
-var outputFormatters = map[string]outputFormatter{
-	"text":  textFormatter{},
-	"jsonl": jsonLinesFormatter{},
-}
-
-func outputFormatNames() []string {
-	names := make([]string, 0, len(outputFormatters))
-	for name := range outputFormatters {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-func validateOutputFormat() error {
-	if _, ok := outputFormatters[outputMode]; !ok {
-		return fmt.Errorf("invalid --output %q: expected %s", outputMode, strings.Join(outputFormatNames(), " or "))
-	}
-	return nil
-}
-
-func selectedFormatter() outputFormatter {
-	if formatter, ok := outputFormatters[outputMode]; ok {
-		return formatter
-	}
-	// Cobra reports an invalid format before a command runs. Keep its error in
-	// plain text rather than silently selecting a structured format.
-	return outputFormatters["text"]
-}
+func selectedFormatter() clioutput.Formatter { return outputFormats.Select(outputMode) }
 
 func scanResultData(result migration.OperatorScanResult) scanResultRecord {
 	data := scanResultRecord{
@@ -128,10 +76,10 @@ func scanResultsData(results []migration.OperatorScanResult) []scanResultRecord 
 	return data
 }
 
-func structuredOutput() bool { return selectedFormatter().structured() }
+func structuredOutput() bool { return selectedFormatter().Structured() }
 
 func writeOutputRecord(record outputRecord) error {
-	return selectedFormatter().writeRecord(record)
+	return selectedFormatter().WriteRecord(os.Stdout, record)
 }
 
 func progressFunc(event migration.ProgressEvent) {

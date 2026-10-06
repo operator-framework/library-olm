@@ -26,7 +26,10 @@ type catalogResultRecord struct {
 	Notes                  []string `json:"notes,omitempty"`
 }
 
+var outputFormats = clioutput.NewRegistry()
+
 func selectedCatalogOutput() catalogOutput {
+	formatter := outputFormats.Select(outputMode)
 	pending := ""
 	output := catalogOutput{
 		start: func(dryRun bool) {
@@ -41,23 +44,25 @@ func selectedCatalogOutput() catalogOutput {
 		},
 		results: reportCatalogText,
 		fatal: func(err error) {
-			_ = clioutput.WriteError(os.Stdout, os.Stderr, clioutput.Text, err)
+			_ = clioutput.WriteError(os.Stdout, os.Stderr, formatter, err)
 		},
 	}
-	if outputMode == clioutput.JSONL {
+	if formatter.Structured() {
 		output.start = func(bool) {}
 		output.progress = func(event migration.ProgressEvent) {
-			_ = clioutput.WriteJSONLine(os.Stdout, clioutput.ProgressRecord("migrate-catalogs", "", event))
+			_ = formatter.WriteRecord(os.Stdout, clioutput.ProgressRecord("migrate-catalogs", "", event))
 		}
-		output.results = reportCatalogJSONL
+		output.results = func(results []catalogmigration.CatalogMigrationResult) error {
+			return reportCatalogStructured(formatter, results)
+		}
 		output.fatal = func(err error) {
-			_ = clioutput.WriteError(os.Stdout, os.Stderr, clioutput.JSONL, err)
+			_ = clioutput.WriteError(os.Stdout, os.Stderr, formatter, err)
 		}
 	}
 	return output
 }
 
-func reportCatalogJSONL(results []catalogmigration.CatalogMigrationResult) error {
+func reportCatalogStructured(formatter clioutput.Formatter, results []catalogmigration.CatalogMigrationResult) error {
 	failures := 0
 	for _, result := range results {
 		var resultErr error
@@ -76,7 +81,7 @@ func reportCatalogJSONL(results []catalogmigration.CatalogMigrationResult) error
 			ClusterCatalogName:     result.ClusterCatalogName,
 			Outcome:                result.Status, Reason: result.Reason, Notes: result.Notes,
 		}
-		if err := clioutput.WriteJSONLine(os.Stdout, record); err != nil {
+		if err := formatter.WriteRecord(os.Stdout, record); err != nil {
 			return err
 		}
 	}
