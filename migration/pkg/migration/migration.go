@@ -96,7 +96,7 @@ func (m *Migrator) migrate(ctx context.Context, opts Options, nextStep func(Prog
 		return err
 	}
 
-	info, err := m.GetBundleInfo(ctx, opts, csv, ip)
+	info, err := m.validatedBundleInfo(ctx, opts, csv, ip)
 	if err != nil {
 		return fmt.Errorf("failed to get bundle info: %w", err)
 	}

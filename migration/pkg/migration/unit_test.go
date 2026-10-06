@@ -1434,6 +1434,13 @@ func TestMigrationOperationsRejectInvalidInstallPlanCatalogSource(t *testing.T) 
 			if err == nil || !strings.Contains(err.Error(), "effective CatalogSource catalogs/effective") {
 				t.Fatalf("Gather() error = %v, want invalid effective CatalogSource", err)
 			}
+			if err := m.Migrate(ctx, opts); err == nil || !strings.Contains(err.Error(), "effective CatalogSource catalogs/effective") {
+				t.Fatalf("Migrate() error = %v, want invalid effective CatalogSource", err)
+			}
+			var unchangedSub operatorsv1alpha1.Subscription
+			if err := m.Client.Get(ctx, client.ObjectKeyFromObject(sub), &unchangedSub); err != nil || !reflect.DeepEqual(unchangedSub.Spec, sub.Spec) || !reflect.DeepEqual(unchangedSub.Status, sub.Status) {
+				t.Fatalf("Migrate() changed the source Subscription: %v", err)
+			}
 
 			for name, scan := range map[string]func() (*OperatorScanResult, error){
 				"check": func() (*OperatorScanResult, error) { return m.Check(ctx, opts) },
