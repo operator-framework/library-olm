@@ -95,3 +95,43 @@ func TestConvertAllRejectsSingleOperatorFlags(t *testing.T) {
 		})
 	}
 }
+
+func TestOperatorNameMatchingCommandIsPositionalArgument(t *testing.T) {
+	for _, tt := range []struct {
+		command, operator string
+	}{
+		{command: "convert", operator: "check"},
+		{command: "check", operator: "convert"},
+	} {
+		t.Run(tt.command+" "+tt.operator, func(t *testing.T) {
+			cmd, args, err := rootCmd.Find([]string{tt.command, tt.operator, "-n", "operators"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cmd.Name() != tt.command {
+				t.Fatalf("selected command = %q, want %q", cmd.Name(), tt.command)
+			}
+			namespaceFlag := cmd.Flags().Lookup("namespace")
+			if namespaceFlag == nil {
+				t.Fatal("selected command has no namespace flag")
+			}
+			oldNamespace, oldChanged := namespaceFlag.Value.String(), namespaceFlag.Changed
+			t.Cleanup(func() {
+				if err := namespaceFlag.Value.Set(oldNamespace); err != nil {
+					t.Error(err)
+				}
+				namespaceFlag.Changed = oldChanged
+			})
+			if err := cmd.ParseFlags(args); err != nil {
+				t.Fatal(err)
+			}
+			positionals := cmd.Flags().Args()
+			if err := cmd.ValidateArgs(positionals); err != nil {
+				t.Fatal(err)
+			}
+			if len(positionals) != 1 || positionals[0] != tt.operator {
+				t.Fatalf("positional arguments = %q, want operator %q", positionals, tt.operator)
+			}
+		})
+	}
+}
