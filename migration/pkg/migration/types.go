@@ -136,8 +136,11 @@ const (
 // ProgressEvent is emitted synchronously by Migrator. Err may be set on failed
 // or warning events; Message is suitable for display and is never a control signal.
 type ProgressEvent struct {
-	Step    ProgressStep
-	Status  ProgressStatus
+	Step   ProgressStep
+	Status ProgressStatus
+	// Target identifies the source being processed when an API handles several
+	// resources in one call. Callers may leave it empty for a single target.
+	Target  string
 	Message string
 	Err     error
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/operator-framework/library-olm/migration/pkg/clioutput"
 	"github.com/operator-framework/library-olm/migration/pkg/migration"
 )
 
@@ -131,7 +132,7 @@ func selectedCommandOutput() commandOutput {
 			fmt.Println()
 			return nil
 		},
-		fatalError: func(err error) { fmt.Fprintln(os.Stderr, "Error:", err) },
+		fatalError: func(err error) { _ = clioutput.WriteError(os.Stdout, os.Stderr, clioutput.Text, err) },
 	}
 	if formatter.structured() {
 		output.scanStart = func(string) {}
@@ -170,16 +171,11 @@ func selectedCommandOutput() commandOutput {
 			}
 			return nil // main emits the terminal error record
 		}
-		output.fatalError = func(err error) { _ = formatter.writeRecord(outputRecord{Type: "error", Error: err.Error()}) }
+		output.fatalError = func(err error) { _ = formatter.writeRecord(clioutput.ErrorRecord(err)) }
 	}
 	return output
 }
 
 func resultRecord(command, target string, resultErr error) outputRecord {
-	record := outputRecord{Type: "result", Command: command, Target: target, Status: migration.ProgressCompleted}
-	if resultErr != nil {
-		record.Status = migration.ProgressFailed
-		record.Error = resultErr.Error()
-	}
-	return record
+	return clioutput.ResultRecord(command, target, resultErr)
 }

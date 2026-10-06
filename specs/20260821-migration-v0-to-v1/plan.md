@@ -123,6 +123,9 @@ flag is set; CE carries the matching annotation.
 - List CatalogSources; skip already-migrated (matching image); create `ClusterCatalog` from
   the image and wait `Serving=True`; report per source; `--dry-run`.
 - Report non-image sources (configmap/internal/address) as not migratable.
+- Keep `MigrateCatalogs` result semantics while emitting typed progress, notes, and failures
+  through the same callback used by operator migration. Share text/JSONL output utilities
+  across both CLIs and expose `--output` on the catalog CLI.
 
 **Depends on:** Phase 1. **Exit:** N CatalogSources → N serving ClusterCatalogs; operator scan
 then reports catalog-available.
