@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/operator-framework/library-olm/migration/pkg/migration"
 )
@@ -12,10 +11,10 @@ import (
 func convertBatch(ctx context.Context, results []migration.OperatorScanResult, defaults migration.Options,
 	dryRun, continueOnError bool, migrate func(context.Context, migration.Options) error, preview func(migration.Options) error,
 ) error {
+	output := selectedCommandOutput()
 	eligible := migration.EligibleFromScan(results)
 	if len(eligible) == 0 {
-		info("No eligible operators to migrate.")
-		return nil
+		return output.noTargets("convert", "No eligible operators to migrate")
 	}
 	var firstErr error
 	for _, result := range eligible {
@@ -23,17 +22,22 @@ func convertBatch(ctx context.Context, results []migration.OperatorScanResult, d
 		opts.SubscriptionName = result.SubscriptionName
 		opts.SubscriptionNamespace = result.SubscriptionNamespace
 		opts.ApplyDefaults()
-		info(fmt.Sprintf("Processing %s/%s...", opts.SubscriptionNamespace, opts.SubscriptionName))
+		target := opts.SubscriptionNamespace + "/" + opts.SubscriptionName
+		output.batchProcessing(target)
 		var err error
+		startProgress()
 		if dryRun {
 			err = preview(opts)
 		} else {
 			err = migrate(ctx, opts)
 		}
+		clearProgress()
+		if outputErr := output.batchResult("convert", target, err); outputErr != nil {
+			return outputErr
+		}
 		if err == nil {
 			continue
 		}
-		fail(fmt.Sprintf("%s/%s: %v", opts.SubscriptionNamespace, opts.SubscriptionName, err))
 		if !continueOnError {
 			return err
 		}

@@ -71,7 +71,23 @@ const migrationInvocationAnnotation = "olm.operatorframework.io/migration-invoca
 // represent a partial migration requiring inspection before retry or rollback.
 func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	opts.ApplyDefaults()
+	step := ProgressStepProfile
+	m.progress(ProgressEvent{Step: step, Status: ProgressStarted, Message: "Profiling operator"})
+	nextStep := func(next ProgressStep, message string) {
+		m.progress(ProgressEvent{Step: step, Status: ProgressCompleted})
+		step = next
+		m.progress(ProgressEvent{Step: step, Status: ProgressStarted, Message: message})
+	}
+	err := m.migrate(ctx, opts, nextStep)
+	if err != nil {
+		m.progress(ProgressEvent{Step: step, Status: ProgressFailed, Message: err.Error(), Err: err})
+	} else {
+		m.progress(ProgressEvent{Step: step, Status: ProgressCompleted})
+	}
+	return err
+}
 
+func (m *Migrator) migrate(ctx context.Context, opts Options, nextStep func(ProgressStep, string)) error {
 	_, csv, ip, err := m.GetCSVAndInstallPlan(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("failed to profile operator: %w", err)
@@ -93,6 +109,7 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 		return err
 	}
 
+	nextStep(ProgressStepCheck, "Checking readiness and compatibility")
 	readiness, err := m.CheckReadiness(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("readiness check failed: %w", err)
@@ -110,12 +127,14 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 		return fmt.Errorf("operator is not compatible with OLMv1 migration (%d issues found)", len(compat.FailedChecks()))
 	}
 
+	nextStep(ProgressStepCatalog, "Determining target ClusterCatalog")
 	catalogName, err := m.ResolveClusterCatalog(ctx, info, m.RESTConfig)
 	if err != nil {
 		return fmt.Errorf("failed to resolve ClusterCatalog: %w", err)
 	}
 	info.ResolvedCatalogName = catalogName
 
+	nextStep(ProgressStepCollect, "Collecting and preflighting operator resources")
 	// Fail before taking OLMv0 out of management if the target API or its
 	// SecretPacker namespace is not available on this cluster.
 	opts, err = m.PrepareClusterObjectSet(ctx, opts)
@@ -147,6 +166,7 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 		}
 	}
 
+	nextStep(ProgressStepBackup, "Backing up OLMv0 resources")
 	backup, err := m.BackupResources(ctx, opts, csv, ip)
 	if err != nil {
 		return fmt.Errorf("failed to backup resources: %w", err)
@@ -166,10 +186,11 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	// Disk backup (non-fatal per R2.6 — CE annotation backup is authoritative).
 	if opts.BackupDirectory != "" {
 		if err := backup.SaveToDisk(opts.BackupDirectory); err != nil {
-			m.progress(fmt.Sprintf("Warning: backup to disk failed (CE annotation backup is authoritative): %v", err))
+			m.progress(ProgressEvent{Step: ProgressStepBackup, Status: ProgressWarning, Message: "Backup to disk failed (CE annotation backup is authoritative)", Err: err})
 		}
 	}
 
+	nextStep(ProgressStepPrepare, "Preparing operator for migration")
 	if err := m.PrepareForMigration(ctx, opts, csv); err != nil {
 		if recoverErr := m.RecoverFromBackup(ctx, opts, backup); recoverErr != nil {
 			return fmt.Errorf("preparation failed: %w; recovery also failed: %v", err, recoverErr)
@@ -181,8 +202,8 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 	// cert rotation; OLMv1 delegates to cert-manager (upstream) or openshift-service-ca
 	// (downstream). Pod restarts are expected during this pivot as the new cert secrets
 	// are provisioned. This is known behavior and does not indicate a migration failure.
-	m.progress("Note: TLS certificate management will transfer from OLMv0 to cert-manager/service-ca; " +
-		"expect pod restarts while new cert secrets are provisioned")
+	m.progress(ProgressEvent{Step: ProgressStepPrepare, Status: ProgressNote, Message: "TLS certificate management will transfer from OLMv0 to cert-manager/service-ca; " +
+		"expect pod restarts while new cert secrets are provisioned"})
 
 	restoreSourceDeployments, err := m.ScaleSourceDeployments(ctx, sourceObjects, resourceOpts)
 	if err != nil {
@@ -193,6 +214,7 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 		}
 		return fmt.Errorf("scale source Deployments failed (recovered): %w", err)
 	}
+	nextStep(ProgressStepCreate, "Creating OLMv1 migration resources")
 	result, err := m.CreateMigrationResources(ctx, opts, info, backup)
 	if err != nil {
 		if result.TargetMayBeActive {
@@ -209,6 +231,7 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 		return err
 	}
 
+	nextStep(ProgressStepCleanup, "Cleaning up OLMv0 resources")
 	if err := m.CleanupOLMv0Resources(ctx, opts, info.PackageName, csv.Name).Err(); err != nil {
 		return fmt.Errorf("clean up OLMv0 resources: %w", err)
 	}
@@ -439,7 +462,7 @@ func (m *Migrator) RecoverFromBackup(ctx context.Context, opts Options, backup *
 			restored.Status.State == operatorsv1alpha1.SubscriptionStateUpgradePending {
 			return true, nil
 		}
-		m.progress(fmt.Sprintf("Subscription state: %s (waiting for AtLatestKnown)", restored.Status.State))
+		m.progress(ProgressEvent{Step: ProgressStepRollback, Status: ProgressWaiting, Message: fmt.Sprintf("Subscription state: %s (waiting for AtLatestKnown)", restored.Status.State)})
 		return false, nil
 	})
 }
@@ -730,7 +753,7 @@ func (m *Migrator) WaitForCOSSucceeded(ctx context.Context, cosName string) erro
 	return wait.PollUntilContextTimeout(ctx, cosWaitPollInterval, cosWaitTimeout, true, func(ctx context.Context) (bool, error) {
 		var cos ocv1.ClusterObjectSet
 		if err := m.Client.Get(ctx, types.NamespacedName{Name: cosName}, &cos); err != nil {
-			m.progress(fmt.Sprintf("Waiting for COS %s (not found yet)", cosName))
+			m.progress(ProgressEvent{Step: ProgressStepCreate, Status: ProgressWaiting, Message: fmt.Sprintf("Waiting for COS %s (not found yet)", cosName)})
 			return false, err
 		}
 
@@ -743,7 +766,7 @@ func (m *Migrator) WaitForCOSSucceeded(ctx context.Context, cosName string) erro
 			}
 		}
 
-		m.progress(fmt.Sprintf("Waiting for ClusterObjectSet %s to reach Succeeded=True...", cosName))
+		m.progress(ProgressEvent{Step: ProgressStepCreate, Status: ProgressWaiting, Message: fmt.Sprintf("Waiting for ClusterObjectSet %s to reach Succeeded=True...", cosName)})
 		return false, nil
 	})
 }
@@ -829,9 +852,9 @@ func (m *Migrator) createClusterExtension(ctx context.Context, opts Options, inf
 			pkgInfo, qErr := m.QueryCatalogForPackage(ctx, &catalog, info.PackageName, "", "", m.RESTConfig)
 			if qErr == nil && pkgInfo.DefaultChannel != "" {
 				channel = pkgInfo.DefaultChannel
-				m.progress(fmt.Sprintf("Resolved default channel %q for package %q from ClusterCatalog %s", channel, info.PackageName, info.ResolvedCatalogName))
+				m.progress(ProgressEvent{Step: ProgressStepCreate, Status: ProgressNote, Message: fmt.Sprintf("Resolved default channel %q for package %q from ClusterCatalog %s", channel, info.PackageName, info.ResolvedCatalogName)})
 			} else {
-				m.progress(fmt.Sprintf("Warning: could not determine defaultChannel for package %q — CE will consider all channels; verify upgrade behavior post-migration", info.PackageName))
+				m.progress(ProgressEvent{Step: ProgressStepCreate, Status: ProgressWarning, Message: fmt.Sprintf("Could not determine defaultChannel for package %q — CE will consider all channels; verify upgrade behavior post-migration", info.PackageName)})
 			}
 		}
 	}
@@ -883,7 +906,7 @@ func (m *Migrator) WaitForClusterExtensionInstalled(ctx context.Context, ceName 
 	return wait.PollUntilContextTimeout(ctx, ceWaitPollInterval, ceWaitTimeout, true, func(ctx context.Context) (bool, error) {
 		var ce ocv1.ClusterExtension
 		if err := m.Client.Get(ctx, types.NamespacedName{Name: ceName}, &ce); err != nil {
-			m.progress(fmt.Sprintf("Waiting for CE %s (not found yet)", ceName))
+			m.progress(ProgressEvent{Step: ProgressStepCreate, Status: ProgressWaiting, Message: fmt.Sprintf("Waiting for CE %s (not found yet)", ceName)})
 			return false, err
 		}
 
@@ -893,7 +916,7 @@ func (m *Migrator) WaitForClusterExtensionInstalled(ctx context.Context, ceName 
 			}
 		}
 
-		m.progress(fmt.Sprintf("Waiting for ClusterExtension %s to reach Installed=True...", ceName))
+		m.progress(ProgressEvent{Step: ProgressStepCreate, Status: ProgressWaiting, Message: fmt.Sprintf("Waiting for ClusterExtension %s to reach Installed=True...", ceName)})
 		return false, nil
 	})
 }
@@ -906,7 +929,7 @@ func (m *Migrator) WaitForClusterObjectSetAvailable(ctx context.Context, cosName
 	return wait.PollUntilContextTimeout(ctx, cosWaitPollInterval, cosWaitTimeout, true, func(ctx context.Context) (bool, error) {
 		var cos ocv1.ClusterObjectSet
 		if err := m.Client.Get(ctx, types.NamespacedName{Name: cosName}, &cos); err != nil {
-			m.progress(fmt.Sprintf("Waiting for migration COS %s (not found yet)", cosName))
+			m.progress(ProgressEvent{Step: ProgressStepCreate, Status: ProgressWaiting, Message: fmt.Sprintf("Waiting for migration COS %s (not found yet)", cosName)})
 			return false, err
 		}
 		for _, condition := range cos.Status.Conditions {
@@ -914,7 +937,7 @@ func (m *Migrator) WaitForClusterObjectSetAvailable(ctx context.Context, cosName
 				return true, nil
 			}
 		}
-		m.progress(fmt.Sprintf("Waiting for migration ClusterObjectSet %s to reach Available=True...", cosName))
+		m.progress(ProgressEvent{Step: ProgressStepCreate, Status: ProgressWaiting, Message: fmt.Sprintf("Waiting for migration ClusterObjectSet %s to reach Available=True...", cosName)})
 		return false, nil
 	})
 }

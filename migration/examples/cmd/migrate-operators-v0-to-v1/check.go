@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -48,21 +47,19 @@ func runCheck(cmd *cobra.Command, args []string) error { //nolint:nestif
 	}
 
 	m := migration.NewMigrator(c, restCfg)
-	m.Progress = progressFunc
+	output := selectedCommandOutput()
+	m.Progress = progressFuncFor("check", "")
 	ctx := cmd.Context()
 
 	if checkAll {
-		fmt.Printf("\n%s%s🔎 Scanning all Subscriptions...%s\n", colorBold, colorCyan, colorReset)
+		output.scanStart("check")
 		startProgress()
-		results, err := m.ScanAllSubscriptions(ctx)
+		results, err := m.ScanAll(ctx)
 		clearProgress()
 		if err != nil {
 			return fmt.Errorf("scan failed: %w", err)
 		}
-		migration.PrintScanSummary(results, func(format string, a ...interface{}) {
-			fmt.Printf(format, a...)
-		})
-		return nil
+		return output.scanResults("check", results)
 	}
 
 	operatorName := args[0]
@@ -70,52 +67,19 @@ func runCheck(cmd *cobra.Command, args []string) error { //nolint:nestif
 		return fmt.Errorf("-n/--namespace is required")
 	}
 
-	fmt.Printf("\n%s%s🔍 Pre-migration checks for %s/%s%s\n", colorBold, colorCyan, checkSubscriptionNamespace, operatorName, colorReset)
+	target := checkSubscriptionNamespace + "/" + operatorName
+	output.checkStart(target)
 
 	opts := migration.Options{
 		SubscriptionName:      operatorName,
 		SubscriptionNamespace: checkSubscriptionNamespace,
 	}
 	opts.ApplyDefaults()
+	m.Progress = progressFuncFor("check", checkSubscriptionNamespace+"/"+operatorName)
 
-	sectionHeader("Readiness Checks")
-	readiness, readinessErr := m.CheckReadiness(ctx, opts)
-	if readinessErr != nil {
-		fail(fmt.Sprintf("Could not run readiness checks: %v", readinessErr))
-	} else {
-		printCheckResults(readiness.Checks)
+	result, err := m.Check(ctx, opts)
+	if err != nil {
+		return fmt.Errorf("pre-migration check failed: %w", err)
 	}
-
-	sectionHeader("Compatibility Checks")
-	_, csv, _, profileErr := m.GetCSVAndInstallPlan(ctx, opts)
-	if profileErr != nil { //nolint:nestif
-		fail(fmt.Sprintf("Could not profile operator: %v", profileErr))
-	} else {
-		propsJSON := csv.Annotations["operatorframework.io/properties"]
-		compat, compatErr := m.CheckCompatibility(ctx, opts, csv, propsJSON)
-		if compatErr != nil {
-			fail(fmt.Sprintf("Could not run compatibility checks: %v", compatErr))
-		} else {
-			printCheckResults(compat.Checks)
-		}
-
-		sectionHeader("ClusterCatalog Availability")
-		bundleInfo, _ := m.GetBundleInfo(ctx, opts, csv, nil)
-		if bundleInfo != nil {
-			catalogName, catalogErr := m.ResolveClusterCatalog(ctx, bundleInfo, restCfg)
-			if catalogErr != nil {
-				var notFound *migration.PackageNotFoundError
-				if errors.As(catalogErr, &notFound) {
-					warn(fmt.Sprintf("No ClusterCatalog found for package %q — run migrate-catalogs-v0-to-v1 first", bundleInfo.PackageName))
-				} else {
-					warn(fmt.Sprintf("Catalog resolution error: %v", catalogErr))
-				}
-			} else {
-				success(fmt.Sprintf("ClusterCatalog available: %s", catalogName))
-			}
-		}
-	}
-
-	fmt.Println()
-	return nil
+	return output.checkResult("check", target, *result)
 }

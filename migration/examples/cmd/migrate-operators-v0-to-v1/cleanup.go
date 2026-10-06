@@ -48,12 +48,13 @@ func runCleanup(cmd *cobra.Command, args []string) error { //nolint:nestif
 	}
 
 	m := migration.NewMigrator(c, restCfg)
-	m.Progress = progressFunc
+	output := selectedCommandOutput()
+	m.Progress = progressFuncFor("cleanup", "")
 	ctx := cmd.Context()
 
 	if cleanupAll { //nolint:nestif
 		// Find all CEs that are in Conflict state
-		results, err := m.ScanAllSubscriptions(ctx)
+		results, err := m.ScanAll(ctx)
 		if err != nil {
 			return fmt.Errorf("scan failed: %w", err)
 		}
@@ -79,34 +80,36 @@ func runCleanup(cmd *cobra.Command, args []string) error { //nolint:nestif
 		}
 
 		if len(conflictCEs) == 0 {
-			info("No Conflict-state ClusterExtensions found.")
-			return nil
+			return output.noTargets("cleanup", "No Conflict-state ClusterExtensions found")
 		}
 
-		fmt.Printf("\nCleaning up %d Conflict-state ClusterExtension(s)...\n", len(conflictCEs))
+		output.batchStart("cleanup", len(conflictCEs))
 		var firstErr error
 		for _, ceName := range conflictCEs {
-			if err := m.CleanupConflict(ctx, ceName); err != nil {
-				fail(fmt.Sprintf("%s: %v", ceName, err))
+			m.Progress = progressFuncFor("cleanup", ceName)
+			err := m.Cleanup(ctx, migration.Options{ClusterExtensionName: ceName})
+			if writeErr := output.batchResult("cleanup", ceName, err); writeErr != nil {
+				return writeErr
+			}
+			if err != nil {
 				if firstErr == nil {
 					firstErr = err
 				}
-			} else {
-				success(fmt.Sprintf("%s conflict resolved", ceName))
 			}
 		}
 		return firstErr
 	}
 
 	ceName := args[0]
-	fmt.Printf("\n%s%s🧹 Cleaning up Conflict for %s...%s\n", colorBold, colorCyan, ceName, colorReset)
+	m.Progress = progressFuncFor("cleanup", ceName)
+	output.singleStart("cleanup", ceName)
 
-	if err := m.CleanupConflict(ctx, ceName); err != nil {
-		fail(fmt.Sprintf("Cleanup failed: %v", err))
+	err = m.Cleanup(ctx, migration.Options{ClusterExtensionName: ceName})
+	if outputErr := output.singleResult("cleanup", ceName, err); outputErr != nil {
+		return outputErr
+	}
+	if err != nil {
 		return err
 	}
-
-	success(fmt.Sprintf("Conflict resolved for %s; OLMv0 artifacts removed, ClusterExtension intact", ceName))
-	fmt.Println()
 	return nil
 }

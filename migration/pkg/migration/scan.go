@@ -30,6 +30,7 @@ type OperatorScanResult struct {
 	// Example: other installed operators declare a dependency on this package.
 	Warnings     []string
 	Error        error
+	Checks       []CheckResult // all evaluated checks, including passing checks
 	FailedChecks []CheckResult
 }
 
@@ -98,7 +99,7 @@ func (m *Migrator) ScanAllSubscriptionsWithOptions(ctx context.Context, defaults
 		opts.SubscriptionNamespace = sub.Namespace
 		opts.ApplyDefaults()
 
-		m.progress(fmt.Sprintf("Checking %s/%s (%s)...", sub.Namespace, sub.Name, sub.Spec.Package))
+		m.progress(ProgressEvent{Step: ProgressStepScan, Status: ProgressWaiting, Message: fmt.Sprintf("Checking %s/%s (%s)...", sub.Namespace, sub.Name, sub.Spec.Package)})
 
 		// Readiness checks
 		readiness, err := m.CheckReadiness(ctx, opts)
@@ -109,6 +110,7 @@ func (m *Migrator) ScanAllSubscriptionsWithOptions(ctx context.Context, defaults
 			results = append(results, result)
 			continue
 		}
+		result.Checks = append(result.Checks, readiness.Checks...)
 
 		// Get CSV for compatibility checks
 		_, csv, _, err := m.GetCSVAndInstallPlan(ctx, opts)
@@ -132,6 +134,7 @@ func (m *Migrator) ScanAllSubscriptionsWithOptions(ctx context.Context, defaults
 			results = append(results, result)
 			continue
 		}
+		result.Checks = append(result.Checks, compat.Checks...)
 
 		// Merge readiness + compat failed checks
 		result.FailedChecks = append(readiness.FailedChecks(), compat.FailedChecks()...)
@@ -145,16 +148,18 @@ func (m *Migrator) ScanAllSubscriptionsWithOptions(ctx context.Context, defaults
 				Version:     result.Version,
 			}, m.RESTConfig)
 			if catalogErr != nil {
-				result.FailedChecks = append(result.FailedChecks, CheckResult{
+				catalogCheck := CheckResult{
 					Name:    "Catalog availability",
 					Passed:  false,
-					Message: fmt.Sprintf("package not found in any serving ClusterCatalog; run migrate-catalogs-v0-to-v1 first: %v", catalogErr),
-				})
+					Message: fmt.Sprintf("No ClusterCatalog found for package %q; run migrate-catalogs-v0-to-v1 first: %v", sub.Spec.Package, catalogErr),
+				}
+				result.Checks = append(result.Checks, catalogCheck)
+				result.FailedChecks = append(result.FailedChecks, catalogCheck)
 				result.Status = OperatorStatusIneligible
 				result.Reason = fmt.Sprintf("package %q not found in any serving ClusterCatalog", sub.Spec.Package)
 				result.Eligible = false
 			} else {
-				result.FailedChecks = append(result.FailedChecks, CheckResult{
+				result.Checks = append(result.Checks, CheckResult{
 					Name:    "Catalog availability",
 					Passed:  true,
 					Message: fmt.Sprintf("package available in ClusterCatalog %s", catalogName),
@@ -193,9 +198,7 @@ func (m *Migrator) ScanAllSubscriptionsWithOptions(ctx context.Context, defaults
 	return results, nil
 }
 
-// ScanSubscription classifies one Subscription without modifying the cluster.
-// Eligibility failures are represented by an Ineligible result and its
-// FailedChecks or Error; callers must inspect Status even when err is nil.
+// ScanSubscription checks a single Subscription and returns its scan result.
 func (m *Migrator) ScanSubscription(ctx context.Context, opts Options) (*OperatorScanResult, error) {
 	opts.ApplyDefaults()
 
@@ -223,6 +226,7 @@ func (m *Migrator) ScanSubscription(ctx context.Context, opts Options) (*Operato
 	if err != nil {
 		return nil, err
 	}
+	result.Checks = append(result.Checks, readiness.Checks...)
 
 	sub, csv, _, err := m.GetCSVAndInstallPlan(ctx, opts)
 	if err != nil {
@@ -244,6 +248,7 @@ func (m *Migrator) ScanSubscription(ctx context.Context, opts Options) (*Operato
 		result.Error = err
 		return result, nil
 	}
+	result.Checks = append(result.Checks, compat.Checks...)
 
 	result.FailedChecks = append(readiness.FailedChecks(), compat.FailedChecks()...)
 	if len(result.FailedChecks) > 0 {
@@ -259,17 +264,19 @@ func (m *Migrator) ScanSubscription(ctx context.Context, opts Options) (*Operato
 		Version:     result.Version,
 	}, m.RESTConfig)
 	if catalogErr != nil {
-		result.FailedChecks = append(result.FailedChecks, CheckResult{
+		catalogCheck := CheckResult{
 			Name:    "Catalog availability",
 			Passed:  false,
-			Message: fmt.Sprintf("package not found in any serving ClusterCatalog; run migrate-catalogs-v0-to-v1 first: %v", catalogErr),
-		})
+			Message: fmt.Sprintf("No ClusterCatalog found for package %q; run migrate-catalogs-v0-to-v1 first: %v", result.PackageName, catalogErr),
+		}
+		result.Checks = append(result.Checks, catalogCheck)
+		result.FailedChecks = append(result.FailedChecks, catalogCheck)
 		result.Status = OperatorStatusIneligible
 		result.Reason = fmt.Sprintf("package %q not found in any serving ClusterCatalog", result.PackageName)
 		return result, nil
 	}
 
-	result.FailedChecks = append(result.FailedChecks, CheckResult{
+	result.Checks = append(result.Checks, CheckResult{
 		Name:    "Catalog availability",
 		Passed:  true,
 		Message: fmt.Sprintf("package available in ClusterCatalog %s", catalogName),
@@ -338,13 +345,7 @@ func EligibleFromScan(results []OperatorScanResult) []OperatorScanResult {
 	return eligible
 }
 
-// RollbackClusterExtension restores OLMv0 management from a migrated
-// ClusterExtension. It requires valid migration source and Subscription-backup
-// annotations and an existing source namespace; an Installed=True extension
-// additionally requires acknowledgeInstalled. These checks run before any
-// deletion. It orphan-deletes owned ClusterObjectSet revisions before the
-// ClusterExtension so a revision-deletion failure retains the backup for retry,
-// then restores the Subscription. Operator workloads are preserved.
+// RollbackClusterExtension deletes the CE and COS (orphan cascade), then restores the Subscription.
 func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, acknowledgeInstalled bool) error {
 	var ce ocv1.ClusterExtension
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: ceName}, &ce); err != nil {
@@ -442,14 +443,12 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 		return fmt.Errorf("failed to restore Subscription %s/%s: %w", ns, name, err)
 	}
 
-	m.progress(fmt.Sprintf("Subscription %s/%s restored; operator returning to OLMv0 management", ns, name))
+	m.progress(ProgressEvent{Step: ProgressStepRollback, Status: ProgressCompleted, Message: fmt.Sprintf("Subscription %s/%s restored; operator returning to OLMv0 management", ns, name)})
 	return nil
 }
 
-// CleanupConflict resolves a Conflict by deleting the OLMv0 Subscription and
-// artifacts while retaining the ClusterExtension. It requires the migration
-// source annotation and a catalog package on the extension, and no other
-// Subscription may reference the package or its CSVs.
+// CleanupConflict resolves a Conflict state: deletes the Subscription and OLMv0 artifacts,
+// leaving the ClusterExtension intact.
 func (m *Migrator) CleanupConflict(ctx context.Context, ceName string) error {
 	var ce ocv1.ClusterExtension
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: ceName}, &ce); err != nil {
@@ -483,7 +482,7 @@ func (m *Migrator) CleanupConflict(ctx context.Context, ceName string) error {
 			return fmt.Errorf("failed to delete Subscription %s/%s: %w", ns, name, err)
 		}
 	}
-	m.progress(fmt.Sprintf("Deleted Subscription %s/%s", ns, name))
+	m.progress(ProgressEvent{Step: ProgressStepCleanup, Status: ProgressCompleted, Message: fmt.Sprintf("Deleted Subscription %s/%s", ns, name)})
 
 	// Cleanup remaining OLMv0 resources
 	opts := Options{
@@ -595,18 +594,14 @@ func unmarshalJSON(data string, v interface{}) error {
 
 // ── Canonical R1.1 library API ────────────────────────────────────────────────
 
-// ScanAll classifies OLMv0 Subscriptions and annotated ClusterExtensions into
-// Eligible, Ineligible, AlreadyMigrated, and Conflict states. It checks catalog
-// availability for otherwise eligible operators without modifying the cluster.
-// Inspect each result's Status and FailedChecks; ineligibility is not a top-level
-// error.
+// ScanAll classifies all OLMv0 Subscriptions into the four states (R1.1),
+// including catalog-availability (C7) per operator.
 func (m *Migrator) ScanAll(ctx context.Context) ([]OperatorScanResult, error) {
 	return m.ScanAllSubscriptions(ctx)
 }
 
-// Check classifies one Subscription using readiness, compatibility, and catalog
-// availability checks without mutating the cluster. Inspect the returned Status
-// and FailedChecks; an Ineligible result is not itself a returned error.
+// Check runs all readiness, compatibility, and catalog-availability checks for
+// one operator without mutating the cluster (R1.1).
 func (m *Migrator) Check(ctx context.Context, opts Options) (*OperatorScanResult, error) {
 	opts.ApplyDefaults()
 	return m.ScanSubscription(ctx, opts)
@@ -659,27 +654,31 @@ func (m *Migrator) findDependents(ctx context.Context, packageName string) []str
 	return dependents
 }
 
-// Gather profiles a Subscription and collects candidate resources without
-// mutating the cluster. It does not run all eligibility, catalog-resolution, or
-// target preflight checks and must not be used alone to approve conversion.
+// Gather checks the target COS prerequisites and collects everything that would
+// be migrated without making cluster mutations — backs convert --dry-run (R1.1).
 func (m *Migrator) Gather(ctx context.Context, opts Options) (*MigrationInfo, error) {
 	opts.ApplyDefaults()
-	return m.GatherMigrationInfo(ctx, opts)
+	prepared, err := m.PrepareClusterObjectSet(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	info, err := m.GatherMigrationInfo(ctx, prepared)
+	if err != nil {
+		return nil, err
+	}
+	info.SystemNamespace = prepared.SystemNamespace
+	return info, nil
 }
 
-// Rollback restores an operator to OLMv0 management using its migrated
-// ClusterExtension's backup annotations. It refuses an Installed=True extension
-// unless opts.AcknowledgeInstalled is true; RollbackClusterExtension documents
-// the remaining safety preconditions and deletion order.
+// Rollback restores an operator to OLMv0 management (R1.1).
+// opts.AcknowledgeInstalled must be true when the CE is Installed=True.
 func (m *Migrator) Rollback(ctx context.Context, opts Options) error {
 	opts.ApplyDefaults()
 	return m.RollbackClusterExtension(ctx, opts.ClusterExtensionName, opts.AcknowledgeInstalled)
 }
 
-// Cleanup resolves a migration Conflict by removing the OLMv0 Subscription and
-// artifacts while retaining the migrated ClusterExtension. It requires the
-// extension's migration source annotation and catalog package information, and
-// no other Subscription may reference the package or its CSVs.
+// Cleanup finishes a partial migration in Conflict state by deleting the
+// Subscription and OLMv0 artifacts, leaving the CE intact (R1.1).
 func (m *Migrator) Cleanup(ctx context.Context, opts Options) error {
 	opts.ApplyDefaults()
 	return m.CleanupConflict(ctx, opts.ClusterExtensionName)

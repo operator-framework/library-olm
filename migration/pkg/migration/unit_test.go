@@ -1077,6 +1077,36 @@ func TestScanStatesAndPublicHelpers(t *testing.T) {
 	}
 }
 
+func TestCheckReturnsPassingAndFailingChecks(t *testing.T) {
+	sub, csv := healthySubscriptionFixtures()
+	sub.Status.State = operatorsv1alpha1.SubscriptionStateUpgradeAvailable
+	m := migrationTestClient(t, sub, csv, establishedClusterObjectSetCRD())
+
+	result, err := m.Check(context.Background(), Options{SubscriptionName: sub.Name, SubscriptionNamespace: sub.Namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != OperatorStatusIneligible {
+		t.Fatalf("status = %s, want Ineligible", result.Status)
+	}
+	var passed, failed bool
+	for _, check := range result.Checks {
+		passed = passed || check.Passed
+		failed = failed || !check.Passed
+	}
+	if !passed || !failed {
+		t.Fatalf("Check() should return both passing and failing diagnostics: %#v", result.Checks)
+	}
+	if len(result.FailedChecks) == 0 {
+		t.Fatal("Check() omitted failed checks")
+	}
+	for _, check := range result.FailedChecks {
+		if check.Passed {
+			t.Fatalf("passing check in FailedChecks: %#v", check)
+		}
+	}
+}
+
 func TestScanAllKeepsMixedUnsafeOperatorsOutOfEligibleResults(t *testing.T) {
 	ctx := context.Background()
 	busySub, busyCSV := healthySubscriptionFixtures()
@@ -1145,6 +1175,25 @@ func TestScanAllSubscriptionsWithOptionsAppliesAcknowledgments(t *testing.T) {
 	}
 }
 
+func TestMigrateEmitsStructuredProgressOnFailure(t *testing.T) {
+	m := migrationTestClient(t)
+	var events []ProgressEvent
+	m.Progress = func(event ProgressEvent) { events = append(events, event) }
+	err := m.Migrate(context.Background(), Options{SubscriptionName: "missing", SubscriptionNamespace: "ns"})
+	if err == nil {
+		t.Fatal("Migrate() unexpectedly succeeded")
+	}
+	if len(events) != 2 {
+		t.Fatalf("got %d progress events, want 2: %#v", len(events), events)
+	}
+	if events[0].Step != ProgressStepProfile || events[0].Status != ProgressStarted || events[0].Message == "" {
+		t.Fatalf("unexpected start event: %#v", events[0])
+	}
+	if events[1].Step != ProgressStepProfile || events[1].Status != ProgressFailed || events[1].Err == nil || events[1].Message != err.Error() {
+		t.Fatalf("unexpected failure event: %#v", events[1])
+	}
+}
+
 func TestPrerequisitesAndRecoveryErrors(t *testing.T) {
 	ctx := context.Background()
 	sub, csv := healthySubscriptionFixtures()
@@ -1170,6 +1219,18 @@ func TestPrerequisitesAndRecoveryErrors(t *testing.T) {
 	}
 	if err := m.Cleanup(ctx, Options{ClusterExtensionName: "missing"}); err == nil {
 		t.Fatal("Cleanup() unexpectedly succeeded for a missing ClusterExtension")
+	}
+}
+
+func TestGatherRequiresClusterObjectSetPrerequisites(t *testing.T) {
+	sub, csv := healthySubscriptionFixtures()
+	m := migrationTestClient(t, sub, csv)
+	_, err := m.Gather(context.Background(), Options{SubscriptionName: sub.Name, SubscriptionNamespace: sub.Namespace})
+	if err == nil || !strings.Contains(err.Error(), "ClusterObjectSet CRD") {
+		t.Fatalf("Gather() without the target CRD = %v, want a prerequisite error", err)
+	}
+	if err := m.Client.Get(context.Background(), client.ObjectKeyFromObject(sub), &operatorsv1alpha1.Subscription{}); err != nil {
+		t.Fatalf("Gather() changed source Subscription: %v", err)
 	}
 }
 

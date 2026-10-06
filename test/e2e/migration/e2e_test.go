@@ -450,14 +450,23 @@ func TestMigration(t *testing.T) {
 			t.Fatalf("check --all did not report %s/%s:\n%s", namespace, subscription, allChecks)
 		}
 	}
-	run(t, binary(t, "migrate-operators-v0-to-v1"), "check", subscription, "-n", namespace, "--kubeconfig", os.Getenv("KUBECONFIG"))
-	if os.Getenv("E2E_SUITE") == "real-operator" {
-		run(t, binary(t, "migrate-operators-v0-to-v1"), "convert", subscription, "-n", namespace, "--dry-run", "--kubeconfig", os.Getenv("KUBECONFIG"))
-		if _, err := output("kubectl", "get", "clusterextension", subscription); err == nil {
-			t.Fatal("convert --dry-run created a ClusterExtension")
-		}
+	checkOutput, err := output(binary(t, "migrate-operators-v0-to-v1"), "check", subscription, "-n", namespace, "--kubeconfig", os.Getenv("KUBECONFIG"))
+	if err != nil || !strings.Contains(checkOutput, "passes all readiness, compatibility, and catalog-availability checks") {
+		t.Fatalf("public Check API did not report eligibility: %v\n%s", err, checkOutput)
 	}
-	run(t, binary(t, "migrate-operators-v0-to-v1"), "convert", subscription, "-n", namespace, "--kubeconfig", os.Getenv("KUBECONFIG"))
+	if os.Getenv("E2E_SUITE") == "fixture" {
+		assertStructuredCheckAndPreview(t, namespace, subscription)
+	} else {
+		run(t, binary(t, "migrate-operators-v0-to-v1"), "convert", subscription, "-n", namespace, "--dry-run", "--kubeconfig", os.Getenv("KUBECONFIG"))
+	}
+	if _, err := output("kubectl", "get", "clusterextension", subscription); err == nil {
+		t.Fatal("convert --dry-run created a ClusterExtension")
+	}
+	if os.Getenv("E2E_SUITE") == "fixture" {
+		assertStructuredConversion(t, namespace, subscription)
+	} else {
+		run(t, binary(t, "migrate-operators-v0-to-v1"), "convert", subscription, "-n", namespace, "--kubeconfig", os.Getenv("KUBECONFIG"))
+	}
 
 	// The ClusterExtension name defaults to the Subscription name. Installed=True
 	// proves the live operator-controller accepted the generated COS and rendered it.
@@ -499,6 +508,45 @@ func TestMigration(t *testing.T) {
 		run(t, binary(t, "migrate-operators-v0-to-v1"), "rollback", subscription, "--acknowledge-installed", "--kubeconfig", os.Getenv("KUBECONFIG"))
 		assertRollbackRestored(t, kubeClient, rollbackState, beforeRefusal)
 	}
+}
+
+func assertStructuredCheckAndPreview(t *testing.T, namespace, subscription string) {
+	t.Helper()
+	structuredCheck, checkErr := output(binary(t, "migrate-operators-v0-to-v1"), "check", subscription, "-n", namespace, "--output=jsonl", "--kubeconfig", os.Getenv("KUBECONFIG"))
+	if checkErr != nil {
+		t.Fatalf("structured check failed: %v\n%s", checkErr, structuredCheck)
+	}
+	checkRecord := requireJSONLRecord(t, structuredCheck, "check")
+	var checkData struct {
+		Status migration.OperatorStatus `json:"status"`
+	}
+	if err := json.Unmarshal(checkRecord["data"], &checkData); err != nil || checkData.Status != migration.OperatorStatusEligible {
+		t.Fatalf("structured check did not report eligibility: %v\n%s", err, structuredCheck)
+	}
+	structuredPreview, previewErr := output(binary(t, "migrate-operators-v0-to-v1"), "convert", subscription, "-n", namespace, "--dry-run", "--output=jsonl", "--kubeconfig", os.Getenv("KUBECONFIG"))
+	if previewErr != nil {
+		t.Fatalf("structured dry-run failed: %v\n%s", previewErr, structuredPreview)
+	}
+	previewRecord := requireJSONLRecord(t, structuredPreview, "dry-run")
+	var previewData struct {
+		ClusterObjectSet string `json:"cluster_object_set"`
+	}
+	if err := json.Unmarshal(previewRecord["data"], &previewData); err != nil || previewData.ClusterObjectSet != subscription+"-1" {
+		t.Fatalf("structured dry-run omitted target ClusterObjectSet: %v\n%s", err, structuredPreview)
+	}
+}
+
+func assertStructuredConversion(t *testing.T, namespace, subscription string) {
+	t.Helper()
+	structuredConversion, conversionErr := output(binary(t, "migrate-operators-v0-to-v1"), "convert", subscription, "-n", namespace, "--output=jsonl", "--kubeconfig", os.Getenv("KUBECONFIG"))
+	if conversionErr != nil {
+		t.Fatalf("structured conversion failed: %v\n%s", conversionErr, structuredConversion)
+	}
+	progressRecord := requireJSONLRecord(t, structuredConversion, "progress")
+	if string(progressRecord["step"]) != `"profile"` || string(progressRecord["status"]) != `"started"` {
+		t.Fatalf("structured conversion omitted phase progress:\n%s", structuredConversion)
+	}
+	requireJSONLRecord(t, structuredConversion, "result")
 }
 
 // TestCrossNamespaceMigration proves the explicit install-namespace path using
@@ -801,6 +849,24 @@ func run(t *testing.T, command string, args ...string) {
 	if out, err := output(command, args...); err != nil {
 		t.Fatalf("%s %s failed: %v\n%s", command, strings.Join(args, " "), err, out)
 	}
+}
+
+func requireJSONLRecord(t *testing.T, stream, wantType string) map[string]json.RawMessage {
+	t.Helper()
+	var found map[string]json.RawMessage
+	for _, line := range strings.Split(strings.TrimSpace(stream), "\n") {
+		var record map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("non-JSON line in CLI output: %v\n%s", err, stream)
+		}
+		if found == nil && string(record["type"]) == fmt.Sprintf("%q", wantType) {
+			found = record
+		}
+	}
+	if found == nil {
+		t.Fatalf("CLI output has no %q record:\n%s", wantType, stream)
+	}
+	return found
 }
 
 // expectFailure requires a command to reject its input and includes its output

@@ -51,7 +51,8 @@ func runRollback(cmd *cobra.Command, args []string) error { //nolint:nestif
 	}
 
 	m := migration.NewMigrator(c, restCfg)
-	m.Progress = progressFunc
+	output := selectedCommandOutput()
+	m.Progress = progressFuncFor("rollback", "")
 	ctx := cmd.Context()
 
 	if rollbackAll { //nolint:nestif
@@ -68,34 +69,36 @@ func runRollback(cmd *cobra.Command, args []string) error { //nolint:nestif
 		}
 
 		if len(targets) == 0 {
-			info("No migrated ClusterExtensions found.")
-			return nil
+			return output.noTargets("rollback", "No migrated ClusterExtensions found")
 		}
 
-		fmt.Printf("\nRolling back %d migrated ClusterExtension(s)...\n", len(targets))
+		output.batchStart("rollback", len(targets))
 		var firstErr error
 		for _, name := range targets {
-			if err := m.RollbackClusterExtension(ctx, name, rollbackAcknowledgeInstalled); err != nil {
-				fail(fmt.Sprintf("%s: %v", name, err))
+			m.Progress = progressFuncFor("rollback", name)
+			err := m.Rollback(ctx, migration.Options{ClusterExtensionName: name, AcknowledgeInstalled: rollbackAcknowledgeInstalled})
+			if writeErr := output.batchResult("rollback", name, err); writeErr != nil {
+				return writeErr
+			}
+			if err != nil {
 				if firstErr == nil {
 					firstErr = err
 				}
-			} else {
-				success(fmt.Sprintf("%s rolled back", name))
 			}
 		}
 		return firstErr
 	}
 
 	ceName := args[0]
-	fmt.Printf("\n%s%s🔄 Rolling back ClusterExtension %s...%s\n", colorBold, colorCyan, ceName, colorReset)
+	m.Progress = progressFuncFor("rollback", ceName)
+	output.singleStart("rollback", ceName)
 
-	if err := m.RollbackClusterExtension(ctx, ceName, rollbackAcknowledgeInstalled); err != nil {
-		fail(fmt.Sprintf("Rollback failed: %v", err))
+	err = m.Rollback(ctx, migration.Options{ClusterExtensionName: ceName, AcknowledgeInstalled: rollbackAcknowledgeInstalled})
+	if outputErr := output.singleResult("rollback", ceName, err); outputErr != nil {
+		return outputErr
+	}
+	if err != nil {
 		return err
 	}
-
-	success(fmt.Sprintf("ClusterExtension %s rolled back; Subscription restored", ceName))
-	fmt.Println()
 	return nil
 }

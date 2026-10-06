@@ -91,6 +91,7 @@ type MigrationInfo struct {
 	CatalogSourceRef    types.NamespacedName
 	CatalogSourceImage  string // tag-based image from CatalogSource.Spec.Image
 	ResolvedCatalogName string
+	SystemNamespace     string // operator-controller namespace for COS reference Secrets
 	CollectedObjects    []unstructured.Unstructured
 
 	// SubscriptionConfig holds spec.config from the Subscription for mapping to CE (R4).
@@ -103,28 +104,63 @@ type MigrationInfo struct {
 	OperatorGroupBackupJSON string
 }
 
-// ProgressFunc receives synchronous, human-readable progress and warning
-// messages. Message text is informational and is not a stable machine protocol.
-type ProgressFunc func(message string)
+// ProgressStep identifies the migration phase associated with an event.
+type ProgressStep string
 
-// Migrator performs migration operations using a controller-runtime client.
-// RESTConfig is used for catalog access; when nil, catalog access uses in-cluster
-// credentials. Progress may be nil to suppress informational messages.
+const (
+	ProgressStepProfile  ProgressStep = "profile"
+	ProgressStepCheck    ProgressStep = "check"
+	ProgressStepCatalog  ProgressStep = "catalog"
+	ProgressStepCollect  ProgressStep = "collect"
+	ProgressStepBackup   ProgressStep = "backup"
+	ProgressStepPrepare  ProgressStep = "prepare"
+	ProgressStepCreate   ProgressStep = "create"
+	ProgressStepCleanup  ProgressStep = "cleanup"
+	ProgressStepScan     ProgressStep = "scan"
+	ProgressStepRollback ProgressStep = "rollback"
+)
+
+// ProgressStatus describes whether a step started, completed, failed, or is
+// reporting an intermediate status. Warnings and notes do not end a step.
+type ProgressStatus string
+
+const (
+	ProgressStarted   ProgressStatus = "started"
+	ProgressWaiting   ProgressStatus = "waiting"
+	ProgressCompleted ProgressStatus = "completed"
+	ProgressFailed    ProgressStatus = "failed"
+	ProgressWarning   ProgressStatus = "warning"
+	ProgressNote      ProgressStatus = "note"
+)
+
+// ProgressEvent is emitted synchronously by Migrator. Err may be set on failed
+// or warning events; Message is suitable for display and is never a control signal.
+type ProgressEvent struct {
+	Step    ProgressStep
+	Status  ProgressStatus
+	Message string
+	Err     error
+}
+
+// ProgressFunc receives migration progress events synchronously. Callbacks
+// should not block or mutate the Migrator while an operation is in progress.
+type ProgressFunc func(event ProgressEvent)
+
+// Migrator performs the migration operations using a controller-runtime client.
 type Migrator struct {
 	Client     client.Client
 	RESTConfig *rest.Config
 	Progress   ProgressFunc
 }
 
-// NewMigrator creates a Migrator with the supplied Kubernetes client and REST
-// config. A nil config selects in-cluster credentials for catalog access.
+// NewMigrator creates a new Migrator with the given client and REST config.
 func NewMigrator(c client.Client, cfg *rest.Config) *Migrator {
 	return &Migrator{Client: c, RESTConfig: cfg}
 }
 
-func (m *Migrator) progress(msg string) {
+func (m *Migrator) progress(event ProgressEvent) {
 	if m.Progress != nil {
-		m.Progress(msg)
+		m.Progress(event)
 	}
 }
 
@@ -136,9 +172,8 @@ type Backup struct {
 	InstallPlan           *operatorsv1alpha1.InstallPlan
 }
 
-// SaveToDisk writes backup files to dir, creating it if absent. It returns a
-// write error to the caller; Migrate treats disk-backup failures as warnings
-// because the ClusterExtension annotation backup is authoritative.
+// SaveToDisk writes backup files to dir, creating it if absent. Per R2.6,
+// failures here are non-fatal — the CE annotation backup is the authoritative path.
 func (b *Backup) SaveToDisk(dir string) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("failed to create backup directory: %w", err)

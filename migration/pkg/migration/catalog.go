@@ -392,11 +392,11 @@ func (m *Migrator) ResolveClusterCatalog(ctx context.Context, info *MigrationInf
 		}
 
 		queriedCatalogs = append(queriedCatalogs, catalog.Name)
-		m.progress(fmt.Sprintf("Querying catalog %s for package %s@%s...", catalog.Name, info.PackageName, info.Version))
+		m.progress(ProgressEvent{Step: ProgressStepCatalog, Status: ProgressWaiting, Message: fmt.Sprintf("Querying catalog %s for package %s@%s...", catalog.Name, info.PackageName, info.Version)})
 
 		pkgInfo, err := m.QueryCatalogForPackage(ctx, catalog, info.PackageName, info.Version, info.Channel, restConfig)
 		if err != nil {
-			m.progress(fmt.Sprintf("Could not query catalog %s: %v", catalog.Name, err))
+			m.progress(ProgressEvent{Step: ProgressStepCatalog, Status: ProgressWarning, Message: fmt.Sprintf("Could not query catalog %s", catalog.Name), Err: err})
 			continue
 		}
 
@@ -479,7 +479,7 @@ func (m *Migrator) CreateClusterCatalog(ctx context.Context, name, imageRef stri
 				return true, nil
 			}
 		}
-		m.progress(fmt.Sprintf("Waiting for ClusterCatalog %s to become ready...", name))
+		m.progress(ProgressEvent{Step: ProgressStepCatalog, Status: ProgressWaiting, Message: fmt.Sprintf("Waiting for ClusterCatalog %s to become ready...", name)})
 		return false, nil
 	})
 }
