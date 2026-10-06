@@ -144,6 +144,7 @@ annotation, R2.5) or **hard** (must be remediated first — no override).
 | # | Check | Ineligible when… | Override flag |
 |---|---|---|---|
 | C1 | AllNamespaces watch scope | OperatorGroup targets specific namespaces (Own/Single/Multi) | `--acknowledge-watch-scope-change` |
+| C1a | AllNamespaces bundle support *(hard)* | Installed CSV does not declare `AllNamespaces` with `supported: true` in `spec.installModes` | none — acknowledgment changes the requested watch scope, not the bundle's capabilities |
 | C2 | No dependency resolution *(hard)* | CSV declares `olm.package.required` or `olm.gvk.required` | none — OLMv1 fundamentally does not resolve dependencies; migrating without them would leave the operator broken |
 | C3 | No APIService definitions *(hard)* | CSV `spec.apiservicedefinitions.owned` is non-empty | none — OLMv1 does not support APIService-based operators. | CSV `spec.apiservicedefinitions.owned` is non-empty | none — OLMv1's registry+v1 renderer currently has **no** `apiregistration.k8s.io` generator; when [OPRUN-4723](https://redhat.atlassian.net/browse/OPRUN-4723) merges, OLMv1 will manage APIService objects natively and **C3 is removed entirely** (no override flag; operators with APIService definitions become Eligible) |
 | C4 | No active OperatorCondition | `OperatorCondition.status.conditions` has entries (see R9) | `--acknowledge-operator-condition` |

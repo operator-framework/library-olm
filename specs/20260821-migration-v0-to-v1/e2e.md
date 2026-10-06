@@ -157,14 +157,14 @@ nonzero results after partial failure (V1.7). Unit tests also verify that batch
 classification applies acknowledgment flags and rejects `-n` or `--ce-name` with `--all`.
 
 After `make migration/e2e-fixture-setup`, run
-`make migration/test-e2e-acknowledgments` for V2.1–V2.10. Each of twelve cases
+`make migration/test-e2e-acknowledgments` for V2.1–V2.10, including V2.1a. Each of thirteen cases
 replays the ecr-secret snapshot independently. Soft checks cover scoped target
 namespaces, a namespace selector, OperatorCondition usage, OLMv0 API access,
 a scoped ServiceAccount, Subscription state, and CSV phase. Each refuses
 conversion without the matching flag (including an unrelated-flag attempt),
 accepts a non-mutating preview with the correct flag, then converts and verifies
 the CE's audit annotation. Dependency properties, APIServices, generated dependency
-Subscriptions, and missing catalog packages remain blocked even with all soft
+Subscriptions, missing catalog packages, and CSVs without AllNamespaces support remain blocked even with all soft
 acknowledgments enabled. Refusals preserve source Subscription/CSV/OperatorGroup
 identity and content and create no CE/COS. The fixture CI job collects each case's
 instrumented CLI coverage under `coverage/fixture/acknowledgments`, automatically

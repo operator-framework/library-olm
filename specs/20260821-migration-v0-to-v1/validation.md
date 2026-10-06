@@ -24,7 +24,8 @@ with both OLMv0 and OLMv1 installed.
 For each, a fixture operator produces the expected state + reason, and setting the override
 flag flips it to `Eligible`:
 
-- **V2.1 (C1)** OperatorGroup with `targetNamespaces` → Ineligible "watch scope"; `--acknowledge-watch-scope-change` → Eligible (migrates to AllNamespaces).
+- **V2.1 (C1)** OperatorGroup with `targetNamespaces` → Ineligible "watch scope"; `--acknowledge-watch-scope-change` → Eligible if the CSV supports AllNamespaces (migrates to AllNamespaces).
+- **V2.1a (C1a)** CSV with `AllNamespaces` install mode absent or `supported: false` → Ineligible even with `--acknowledge-watch-scope-change`; a scoped OperatorGroup with an AllNamespaces-capable CSV becomes eligible when the scope change is acknowledged.
 - **V2.2 (C2, hard)** CSV with `olm.package.required` → Ineligible "dependencies"; no override.
 - **V2.3 (C2, hard)** CSV with `olm.gvk.required` → Ineligible "dependencies"; no override.
 - **V2.4 (C3, hard, temporary)** CSV with owned APIServices → Ineligible "apiservices"; no override. Removed entirely when OPRUN-4723 merges.
@@ -123,7 +124,7 @@ flag flips it to `Eligible`:
 | R2.5 CE annotations | V3.6 |
 | R2.6 `--backup <directory>` flag | V3.18 |
 | R2.7 Boxcutter phase 2 | Prerequisite note (PLAN) |
-| R3 C1–C10 | V2.1–V2.11 |
+| R3 C1–C10 (including C1a) | V2.1–V2.11 (including V2.1a) |
 | R4 Subscription fields | V3.1–V3.3, V3.12, V4.4 |
 | R5 Resource collection strategy | V1.3, V4.2, V4.6 |
 | R6 OperatorGroup fields | V2.1, V2.7, V3.5, V3.7, V4.7 |
