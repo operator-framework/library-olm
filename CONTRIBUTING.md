@@ -17,9 +17,13 @@ Use the Go version declared in [`go.mod`](go.mod). Tool versions are pinned thro
 ```sh
 make build                 # build the example CLIs into bin/
 make build-all             # compile all packages
+make image/test            # test the image packages
 make migration/test-unit   # test migration packages and collect coverage
 make verify                # tidy, format, vet, lint, and check the diff
 ```
+
+Image package build and test targets use containers/image's pure-Go
+`containers_image_openpgp` implementation, avoiding a system GPGME dependency.
 
 For migration E2E changes, follow the independent fixture and live-cluster run orders in the [E2E guide](specs/20260821-migration-v0-to-v1/e2e.md). Fixture setup uses committed snapshots and no OLMv0 controller; live setup installs real operators through OLMv0. Do not refresh committed fixtures as a side effect of ordinary tests. Remove only the dedicated Kind cluster you created when finished.
 

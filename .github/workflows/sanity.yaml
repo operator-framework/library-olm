@@ -16,6 +16,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: "go.mod"
+      - name: Test image packages
+        run: make image/test
       - name: Run verification checks
         run: make verify
 
