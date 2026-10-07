@@ -195,6 +195,22 @@ func TestContainersImageRepository_Resolve(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	t.Run("DigestPinnedReferenceRejectsMismatchedManifest", func(t *testing.T) {
+		src := newFakeImageSource()
+		manifestData := testutil.MustJSON(ocispecv1.Manifest{
+			Config: ocispecv1.Descriptor{Digest: digest.FromString("cfg")},
+		})
+		src.setPrimaryManifest(manifestData)
+		ref := src.ref.(*fakeImageReference)
+		pinnedRef, err := reference.WithDigest(ref.ref, digest.FromString("different"))
+		require.NoError(t, err)
+		ref.ref = pinnedRef
+
+		client := &ContainersImageRepository{imageSource: src, policyContext: skipVerificationPolicyContext(t)}
+		_, err = client.Resolve(ctx)
+		require.ErrorContains(t, err, "Manifest does not match provided manifest digest")
+	})
+
 	t.Run("ErrorComputingManifestDigest", func(t *testing.T) {
 		src := newFakeImageSource()
 		// GuessMIMEType detects DockerV2Schema1Signed due to the "signatures" key,
@@ -233,6 +249,19 @@ func TestContainersImageRepository_FetchManifest(t *testing.T) {
 
 		_, _, err := client.FetchManifest(ctx, ocispecv1.Descriptor{Digest: digest.FromString("missing")})
 		require.Error(t, err)
+	})
+
+	t.Run("RejectsMismatchedChildManifestWithoutSignatureVerification", func(t *testing.T) {
+		src := newFakeImageSource()
+		manifestData := testutil.MustJSON(ocispecv1.Manifest{
+			Config: ocispecv1.Descriptor{Digest: digest.FromString("cfg")},
+		})
+		requestedDigest := digest.FromString("different")
+		src.setManifest(requestedDigest, manifestData, ocispecv1.MediaTypeImageManifest)
+		client := &ContainersImageRepository{imageSource: src, policyContext: skipVerificationPolicyContext(t)}
+
+		_, _, err := client.FetchManifest(ctx, ocispecv1.Descriptor{Digest: requestedDigest})
+		require.ErrorContains(t, err, "Manifest does not match provided manifest digest")
 	})
 }
 

@@ -157,12 +157,12 @@ func (c *ContainersImageRepository) FetchManifest(ctx context.Context, desc ocis
 }
 
 func (c *ContainersImageRepository) getManifest(ctx context.Context, instanceDigest *digest.Digest) ([]byte, string, error) {
-	manifestBytes, mediaType, err := c.imageSource.GetManifest(ctx, instanceDigest)
+	unparsed := ctrimage.UnparsedInstance(c.imageSource, instanceDigest)
+	manifestBytes, mediaType, err := unparsed.Manifest(ctx)
 	if err != nil {
 		return nil, "", err
 	}
 
-	unparsed := ctrimage.UnparsedInstance(c.imageSource, instanceDigest)
 	if allowed, err := c.policyContext.IsRunningImageAllowed(ctx, unparsed); !allowed || err != nil {
 		manifestDigest, digestErr := manifest.Digest(manifestBytes)
 		if digestErr != nil {
