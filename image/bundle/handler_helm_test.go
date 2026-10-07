@@ -39,7 +39,7 @@ func buildSignedHelmManifest(t *testing.T, repo *testutil.FakeRepo) (ocispecv1.D
 
 	provDesc := repo.AddBlob(provData, HelmProvenanceMediaType)
 	return buildHelmManifest(repo,
-		`{"name":"signtest","version":"0.1.0"}`,
+		`{"apiVersion":"v2","name":"signtest","version":"0.1.0"}`,
 		chartData,
 		provDesc,
 	)
@@ -57,7 +57,7 @@ func TestHelmChartHandler_Matches(t *testing.T) {
 
 	t.Run("HelmConfigMediaType", func(t *testing.T) {
 		repo := testutil.NewFakeRepo()
-		configDesc := repo.AddBlob([]byte(`{"name":"mychart","version":"0.1.0"}`), HelmConfigMediaType)
+		configDesc := repo.AddBlob([]byte(`{"apiVersion":"v2","name":"mychart","version":"0.1.0"}`), HelmConfigMediaType)
 		manifestBytes := testutil.BuildManifest(configDesc)
 		desc := repo.AddManifest(manifestBytes, ocispecv1.MediaTypeImageManifest)
 
@@ -69,7 +69,7 @@ func TestHelmChartHandler_Matches(t *testing.T) {
 
 	t.Run("DockerManifest/HelmConfig", func(t *testing.T) {
 		repo := testutil.NewFakeRepo()
-		configDesc := repo.AddBlob([]byte(`{"name":"mychart","version":"0.1.0"}`), HelmConfigMediaType)
+		configDesc := repo.AddBlob([]byte(`{"apiVersion":"v2","name":"mychart","version":"0.1.0"}`), HelmConfigMediaType)
 		manifestBytes := testutil.BuildManifest(configDesc)
 		desc := repo.AddManifest(manifestBytes, manifest.DockerV2Schema2MediaType)
 
@@ -114,7 +114,7 @@ func TestHelmChartHandler_Discover(t *testing.T) {
 
 	t.Run("ReturnsAllDescriptors", func(t *testing.T) {
 		repo := testutil.NewFakeRepo()
-		configDesc := repo.AddBlob([]byte(`{"name":"mychart","version":"0.1.0"}`), HelmConfigMediaType)
+		configDesc := repo.AddBlob([]byte(`{"apiVersion":"v2","name":"mychart","version":"0.1.0"}`), HelmConfigMediaType)
 		chartLayerDesc := repo.AddBlob([]byte("chart-data"), HelmChartContentMediaType)
 
 		manifestBytes := testutil.BuildManifest(configDesc, chartLayerDesc)
@@ -132,7 +132,7 @@ func TestHelmChartHandler_Discover(t *testing.T) {
 
 	t.Run("IncludesProvenanceLayer", func(t *testing.T) {
 		repo := testutil.NewFakeRepo()
-		configDesc := repo.AddBlob([]byte(`{"name":"mychart","version":"0.1.0"}`), HelmConfigMediaType)
+		configDesc := repo.AddBlob([]byte(`{"apiVersion":"v2","name":"mychart","version":"0.1.0"}`), HelmConfigMediaType)
 		chartLayerDesc := repo.AddBlob([]byte("chart-data"), HelmChartContentMediaType)
 		provDesc := repo.AddBlob([]byte("prov-data"), HelmProvenanceMediaType)
 
@@ -160,7 +160,7 @@ func TestHelmChartHandler_Unpack(t *testing.T) {
 	t.Run("WritesChartPackage", func(t *testing.T) {
 		repo := testutil.NewFakeRepo()
 		desc, manifestBytes := buildHelmManifest(repo,
-			`{"name":"mychart","version":"0.1.0"}`,
+			`{"apiVersion":"v2","name":"mychart","version":"0.1.0"}`,
 			[]byte("fake-tgz-content"),
 		)
 
@@ -171,11 +171,54 @@ func TestHelmChartHandler_Unpack(t *testing.T) {
 		testutil.AssertFileContent(t, filepath.Join(dest, "mychart-0.1.0.tgz"), "fake-tgz-content")
 	})
 
+	t.Run("RejectsPathTraversalMetadata", func(t *testing.T) {
+		tests := []struct {
+			name         string
+			config       string
+			outsideChart string
+		}{
+			{
+				name:         "parent path in name",
+				config:       `{"apiVersion":"v2","name":"../outside","version":"0.1.0"}`,
+				outsideChart: "outside-0.1.0.tgz",
+			},
+			{
+				name:   "current path in name",
+				config: `{"apiVersion":"v2","name":"./inside","version":"0.1.0"}`,
+			},
+			{
+				name:   "parent path in version",
+				config: `{"apiVersion":"v2","name":"mychart","version":"../../../outside"}`,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				repo := testutil.NewFakeRepo()
+				desc, manifestBytes := buildHelmManifest(repo, tt.config, []byte("chart-data"))
+				root := t.TempDir()
+				dest := filepath.Join(root, "dest")
+				require.NoError(t, os.Mkdir(dest, 0755))
+
+				h := &HelmChartHandler{}
+				err := h.Unpack(ctx, repo, desc, manifestBytes, dest)
+				require.ErrorContains(t, err, "validating helm config")
+
+				entries, err := os.ReadDir(dest)
+				require.NoError(t, err)
+				assert.Empty(t, entries)
+				if tt.outsideChart != "" {
+					testutil.AssertFileNotExists(t, filepath.Join(root, tt.outsideChart))
+				}
+			})
+		}
+	})
+
 	t.Run("VerifyNever/SkipsProvenance", func(t *testing.T) {
 		repo := testutil.NewFakeRepo()
 		provDesc := repo.AddBlob([]byte("provenance-data"), HelmProvenanceMediaType)
 		desc, manifestBytes := buildHelmManifest(repo,
-			`{"name":"mychart","version":"0.1.0"}`,
+			`{"apiVersion":"v2","name":"mychart","version":"0.1.0"}`,
 			[]byte("chart-data"),
 			provDesc,
 		)
@@ -191,7 +234,7 @@ func TestHelmChartHandler_Unpack(t *testing.T) {
 	t.Run("VerifyNever/NoProvenance", func(t *testing.T) {
 		repo := testutil.NewFakeRepo()
 		desc, manifestBytes := buildHelmManifest(repo,
-			`{"name":"mychart","version":"0.1.0"}`,
+			`{"apiVersion":"v2","name":"mychart","version":"0.1.0"}`,
 			[]byte("chart-data"),
 		)
 
@@ -220,7 +263,7 @@ func TestHelmChartHandler_Unpack(t *testing.T) {
 	t.Run("VerifyAlways/NoProvenance", func(t *testing.T) {
 		repo := testutil.NewFakeRepo()
 		desc, manifestBytes := buildHelmManifest(repo,
-			`{"name":"mychart","version":"0.1.0"}`,
+			`{"apiVersion":"v2","name":"mychart","version":"0.1.0"}`,
 			[]byte("chart-data"),
 		)
 
@@ -240,7 +283,7 @@ func TestHelmChartHandler_Unpack(t *testing.T) {
 
 		badProvDesc := repo.AddBlob([]byte("not-a-valid-signature"), HelmProvenanceMediaType)
 		desc, manifestBytes := buildHelmManifest(repo,
-			`{"name":"signtest","version":"0.1.0"}`,
+			`{"apiVersion":"v2","name":"signtest","version":"0.1.0"}`,
 			chartData,
 			badProvDesc,
 		)
@@ -272,7 +315,7 @@ func TestHelmChartHandler_Unpack(t *testing.T) {
 	t.Run("VerifyIfPossible/NoProvenance", func(t *testing.T) {
 		repo := testutil.NewFakeRepo()
 		desc, manifestBytes := buildHelmManifest(repo,
-			`{"name":"mychart","version":"0.1.0"}`,
+			`{"apiVersion":"v2","name":"mychart","version":"0.1.0"}`,
 			[]byte("chart-data"),
 		)
 
@@ -294,7 +337,7 @@ func TestHelmChartHandler_Unpack(t *testing.T) {
 
 		badProvDesc := repo.AddBlob([]byte("not-a-valid-signature"), HelmProvenanceMediaType)
 		desc, manifestBytes := buildHelmManifest(repo,
-			`{"name":"signtest","version":"0.1.0"}`,
+			`{"apiVersion":"v2","name":"signtest","version":"0.1.0"}`,
 			chartData,
 			badProvDesc,
 		)
@@ -313,7 +356,7 @@ func TestHelmChartHandler_Unpack(t *testing.T) {
 		// Use invalid provenance data — VerifyLater should not attempt verification
 		badProvDesc := repo.AddBlob([]byte("unverified-prov"), HelmProvenanceMediaType)
 		desc, manifestBytes := buildHelmManifest(repo,
-			`{"name":"mychart","version":"0.1.0"}`,
+			`{"apiVersion":"v2","name":"mychart","version":"0.1.0"}`,
 			[]byte("chart-data"),
 			badProvDesc,
 		)
@@ -329,7 +372,7 @@ func TestHelmChartHandler_Unpack(t *testing.T) {
 	t.Run("VerifyLater/NoProvenance", func(t *testing.T) {
 		repo := testutil.NewFakeRepo()
 		desc, manifestBytes := buildHelmManifest(repo,
-			`{"name":"mychart","version":"0.1.0"}`,
+			`{"apiVersion":"v2","name":"mychart","version":"0.1.0"}`,
 			[]byte("chart-data"),
 		)
 
@@ -341,7 +384,7 @@ func TestHelmChartHandler_Unpack(t *testing.T) {
 
 	t.Run("NoChartContentLayer", func(t *testing.T) {
 		repo := testutil.NewFakeRepo()
-		configDesc := repo.AddBlob([]byte(`{"name":"mychart","version":"0.1.0"}`), HelmConfigMediaType)
+		configDesc := repo.AddBlob([]byte(`{"apiVersion":"v2","name":"mychart","version":"0.1.0"}`), HelmConfigMediaType)
 		provLayer := repo.AddBlob([]byte("provenance"), HelmProvenanceMediaType)
 
 		manifestBytes := testutil.BuildManifest(configDesc, provLayer)
@@ -355,7 +398,7 @@ func TestHelmChartHandler_Unpack(t *testing.T) {
 
 	t.Run("ChartLayerFetchFails", func(t *testing.T) {
 		repo := testutil.NewFakeRepo()
-		configDesc := repo.AddBlob([]byte(`{"name":"mychart","version":"0.1.0"}`), HelmConfigMediaType)
+		configDesc := repo.AddBlob([]byte(`{"apiVersion":"v2","name":"mychart","version":"0.1.0"}`), HelmConfigMediaType)
 
 		missingLayerDesc := ocispecv1.Descriptor{
 			MediaType: HelmChartContentMediaType,
@@ -375,7 +418,7 @@ func TestHelmChartHandler_Unpack(t *testing.T) {
 	t.Run("ProvenanceFetchFails", func(t *testing.T) {
 		repo := testutil.NewFakeRepo()
 		chartLayerDesc := repo.AddBlob([]byte("chart-data"), HelmChartContentMediaType)
-		configDesc := repo.AddBlob([]byte(`{"name":"mychart","version":"0.1.0"}`), HelmConfigMediaType)
+		configDesc := repo.AddBlob([]byte(`{"apiVersion":"v2","name":"mychart","version":"0.1.0"}`), HelmConfigMediaType)
 
 		missingProvDesc := ocispecv1.Descriptor{
 			MediaType: HelmProvenanceMediaType,

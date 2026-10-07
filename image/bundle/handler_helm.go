@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	ocispecv1 "github.com/opencontainers/image-spec/specs-go/v1"
+	chart "helm.sh/helm/v4/pkg/chart/v2"
 	"helm.sh/helm/v4/pkg/downloader"
 
 	"github.com/operator-framework/library-olm/image"
@@ -28,12 +29,6 @@ const (
 	// HelmProvenanceMediaType is the layer media type containing the provenance file.
 	HelmProvenanceMediaType = "application/vnd.cncf.helm.chart.provenance.v1.prov"
 )
-
-// helmConfig is the subset of the Helm OCI config blob needed for unpacking.
-type helmConfig struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
 
 // HelmChartHandler is an [image.Handler] that unpacks Helm chart OCI artifacts.
 // It matches OCI manifests whose config descriptor has media type
@@ -129,16 +124,19 @@ func (h *HelmChartHandler) Unpack(ctx context.Context, repo image.Repository, _ 
 	return nil
 }
 
-func fetchHelmConfig(ctx context.Context, repo image.Repository, desc ocispecv1.Descriptor) (*helmConfig, error) {
+func fetchHelmConfig(ctx context.Context, repo image.Repository, desc ocispecv1.Descriptor) (*chart.Metadata, error) {
 	reader, err := repo.FetchBlob(ctx, desc)
 	if err != nil {
 		return nil, fmt.Errorf("fetching helm config: %w", err)
 	}
 
-	var cfg helmConfig
+	var cfg chart.Metadata
 	decodeErr := json.NewDecoder(reader).Decode(&cfg)
 	if err := errors.Join(decodeErr, reader.Close()); err != nil {
 		return nil, fmt.Errorf("reading helm config: %w", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("validating helm config: %w", err)
 	}
 	return &cfg, nil
 }

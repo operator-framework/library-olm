@@ -56,7 +56,7 @@ func ExampleHelmChartHandler() {
 	repo := testutil.NewFakeRepo()
 
 	configDesc := repo.AddBlob(
-		testutil.MustJSON(map[string]string{"name": "mychart", "version": "0.1.0"}),
+		testutil.MustJSON(map[string]string{"apiVersion": "v2", "name": "mychart", "version": "0.1.0"}),
 		imgbundle.HelmConfigMediaType,
 	)
 	chartDesc := repo.AddBlob([]byte("fake-tgz-content"), imgbundle.HelmChartContentMediaType)
