@@ -452,11 +452,27 @@ func (cm *CatalogMigrator) handleCatalogSourceDeletion(ctx context.Context, cs *
 			return
 		}
 	}
+	var current operatorsv1alpha1.CatalogSource
+	if err := cm.Client.Get(ctx, client.ObjectKeyFromObject(cs), &current); err != nil {
+		if apierrors.IsNotFound(err) {
+			result.Notes = append(result.Notes, "CatalogSource already absent")
+			return
+		}
+		result.Status = "error"
+		result.Reason = fmt.Sprintf("%s; failed to get CatalogSource before deletion: %v", result.Reason, err)
+		return
+	}
+	if current.Spec.SourceType != operatorsv1alpha1.SourceTypeGrpc || current.Spec.Image != cs.Spec.Image || (cs.UID != "" && current.UID != cs.UID) {
+		result.Status = "error"
+		result.Reason = fmt.Sprintf("%s; CatalogSource changed since migration began; refusing to delete it", result.Reason)
+		return
+	}
 	if opts.DryRun {
 		result.Notes = append(result.Notes, "would delete unreferenced CatalogSource")
 		return
 	}
-	if err := cm.Client.Delete(ctx, cs); err != nil && !apierrors.IsNotFound(err) {
+	uid, resourceVersion := current.UID, current.ResourceVersion
+	if err := cm.Client.Delete(ctx, &current, client.Preconditions{UID: &uid, ResourceVersion: &resourceVersion}); err != nil && !apierrors.IsNotFound(err) {
 		result.Status = "error"
 		result.Reason = fmt.Sprintf("%s; failed to delete unreferenced CatalogSource: %v", result.Reason, err)
 		return

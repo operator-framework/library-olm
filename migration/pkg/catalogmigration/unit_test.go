@@ -397,14 +397,82 @@ func TestCatalogSourceDeletionTreatsNotFoundAsSuccess(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(catalogMigrationScheme(t)).Build()
 	result := CatalogMigrationResult{Status: "adopted", Reason: "matching catalog adopted"}
 	NewCatalogMigrator(c).handleCatalogSourceDeletion(ctx, source, "tenant/catalog", CatalogMigratorOptions{DeleteCatalogSource: true}, &result)
-	if result.Status != "adopted" || !containsNote(result.Notes, "deleted unreferenced CatalogSource") {
+	if result.Status != "adopted" || !containsNote(result.Notes, "CatalogSource already absent") {
 		t.Fatalf("already-deleted source was reported as an error: %#v", result)
 	}
 
+	if err := c.Create(ctx, source); err != nil {
+		t.Fatal(err)
+	}
 	result = CatalogMigrationResult{Status: "adopted", Reason: "matching catalog adopted"}
 	NewCatalogMigrator(catalogDeleteErrorClient{Client: c}).handleCatalogSourceDeletion(ctx, source, "tenant/catalog", CatalogMigratorOptions{DeleteCatalogSource: true}, &result)
 	if result.Status != "error" || !strings.Contains(result.Reason, "delete forbidden") {
 		t.Fatalf("non-NotFound delete error was ignored: %#v", result)
+	}
+}
+
+type changingCatalogSourceClient struct {
+	client.Client
+	source *operatorsv1alpha1.CatalogSource
+}
+
+func (c *changingCatalogSourceClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if err := c.Client.Patch(ctx, obj, patch, opts...); err != nil {
+		return err
+	}
+	current := &operatorsv1alpha1.CatalogSource{}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(c.source), current); err != nil {
+		return err
+	}
+	current.Spec.Image = "registry.example/replacement:1"
+	return c.Update(ctx, current)
+}
+
+func TestMigrateCatalogsRetainsChangedCatalogSource(t *testing.T) {
+	ctx := t.Context()
+	source := imageCatalogSource("catalog", "tenant", "registry.example/catalog:1")
+	existing := &ocv1.ClusterCatalog{
+		ObjectMeta: metav1.ObjectMeta{Name: "catalog"},
+		Spec:       ocv1.ClusterCatalogSpec{Source: ocv1.CatalogSource{Image: &ocv1.ImageSource{Ref: source.Spec.Image}}},
+	}
+	c := &changingCatalogSourceClient{Client: fake.NewClientBuilder().WithScheme(catalogMigrationScheme(t)).WithObjects(source, existing).Build(), source: source}
+
+	results, err := NewCatalogMigrator(c).MigrateCatalogs(ctx, CatalogMigratorOptions{DeleteCatalogSource: true})
+	if err != nil || len(results) != 1 || results[0].Status != "error" || !strings.Contains(results[0].Reason, "CatalogSource changed") {
+		t.Fatalf("changed source result = %#v, %v", results, err)
+	}
+	var retained operatorsv1alpha1.CatalogSource
+	if err := c.Get(ctx, client.ObjectKeyFromObject(source), &retained); err != nil || retained.Spec.Image != "registry.example/replacement:1" {
+		t.Fatalf("changed CatalogSource was not retained: %#v, %v", retained.Spec, err)
+	}
+}
+
+type racingCatalogDeleteClient struct{ client.Client }
+
+func (c racingCatalogDeleteClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	current := &operatorsv1alpha1.CatalogSource{}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(obj), current); err != nil {
+		return err
+	}
+	current.Spec.Image = "registry.example/replacement:1"
+	if err := c.Update(ctx, current); err != nil {
+		return err
+	}
+	return c.Client.Delete(ctx, obj, opts...)
+}
+
+func TestCatalogSourceDeletionRejectsChangeAfterFreshRead(t *testing.T) {
+	ctx := t.Context()
+	source := imageCatalogSource("catalog", "tenant", "registry.example/catalog:1")
+	c := fake.NewClientBuilder().WithScheme(catalogMigrationScheme(t)).WithObjects(source).Build()
+	result := CatalogMigrationResult{Status: "adopted", Reason: "matching catalog adopted"}
+	NewCatalogMigrator(racingCatalogDeleteClient{Client: c}).handleCatalogSourceDeletion(ctx, source, "tenant/catalog", CatalogMigratorOptions{DeleteCatalogSource: true}, &result)
+	if result.Status != "error" || !strings.Contains(result.Reason, "failed to delete") {
+		t.Fatalf("racing source deletion result = %#v", result)
+	}
+	var retained operatorsv1alpha1.CatalogSource
+	if err := c.Get(ctx, client.ObjectKeyFromObject(source), &retained); err != nil || retained.Spec.Image != "registry.example/replacement:1" {
+		t.Fatalf("updated CatalogSource was not retained: %#v, %v", retained.Spec, err)
 	}
 }
 
