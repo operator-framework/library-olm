@@ -113,7 +113,7 @@ func (m *Migrator) ScanAllSubscriptionsWithOptions(ctx context.Context, defaults
 		result.Checks = append(result.Checks, readiness.Checks...)
 
 		// Get CSV for compatibility checks
-		_, csv, _, err := m.GetCSVAndInstallPlan(ctx, opts)
+		_, csv, ip, err := m.GetCSVAndInstallPlan(ctx, opts)
 		if err != nil {
 			result.Status = OperatorStatusIneligible
 			result.Reason = fmt.Sprintf("failed to get CSV: %v", err)
@@ -138,15 +138,19 @@ func (m *Migrator) ScanAllSubscriptionsWithOptions(ctx context.Context, defaults
 
 		// Merge readiness + compat failed checks
 		result.FailedChecks = append(readiness.FailedChecks(), compat.FailedChecks()...)
+		bundleInfo, err := m.validatedBundleInfo(ctx, opts, csv, ip)
+		if err != nil {
+			catalogCheck := CheckResult{
+				Name: "CatalogSource type", Passed: false, Message: err.Error(),
+			}
+			result.Checks = append(result.Checks, catalogCheck)
+			result.FailedChecks = append(result.FailedChecks, catalogCheck)
+		}
 
 		// C7: catalog availability (hard check — no override).
 		// Only run when readiness+compat pass to avoid noisy catalog errors for clearly ineligible operators.
 		if len(result.FailedChecks) == 0 { //nolint:nestif
-			catalogName, catalogErr := m.ResolveClusterCatalog(ctx, &MigrationInfo{
-				PackageName: sub.Spec.Package,
-				Channel:     sub.Spec.Channel,
-				Version:     result.Version,
-			}, m.RESTConfig)
+			catalogName, catalogErr := m.ResolveClusterCatalog(ctx, bundleInfo, m.RESTConfig)
 			if catalogErr != nil {
 				catalogCheck := CheckResult{
 					Name:    "Catalog availability",
@@ -228,7 +232,7 @@ func (m *Migrator) ScanSubscription(ctx context.Context, opts Options) (*Operato
 	}
 	result.Checks = append(result.Checks, readiness.Checks...)
 
-	sub, csv, _, err := m.GetCSVAndInstallPlan(ctx, opts)
+	sub, csv, ip, err := m.GetCSVAndInstallPlan(ctx, opts)
 	if err != nil {
 		result.Status = OperatorStatusIneligible
 		result.Reason = err.Error()
@@ -251,6 +255,14 @@ func (m *Migrator) ScanSubscription(ctx context.Context, opts Options) (*Operato
 	result.Checks = append(result.Checks, compat.Checks...)
 
 	result.FailedChecks = append(readiness.FailedChecks(), compat.FailedChecks()...)
+	bundleInfo, err := m.validatedBundleInfo(ctx, opts, csv, ip)
+	if err != nil {
+		catalogCheck := CheckResult{
+			Name: "CatalogSource type", Passed: false, Message: err.Error(),
+		}
+		result.Checks = append(result.Checks, catalogCheck)
+		result.FailedChecks = append(result.FailedChecks, catalogCheck)
+	}
 	if len(result.FailedChecks) > 0 {
 		result.Status = OperatorStatusIneligible
 		result.Reason = fmt.Sprintf("%d check(s) failed", len(result.FailedChecks))
@@ -258,11 +270,7 @@ func (m *Migrator) ScanSubscription(ctx context.Context, opts Options) (*Operato
 	}
 
 	// C7: catalog availability (hard check — no override)
-	catalogName, catalogErr := m.ResolveClusterCatalog(ctx, &MigrationInfo{
-		PackageName: result.PackageName,
-		Channel:     sub.Spec.Channel,
-		Version:     result.Version,
-	}, m.RESTConfig)
+	catalogName, catalogErr := m.ResolveClusterCatalog(ctx, bundleInfo, m.RESTConfig)
 	if catalogErr != nil {
 		catalogCheck := CheckResult{
 			Name:    "Catalog availability",

@@ -152,6 +152,7 @@ annotation, R2.5) or **hard** (must be remediated first — no override).
 | C7 | Catalog availability *(hard)* | Package not served by any `ClusterCatalog` | none — run `migrate-catalogs-v0-to-v1` first |
 | C8 | Steady state | CSV not `Succeeded`, or Subscription state not `AtLatestKnown`/`UpgradePending` | `--acknowledge-not-steady-state` |
 | C9 | Not an OLMv0-managed dependency *(hard)* | Subscription carries the `olm.generated-by` annotation — the operator was auto-installed as a dependency of another operator | none — operators that are OLMv0-managed dependencies must not be individually migrated; they are part of a dependency graph that OLMv0 owns and OLMv0 would attempt to reinstall them if their Subscription is removed |
+| C10 | Image-backed source CatalogSources *(hard)* | Either the Subscription's referenced CatalogSource or the effective CatalogSource selected by an InstallPlan bundle lookup is missing, is not `grpc`, or has no `spec.image` | none — both references must be image-backed; a matching package in another ClusterCatalog does not make either source migratable |
 
 ---
 
