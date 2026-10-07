@@ -203,43 +203,44 @@ func (b *Backup) SaveToDisk(dir string) error {
 		plans = append(plans, b.InstallPlan)
 	}
 	plans = append(plans, b.InstallPlans...)
-	if len(plans) > 0 {
-		ipDir := filepath.Join(dir, "installplans")
-		if err := os.MkdirAll(ipDir, 0o750); err != nil {
-			return fmt.Errorf("failed to create installplans directory: %w", err)
+	if len(plans) == 0 {
+		return nil
+	}
+	ipDir := filepath.Join(dir, "installplans")
+	if err := os.MkdirAll(ipDir, 0o750); err != nil {
+		return fmt.Errorf("failed to create installplans directory: %w", err)
+	}
+	namespacesByName := make(map[string]map[string]struct{})
+	for _, plan := range plans {
+		if plan == nil {
+			continue
 		}
-		namespacesByName := make(map[string]map[string]struct{})
-		for _, plan := range plans {
-			if plan == nil {
-				continue
-			}
-			if namespacesByName[plan.Name] == nil {
-				namespacesByName[plan.Name] = make(map[string]struct{})
-			}
-			namespacesByName[plan.Name][plan.Namespace] = struct{}{}
+		if namespacesByName[plan.Name] == nil {
+			namespacesByName[plan.Name] = make(map[string]struct{})
 		}
-		seen := make(map[types.NamespacedName]bool)
-		for _, plan := range plans {
-			if plan == nil {
-				continue
+		namespacesByName[plan.Name][plan.Namespace] = struct{}{}
+	}
+	seen := make(map[types.NamespacedName]bool)
+	for _, plan := range plans {
+		if plan == nil {
+			continue
+		}
+		key := types.NamespacedName{Namespace: plan.Namespace, Name: plan.Name}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		installPlan := plan.DeepCopy()
+		installPlan.TypeMeta = metav1.TypeMeta{APIVersion: "operators.coreos.com/v1alpha1", Kind: "InstallPlan"}
+		planDir := ipDir
+		if len(namespacesByName[plan.Name]) > 1 {
+			planDir = filepath.Join(ipDir, plan.Namespace)
+			if err := os.MkdirAll(planDir, 0o750); err != nil {
+				return fmt.Errorf("failed to create installplan namespace directory: %w", err)
 			}
-			key := types.NamespacedName{Namespace: plan.Namespace, Name: plan.Name}
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			installPlan := plan.DeepCopy()
-			installPlan.TypeMeta = metav1.TypeMeta{APIVersion: "operators.coreos.com/v1alpha1", Kind: "InstallPlan"}
-			planDir := ipDir
-			if len(namespacesByName[plan.Name]) > 1 {
-				planDir = filepath.Join(ipDir, plan.Namespace)
-				if err := os.MkdirAll(planDir, 0o750); err != nil {
-					return fmt.Errorf("failed to create installplan namespace directory: %w", err)
-				}
-			}
-			if err := writeYAMLFile(filepath.Join(planDir, plan.Name+".yaml"), installPlan); err != nil {
-				return fmt.Errorf("failed to write installplan: %w", err)
-			}
+		}
+		if err := writeYAMLFile(filepath.Join(planDir, plan.Name+".yaml"), installPlan); err != nil {
+			return fmt.Errorf("failed to write installplan: %w", err)
 		}
 	}
 	return nil
