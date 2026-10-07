@@ -182,7 +182,8 @@ but cannot delete the Subscription: the CLI reaches that denial only after all
 backup files exist, with source resources and OLMv1 management unchanged.
 An extra associated plan is saved; an unrelated plan is excluded. Unit tests
 cover each filesystem failure, private file permissions, optional resources,
-snapshot isolation, and informational plan-list failures. Fixture CI collects
+exact manifest GVKs, snapshot isolation, informational plan-list failures, and
+same-name plans from different namespaces. Fixture CI collects
 CLI coverage under `coverage/fixture/backup`, included in combined reporting.
 
 1. The `migration-test` workflow runs unit coverage, fixture E2E, live-operator E2E, COS

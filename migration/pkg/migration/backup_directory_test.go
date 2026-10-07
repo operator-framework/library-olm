@@ -41,9 +41,16 @@ func TestBackupDirectoryManifestsAndIsolation(t *testing.T) {
 	if !reflect.DeepEqual(b, original) {
 		t.Fatal("disk serialization changed the recovery backup")
 	}
-	for path, expected := range map[string]client.Object{
-		"subscription.yaml": b.Subscription, "operatorgroup.yaml": b.OperatorGroup, "clusterserviceversion.yaml": b.ClusterServiceVersion,
-		"installplans/current.yaml": b.InstallPlan, "installplans/previous.yaml": previous,
+	for path, expected := range map[string]struct {
+		object     client.Object
+		apiVersion string
+		kind       string
+	}{
+		"subscription.yaml":          {b.Subscription, "operators.coreos.com/v1alpha1", "Subscription"},
+		"operatorgroup.yaml":         {b.OperatorGroup, "operators.coreos.com/v1", "OperatorGroup"},
+		"clusterserviceversion.yaml": {b.ClusterServiceVersion, "operators.coreos.com/v1alpha1", "ClusterServiceVersion"},
+		"installplans/current.yaml":  {b.InstallPlan, "operators.coreos.com/v1alpha1", "InstallPlan"},
+		"installplans/previous.yaml": {previous, "operators.coreos.com/v1alpha1", "InstallPlan"},
 	} {
 		data, err := os.ReadFile(filepath.Join(dir, path))
 		if err != nil {
@@ -53,11 +60,11 @@ func TestBackupDirectoryManifestsAndIsolation(t *testing.T) {
 		if err := yaml.Unmarshal(data, &document); err != nil {
 			t.Fatal(err)
 		}
-		if document["apiVersion"] == "" || document["kind"] == "" {
-			t.Fatalf("manifest has no GVK: %s", path)
+		if document["apiVersion"] != expected.apiVersion || document["kind"] != expected.kind {
+			t.Fatalf("manifest %s has GVK %v/%v, want %s/%s", path, document["apiVersion"], document["kind"], expected.apiVersion, expected.kind)
 		}
 		metadata := document["metadata"].(map[string]interface{})
-		if metadata["name"] != expected.GetName() || metadata["namespace"] != expected.GetNamespace() {
+		if metadata["name"] != expected.object.GetName() || metadata["namespace"] != expected.object.GetNamespace() {
 			t.Fatalf("wrong backup identity in %s", path)
 		}
 		stat, err := os.Stat(filepath.Join(dir, path))
@@ -82,6 +89,44 @@ func TestBackupDirectoryManifestsAndIsolation(t *testing.T) {
 	files, err := os.ReadDir(filepath.Join(dir, "installplans"))
 	if err != nil || len(files) != 2 {
 		t.Fatalf("duplicate or missing plan files: %v, %v", files, err)
+	}
+}
+
+func TestBackupDirectoryKeepsSameNamePlansFromDifferentNamespaces(t *testing.T) {
+	b := diskBackupFixture()
+	b.InstallPlan.Namespace = "other"
+	sourcePlan := b.InstallPlan.DeepCopy()
+	sourcePlan.Namespace = "operators"
+	sourcePlan.Spec.ClusterServiceVersionNames = []string{"source.v1"}
+	duplicate := b.InstallPlan.DeepCopy()
+	duplicate.Spec.ClusterServiceVersionNames = []string{"stale.v1"}
+	previous := b.InstallPlan.DeepCopy()
+	previous.Name = "previous"
+	b.InstallPlans = []*operatorsv1alpha1.InstallPlan{sourcePlan, duplicate, previous}
+
+	dir := t.TempDir()
+	if err := b.SaveToDisk(dir); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]*operatorsv1alpha1.InstallPlan{
+		"installplans/operators/current.yaml": sourcePlan,
+		"installplans/other/current.yaml":     b.InstallPlan,
+		"installplans/previous.yaml":          previous,
+	} {
+		data, err := os.ReadFile(filepath.Join(dir, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var plan operatorsv1alpha1.InstallPlan
+		if err := yaml.Unmarshal(data, &plan); err != nil {
+			t.Fatal(err)
+		}
+		if plan.Name != want.Name || plan.Namespace != want.Namespace || !reflect.DeepEqual(plan.Spec, want.Spec) {
+			t.Fatalf("backup %s contains %s/%s with spec %+v, want %s/%s with spec %+v", path, plan.Namespace, plan.Name, plan.Spec, want.Namespace, want.Name, want.Spec)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "installplans/current.yaml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ambiguous same-name backup at installplans/current.yaml: %v", err)
 	}
 }
 

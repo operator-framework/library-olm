@@ -135,18 +135,25 @@ func TestFixtureBackupDirectory(t *testing.T) {
 		}
 		return
 	}
-	for path, expected := range map[string]client.Object{
-		"subscription.yaml": &sub, "operatorgroup.yaml": &groups.Items[0], "clusterserviceversion.yaml": &csv,
-		"installplans/" + originalPlan.Name + ".yaml": &originalPlan, "installplans/" + extraPlan.Name + ".yaml": extraPlan,
+	for path, expected := range map[string]struct {
+		object     client.Object
+		apiVersion string
+		kind       string
+	}{
+		"subscription.yaml":                           {&sub, "operators.coreos.com/v1alpha1", "Subscription"},
+		"operatorgroup.yaml":                          {&groups.Items[0], "operators.coreos.com/v1", "OperatorGroup"},
+		"clusterserviceversion.yaml":                  {&csv, "operators.coreos.com/v1alpha1", "ClusterServiceVersion"},
+		"installplans/" + originalPlan.Name + ".yaml": {&originalPlan, "operators.coreos.com/v1alpha1", "InstallPlan"},
+		"installplans/" + extraPlan.Name + ".yaml":    {extraPlan, "operators.coreos.com/v1alpha1", "InstallPlan"},
 	} {
-		assertBackupManifest(t, filepath.Join(dir, path), expected)
+		assertBackupManifest(t, filepath.Join(dir, path), expected.object, expected.apiVersion, expected.kind)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "installplans", unrelated.Name+".yaml")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("unrelated plan was backed up: %v", err)
 	}
 }
 
-func assertBackupManifest(t *testing.T, path string, expected client.Object) {
+func assertBackupManifest(t *testing.T, path string, expected client.Object, apiVersion, kind string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -168,8 +175,8 @@ func assertBackupManifest(t *testing.T, path string, expected client.Object) {
 	if !ok || metadata["name"] != expected.GetName() || metadata["namespace"] != expected.GetNamespace() || metadata["uid"] != string(expected.GetUID()) {
 		t.Fatalf("backup identity differs: %s", path)
 	}
-	if document["apiVersion"] == "" || document["kind"] == "" || !reflect.DeepEqual(document["spec"], original["spec"]) || !reflect.DeepEqual(document["status"], original["status"]) {
-		t.Fatalf("backup GVK/spec/status differs from captured source: %s", path)
+	if document["apiVersion"] != apiVersion || document["kind"] != kind || !reflect.DeepEqual(document["spec"], original["spec"]) || !reflect.DeepEqual(document["status"], original["status"]) {
+		t.Fatalf("backup GVK/spec/status differs from captured source: %s (got %v/%v, want %s/%s)", path, document["apiVersion"], document["kind"], apiVersion, kind)
 	}
 }
 

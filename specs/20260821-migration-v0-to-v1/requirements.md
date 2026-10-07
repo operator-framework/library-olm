@@ -126,9 +126,9 @@ The CE also carries:
 - `subscription.yaml` — full `Subscription` object
 - `operatorgroup.yaml` — full `OperatorGroup` object from the Subscription's namespace
 - `clusterserviceversion.yaml` — the installed `ClusterServiceVersion`
-- `installplans/` — one YAML per `InstallPlan` associated with the installed CSV
+- `installplans/` — the profiled current `InstallPlan` (if present), plus plans in the Subscription namespace whose `spec.clusterServiceVersionNames` or `status.plan[].resolving` names the installed CSV. Deduplicate by namespace and name. Write `<name>.yaml` normally; if the same plan name occurs in multiple namespaces, write each as `<namespace>/<name>.yaml` so neither is lost.
 
-The directory is created if it does not exist. Backup does not gate migration — it is informational and aids manual recovery if the CE annotation backup is insufficient. If the directory write fails, `convert` warns and continues (the CE annotation backup is the authoritative recovery path).
+The directory is created if it does not exist. Failure to list associated plans warns and retains the profiled current plan. Backup does not gate migration — it is informational and aids manual recovery if the CE annotation backup is insufficient. If the directory write fails, `convert` warns and continues (the CE annotation backup is the authoritative recovery path).
 
 **R2.7 — Boxcutter phase 2.** Upcoming boxcutter changes may introduce a
 `ClusterObjectDeployment` resource. The implementation must track this and be prepared to
