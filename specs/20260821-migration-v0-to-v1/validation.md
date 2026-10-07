@@ -34,7 +34,7 @@ flag flips it to `Eligible`:
 - **V2.8 (C7, hard)** Package absent from all ClusterCatalogs → Ineligible "package not found; run migrate-catalogs-v0-to-v1 first"; no override.
 - **V2.9 (C8)** CSV not `Succeeded` or Subscription not at `AtLatestKnown`/`UpgradePending` → Ineligible "not at steady state"; `--acknowledge-not-steady-state` → Eligible.
 - **V2.10 (C9, hard)** Subscription carries `olm.generated-by` → Ineligible "OLMv0-managed dependency"; no override.
-- **V2.11 (C10, hard)** Subscription references a `configmap`, `internal`, or address-only CatalogSource → Ineligible with the source reference and reason, even if another ClusterCatalog serves the package; dry-run and conversion return an error without deleting OLMv0 resources. A missing referenced CatalogSource is also rejected.
+- **V2.11 (C10, hard)** The Subscription's CatalogSource or an effective CatalogSource substituted by an InstallPlan bundle lookup is missing, `configmap`, `internal`, or address-only → Ineligible with the offending reference and reason, even if another ClusterCatalog serves the package. Dry-run and conversion refuse without deleting OLMv0 resources.
 
 ## V3. Field-mapping assertions (R4/R6/R7/R8)
 
