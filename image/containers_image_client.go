@@ -185,19 +185,25 @@ func (c *ContainersImageRepository) FetchBlob(ctx context.Context, desc ocispecv
 	}
 
 	return &blob{
-		Reader: content.NewVerifyReader(reader, desc),
-		Closer: reader,
+		verifier: content.NewVerifyReader(reader, desc),
+		closer:   reader,
 	}, nil
 }
 
 type blob struct {
-	io.Reader
-	io.Closer
+	verifier *content.VerifyReader
+	closer   io.Closer
 }
 
 func (b *blob) Read(p []byte) (int, error) {
-	return b.Reader.Read(p)
+	n, err := b.verifier.Read(p)
+	if errors.Is(err, io.EOF) {
+		if verifyErr := b.verifier.Verify(); verifyErr != nil {
+			return n, fmt.Errorf("verifying blob: %w", verifyErr)
+		}
+	}
+	return n, err
 }
 func (b *blob) Close() error {
-	return b.Closer.Close()
+	return b.closer.Close()
 }

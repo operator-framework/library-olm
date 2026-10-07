@@ -16,6 +16,7 @@ import (
 	"go.podman.io/image/v5/docker/reference"
 	"go.podman.io/image/v5/signature"
 	"go.podman.io/image/v5/types"
+	"oras.land/oras-go/v2/content"
 
 	"github.com/operator-framework/library-olm/image/internal/testutil"
 )
@@ -311,6 +312,36 @@ func TestContainersImageRepository_FetchBlob(t *testing.T) {
 
 		_, err = io.ReadAll(reader)
 		assert.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	})
+
+	t.Run("RejectsSameSizeWrongDigest", func(t *testing.T) {
+		src := newFakeImageSource()
+		blobData := []byte("wrong")
+		dgst := digest.FromString("right")
+		src.blobs[dgst.String()] = blobData
+		client := &ContainersImageRepository{imageSource: src, policyContext: skipVerificationPolicyContext(t)}
+
+		reader, err := client.FetchBlob(ctx, ocispecv1.Descriptor{Digest: dgst, Size: int64(len(blobData))})
+		require.NoError(t, err)
+		defer reader.Close()
+
+		_, err = io.ReadAll(reader)
+		assert.ErrorIs(t, err, content.ErrMismatchedDigest)
+	})
+
+	t.Run("RejectsTrailingData", func(t *testing.T) {
+		src := newFakeImageSource()
+		blobData := []byte("data")
+		dgst := digest.FromBytes(blobData)
+		src.blobs[dgst.String()] = append(bytes.Clone(blobData), []byte("extra")...)
+		client := &ContainersImageRepository{imageSource: src, policyContext: skipVerificationPolicyContext(t)}
+
+		reader, err := client.FetchBlob(ctx, ocispecv1.Descriptor{Digest: dgst, Size: int64(len(blobData))})
+		require.NoError(t, err)
+		defer reader.Close()
+
+		_, err = io.ReadAll(reader)
+		assert.ErrorIs(t, err, content.ErrTrailingData)
 	})
 }
 
