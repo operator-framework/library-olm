@@ -47,8 +47,8 @@ func (h *FBCHandler) Matches(ctx context.Context, repo image.Repository, desc oc
 		return false, fmt.Errorf("fetching image config: %w", err)
 	}
 
-	_, ok := cfg.Config.Labels[ConfigDirLabel]
-	return ok, nil
+	configDir, ok := cfg.Config.Labels[ConfigDirLabel]
+	return ok && configDir != "", nil
 }
 
 func (h *FBCHandler) Discover(ctx context.Context, repo image.Repository, desc ocispecv1.Descriptor, manifestBytes []byte) ([]ocispecv1.Descriptor, error) {
@@ -77,10 +77,13 @@ func (h *FBCHandler) Unpack(ctx context.Context, repo image.Repository, desc oci
 
 	cfg, err := image.FetchImageConfig(ctx, repo, manifestBytes)
 	if err != nil {
-		return err
+		return fmt.Errorf("fetching image config: %w", err)
 	}
 
-	configDir := cfg.Config.Labels[ConfigDirLabel]
+	configDir, ok := cfg.Config.Labels[ConfigDirLabel]
+	if !ok || configDir == "" {
+		return fmt.Errorf("image config is missing a non-empty %q label", ConfigDirLabel)
+	}
 
 	filter := ociutil.CombineFilters(
 		ociutil.OnlyPaths(configDir),

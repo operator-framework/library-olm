@@ -107,6 +107,18 @@ func TestFBCHandler_Matches(t *testing.T) {
 		assert.False(t, matched)
 	})
 
+	t.Run("SingleManifest/EmptyLabel", func(t *testing.T) {
+		repo := testutil.NewFakeRepo()
+		desc, manifestBytes := testutil.SetupSingleManifest(repo, map[string]string{
+			ConfigDirLabel: "",
+		}, ocispecv1.MediaTypeImageManifest)
+
+		h := &FBCHandler{}
+		matched, err := h.Matches(ctx, repo, desc, manifestBytes)
+		require.NoError(t, err)
+		assert.False(t, matched)
+	})
+
 	t.Run("SingleManifest/NoLabels", func(t *testing.T) {
 		repo := testutil.NewFakeRepo()
 		desc, manifestBytes := testutil.SetupSingleManifest(repo, nil, ocispecv1.MediaTypeImageManifest)
@@ -370,6 +382,31 @@ func TestFBCHandler_Unpack(t *testing.T) {
 		h := &FBCHandler{}
 		err := h.Unpack(ctx, repo, desc, manifestBytes, t.TempDir())
 		require.Error(t, err)
+		assert.Contains(t, err.Error(), "fetching image config")
+	})
+
+	t.Run("RejectsMissingOrEmptyConfigDirLabel", func(t *testing.T) {
+		tests := []struct {
+			name   string
+			labels map[string]string
+		}{
+			{name: "missing label", labels: map[string]string{"other-label": "value"}},
+			{name: "empty label", labels: map[string]string{ConfigDirLabel: ""}},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				repo := testutil.NewFakeRepo()
+				configBlob := testutil.BuildImageConfig(tt.labels)
+				configDesc := repo.AddBlob(configBlob, ocispecv1.MediaTypeImageConfig)
+				manifestBytes := testutil.BuildManifest(configDesc)
+				desc := repo.AddManifest(manifestBytes, ocispecv1.MediaTypeImageManifest)
+
+				err := (&FBCHandler{}).Unpack(ctx, repo, desc, manifestBytes, t.TempDir())
+				require.ErrorContains(t, err, "missing a non-empty")
+				assert.Contains(t, err.Error(), ConfigDirLabel)
+			})
+		}
 	})
 
 	t.Run("LayerFetchFails", func(t *testing.T) {
