@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -83,9 +84,9 @@ func (cm *CatalogMigrator) listFailure(kind string, err error) error {
 // If any image differs, all sources in that group are namespace-qualified.
 //
 // The returned slice contains one outcome per source. Per-source create,
-// annotation, or serving failures appear as results with Status "error" rather
-// than as the returned error; callers must inspect every result. The returned
-// error covers failures to list the required cluster objects. DryRun reports
+// annotation, serving, or deletion-preflight failures appear as results with
+// Status "error" rather than as the returned error; callers must inspect every
+// result. The returned error covers failures to list the source catalogs. DryRun reports
 // proposed actions without creating or annotating catalogs.
 func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigratorOptions) ([]CatalogMigrationResult, error) {
 	cm.progress(migration.ProgressEvent{Step: migration.ProgressStepScan, Status: migration.ProgressStarted, Message: "Scanning CatalogSources and migration references"})
@@ -123,20 +124,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 		return csList.Items[i].Namespace < csList.Items[j].Namespace
 	})
 
-	// List all Subscriptions to detect which CatalogSources are still referenced
-	var subList operatorsv1alpha1.SubscriptionList
-	if err := cm.Client.List(ctx, &subList); err != nil {
-		return nil, cm.listFailure("Subscriptions", err)
-	}
 	cm.progress(migration.ProgressEvent{Step: migration.ProgressStepScan, Status: migration.ProgressCompleted, Message: fmt.Sprintf("Found %d CatalogSource(s)", len(csList.Items))})
-
-	// Build set of referenced CatalogSources
-	referencedCS := make(map[string]bool)
-	for _, sub := range subList.Items {
-		key := fmt.Sprintf("%s/%s", sub.Spec.CatalogSourceNamespace, sub.Spec.CatalogSource)
-		referencedCS[key] = true
-	}
-
 	// Determine naming strategy: group by name, check for image conflicts
 	type csEntry struct {
 		cs    operatorsv1alpha1.CatalogSource
@@ -213,7 +201,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 	}
 
 	// Track which ClusterCatalog names we've already created this run (for consolidation)
-	createdThisRun := make(map[string]bool)
+	createdThisRun := make(map[string]string) // ClusterCatalog name → source image
 
 	// Process image-type CatalogSources
 	for _, cs := range csList.Items {
@@ -258,7 +246,19 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 		csRef := fmt.Sprintf("%s/%s", cs.Namespace, cs.Name)
 
 		// Check if already created this run (consolidation case)
-		if createdThisRun[ccName] {
+		if image, ok := createdThisRun[ccName]; ok {
+			if image != cs.Spec.Image {
+				collisionErr := fmt.Errorf("ClusterCatalog %s already selected with image %q, which does not match CatalogSource image %q", ccName, image, cs.Spec.Image)
+				recordResult(CatalogMigrationResult{
+					CatalogSourceName:      cs.Name,
+					CatalogSourceNamespace: cs.Namespace,
+					ClusterCatalogName:     ccName,
+					Status:                 "error",
+					Reason:                 collisionErr.Error(),
+					Notes:                  notes,
+				}, collisionErr)
+				continue
+			}
 			result := CatalogMigrationResult{
 				CatalogSourceName:      cs.Name,
 				CatalogSourceNamespace: cs.Namespace,
@@ -267,7 +267,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 				Reason:                 fmt.Sprintf("consolidated into shared ClusterCatalog %s", ccName),
 				Notes:                  notes,
 			}
-			cm.handleCatalogSourceDeletion(ctx, &cs, csRef, referencedCS, opts, &result)
+			cm.handleCatalogSourceDeletion(ctx, &cs, csRef, opts, &result)
 			recordResult(result, nil)
 			continue
 		}
@@ -284,7 +284,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 					Reason:                 fmt.Sprintf("would adopt existing ClusterCatalog %s", existing.Name),
 					Notes:                  notes,
 				}
-				cm.handleCatalogSourceDeletion(ctx, &cs, csRef, referencedCS, opts, &result)
+				cm.handleCatalogSourceDeletion(ctx, &cs, csRef, opts, &result)
 				recordResult(result, nil)
 				continue
 			}
@@ -301,7 +301,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 				continue
 			}
 
-			createdThisRun[existing.Name] = true
+			createdThisRun[existing.Name] = cs.Spec.Image
 			result := CatalogMigrationResult{
 				CatalogSourceName:      cs.Name,
 				CatalogSourceNamespace: cs.Namespace,
@@ -310,7 +310,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 				Reason:                 "existing ClusterCatalog with matching image adopted",
 				Notes:                  notes,
 			}
-			cm.handleCatalogSourceDeletion(ctx, &cs, csRef, referencedCS, opts, &result)
+			cm.handleCatalogSourceDeletion(ctx, &cs, csRef, opts, &result)
 			recordResult(result, nil)
 			continue
 		}
@@ -345,7 +345,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 				Reason:                 fmt.Sprintf("would create ClusterCatalog %s from image %s", ccName, cs.Spec.Image),
 				Notes:                  notes,
 			}
-			cm.handleCatalogSourceDeletion(ctx, &cs, csRef, referencedCS, opts, &result)
+			cm.handleCatalogSourceDeletion(ctx, &cs, csRef, opts, &result)
 			recordResult(result, nil)
 			continue
 		}
@@ -398,7 +398,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 			continue
 		}
 
-		createdThisRun[ccName] = true
+		createdThisRun[ccName] = cs.Spec.Image
 		existingByImage[cs.Spec.Image] = append(existingByImage[cs.Spec.Image], cc)
 		existingByName[cc.Name] = cc
 
@@ -410,7 +410,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 			Reason:                 fmt.Sprintf("created from image %s", cs.Spec.Image),
 			Notes:                  notes,
 		}
-		cm.handleCatalogSourceDeletion(ctx, &cs, csRef, referencedCS, opts, &result)
+		cm.handleCatalogSourceDeletion(ctx, &cs, csRef, opts, &result)
 		recordResult(result, nil)
 	}
 
@@ -436,19 +436,27 @@ func resolveExistingClusterCatalog(catalogs []*ocv1.ClusterCatalog, preferredNam
 // handleCatalogSourceDeletion implements the deliberately conservative source
 // cleanup policy. It records both a proposed dry-run deletion and failures so
 // callers never mistake a migrated catalog for successful source cleanup.
-func (cm *CatalogMigrator) handleCatalogSourceDeletion(ctx context.Context, cs *operatorsv1alpha1.CatalogSource, csRef string, referenced map[string]bool, opts CatalogMigratorOptions, result *CatalogMigrationResult) {
+func (cm *CatalogMigrator) handleCatalogSourceDeletion(ctx context.Context, cs *operatorsv1alpha1.CatalogSource, csRef string, opts CatalogMigratorOptions, result *CatalogMigrationResult) {
 	if !opts.DeleteCatalogSource {
 		return
 	}
-	if referenced[csRef] {
-		result.Notes = append(result.Notes, "CatalogSource retained because one or more Subscriptions still reference it")
+	var subscriptions operatorsv1alpha1.SubscriptionList
+	if err := cm.Client.List(ctx, &subscriptions); err != nil {
+		result.Status = "error"
+		result.Reason = fmt.Sprintf("%s; failed to list Subscriptions before CatalogSource deletion: %v", result.Reason, err)
 		return
+	}
+	for _, sub := range subscriptions.Items {
+		if sub.Spec != nil && sub.Spec.CatalogSourceNamespace+"/"+sub.Spec.CatalogSource == csRef {
+			result.Notes = append(result.Notes, "CatalogSource retained because one or more Subscriptions still reference it")
+			return
+		}
 	}
 	if opts.DryRun {
 		result.Notes = append(result.Notes, "would delete unreferenced CatalogSource")
 		return
 	}
-	if err := cm.Client.Delete(ctx, cs); err != nil {
+	if err := cm.Client.Delete(ctx, cs); err != nil && !apierrors.IsNotFound(err) {
 		result.Status = "error"
 		result.Reason = fmt.Sprintf("%s; failed to delete unreferenced CatalogSource: %v", result.Reason, err)
 		return

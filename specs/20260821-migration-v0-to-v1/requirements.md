@@ -287,7 +287,9 @@ the same ClusterCatalog.
 The `CatalogSource` is **left in place** by default — it is deleted only when
 `--delete-catalogsource` is passed **and** no remaining `Subscription` references it.
 Both conditions must be met. This is evaluated for every consolidated source, not just the
-first source that created or adopted a shared `ClusterCatalog`. A dry-run reports whether an
+first source that created or adopted a shared `ClusterCatalog`. Re-list Subscriptions immediately
+before each deletion decision; if the list fails, retain the CatalogSource and report an error.
+An already-absent CatalogSource counts as successfully cleaned up. A dry-run reports whether an
 unreferenced source would be deleted without changing it.
 
 | CatalogSource field | ClusterCatalog target | Notes |

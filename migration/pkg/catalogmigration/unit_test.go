@@ -292,6 +292,122 @@ func TestMigrateCatalogsReportsNameCollisionWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestMigrateCatalogsDoesNotConsolidateDifferentImages(t *testing.T) {
+	ctx := t.Context()
+	first := imageCatalogSource("a", "tenant", "registry.example/a:1")
+	conflicting := imageCatalogSource("b", "tenant", "registry.example/b:1")
+	existing := &ocv1.ClusterCatalog{
+		ObjectMeta: metav1.ObjectMeta{Name: "b"},
+		Spec:       ocv1.ClusterCatalogSpec{Source: ocv1.CatalogSource{Image: &ocv1.ImageSource{Ref: first.Spec.Image}}},
+	}
+	c := fake.NewClientBuilder().WithScheme(catalogMigrationScheme(t)).WithObjects(first, conflicting, existing).Build()
+
+	results, err := NewCatalogMigrator(c).MigrateCatalogs(ctx, CatalogMigratorOptions{DeleteCatalogSource: true})
+	if err != nil || len(results) != 2 {
+		t.Fatalf("MigrateCatalogs() = %#v, %v", results, err)
+	}
+	if results[0].Status != "adopted" || results[1].Status != "error" || !strings.Contains(results[1].Reason, "does not match") {
+		t.Fatalf("different-image source was consolidated: %#v", results)
+	}
+	var retained operatorsv1alpha1.CatalogSource
+	if err := c.Get(ctx, client.ObjectKeyFromObject(conflicting), &retained); err != nil {
+		t.Fatalf("conflicting CatalogSource was deleted: %v", err)
+	}
+	var catalog ocv1.ClusterCatalog
+	if err := c.Get(ctx, client.ObjectKeyFromObject(existing), &catalog); err != nil || catalog.Spec.Source.Image.Ref != first.Spec.Image {
+		t.Fatalf("existing ClusterCatalog changed: %#v, %v", catalog.Spec, err)
+	}
+}
+
+type lateSubscriptionClient struct {
+	client.Client
+	subscription *operatorsv1alpha1.Subscription
+}
+
+func (c *lateSubscriptionClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if err := c.Client.Patch(ctx, obj, patch, opts...); err != nil {
+		return err
+	}
+	return c.Create(ctx, c.subscription)
+}
+
+func TestMigrateCatalogsRechecksSubscriptionBeforeDeletion(t *testing.T) {
+	ctx := t.Context()
+	source := imageCatalogSource("catalog", "tenant", "registry.example/catalog:1")
+	existing := &ocv1.ClusterCatalog{
+		ObjectMeta: metav1.ObjectMeta{Name: "catalog"},
+		Spec:       ocv1.ClusterCatalogSpec{Source: ocv1.CatalogSource{Image: &ocv1.ImageSource{Ref: source.Spec.Image}}},
+	}
+	subscription := &operatorsv1alpha1.Subscription{
+		ObjectMeta: metav1.ObjectMeta{Name: "operator", Namespace: "workload"},
+		Spec:       &operatorsv1alpha1.SubscriptionSpec{CatalogSource: source.Name, CatalogSourceNamespace: source.Namespace},
+	}
+	c := &lateSubscriptionClient{
+		Client:       fake.NewClientBuilder().WithScheme(catalogMigrationScheme(t)).WithObjects(source, existing).Build(),
+		subscription: subscription,
+	}
+
+	results, err := NewCatalogMigrator(c).MigrateCatalogs(ctx, CatalogMigratorOptions{DeleteCatalogSource: true})
+	if err != nil || len(results) != 1 || results[0].Status != "adopted" || !containsNote(results[0].Notes, "CatalogSource retained") {
+		t.Fatalf("late Subscription reference did not retain source: %#v, %v", results, err)
+	}
+	var retained operatorsv1alpha1.CatalogSource
+	if err := c.Get(ctx, client.ObjectKeyFromObject(source), &retained); err != nil {
+		t.Fatalf("referenced CatalogSource was deleted: %v", err)
+	}
+}
+
+type subscriptionListErrorClient struct{ client.Client }
+
+func (c subscriptionListErrorClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*operatorsv1alpha1.SubscriptionList); ok {
+		return errors.New("subscription listing forbidden")
+	}
+	return c.Client.List(ctx, list, opts...)
+}
+
+func TestMigrateCatalogsRetainsSourceWhenSubscriptionListingFails(t *testing.T) {
+	ctx := t.Context()
+	source := imageCatalogSource("catalog", "tenant", "registry.example/catalog:1")
+	existing := &ocv1.ClusterCatalog{
+		ObjectMeta: metav1.ObjectMeta{Name: "catalog"},
+		Spec:       ocv1.ClusterCatalogSpec{Source: ocv1.CatalogSource{Image: &ocv1.ImageSource{Ref: source.Spec.Image}}},
+	}
+	c := subscriptionListErrorClient{Client: fake.NewClientBuilder().WithScheme(catalogMigrationScheme(t)).WithObjects(source, existing).Build()}
+
+	results, err := NewCatalogMigrator(c).MigrateCatalogs(ctx, CatalogMigratorOptions{DeleteCatalogSource: true})
+	if err != nil || len(results) != 1 || results[0].Status != "error" || !strings.Contains(results[0].Reason, "subscription listing forbidden") {
+		t.Fatalf("list failure was not reported: %#v, %v", results, err)
+	}
+	var retained operatorsv1alpha1.CatalogSource
+	if err := c.Get(ctx, client.ObjectKeyFromObject(source), &retained); err != nil {
+		t.Fatalf("CatalogSource was deleted after list failure: %v", err)
+	}
+}
+
+type catalogDeleteErrorClient struct{ client.Client }
+
+func (c catalogDeleteErrorClient) Delete(context.Context, client.Object, ...client.DeleteOption) error {
+	return errors.New("delete forbidden")
+}
+
+func TestCatalogSourceDeletionTreatsNotFoundAsSuccess(t *testing.T) {
+	ctx := t.Context()
+	source := imageCatalogSource("catalog", "tenant", "registry.example/catalog:1")
+	c := fake.NewClientBuilder().WithScheme(catalogMigrationScheme(t)).Build()
+	result := CatalogMigrationResult{Status: "adopted", Reason: "matching catalog adopted"}
+	NewCatalogMigrator(c).handleCatalogSourceDeletion(ctx, source, "tenant/catalog", CatalogMigratorOptions{DeleteCatalogSource: true}, &result)
+	if result.Status != "adopted" || !containsNote(result.Notes, "deleted unreferenced CatalogSource") {
+		t.Fatalf("already-deleted source was reported as an error: %#v", result)
+	}
+
+	result = CatalogMigrationResult{Status: "adopted", Reason: "matching catalog adopted"}
+	NewCatalogMigrator(catalogDeleteErrorClient{Client: c}).handleCatalogSourceDeletion(ctx, source, "tenant/catalog", CatalogMigratorOptions{DeleteCatalogSource: true}, &result)
+	if result.Status != "error" || !strings.Contains(result.Reason, "delete forbidden") {
+		t.Fatalf("non-NotFound delete error was ignored: %#v", result)
+	}
+}
+
 func TestMigrateCatalogsDeletesEveryUnreferencedConsolidatedSource(t *testing.T) {
 	scheme := catalogMigrationScheme(t)
 	first := imageCatalogSource("shared", "one", "registry.example/shared:1")
