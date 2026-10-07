@@ -10,11 +10,11 @@ import (
 
 	"github.com/opencontainers/go-digest"
 	ocispecv1 "github.com/opencontainers/image-spec/specs-go/v1"
-	"go.podman.io/image/v5/docker/reference"
 	ctrimage "go.podman.io/image/v5/image"
 	"go.podman.io/image/v5/manifest"
 	"go.podman.io/image/v5/pkg/blobinfocache/none"
 	"go.podman.io/image/v5/signature"
+	"go.podman.io/image/v5/transports"
 	"go.podman.io/image/v5/types"
 	"oras.land/oras-go/v2/content"
 )
@@ -93,7 +93,6 @@ var _ Repository = (*ContainersImageRepository)(nil)
 // (see [WithSignatureVerification]), it verifies image signatures on every
 // manifest encountered.
 type ContainersImageRepository struct {
-	ref           reference.Named
 	imageSource   types.ImageSource
 	policyContext *signature.PolicyContext
 }
@@ -126,14 +125,9 @@ func NewContainersImageRepository(ctx context.Context, imgRef types.ImageReferen
 	}
 
 	return &ContainersImageRepository{
-		ref:           imgRef.DockerReference(),
 		imageSource:   imgSrc,
 		policyContext: policyCtx,
 	}, nil
-}
-
-func (c *ContainersImageRepository) Named() reference.Named {
-	return c.ref
 }
 
 func (c *ContainersImageRepository) Resolve(ctx context.Context) (ocispecv1.Descriptor, error) {
@@ -177,7 +171,7 @@ func (c *ContainersImageRepository) getManifest(ctx context.Context, instanceDig
 		if err == nil {
 			err = errors.New("image rejected by policy")
 		}
-		return nil, "", fmt.Errorf("image signature verification failed for %s@%s: %w", c.ref.Name(), manifestDigest, err)
+		return nil, "", fmt.Errorf("image signature verification failed for image %q (resolved manifest digest %s): %w", transports.ImageName(c.imageSource.Reference()), manifestDigest, err)
 	}
 
 	return manifestBytes, mediaType, nil

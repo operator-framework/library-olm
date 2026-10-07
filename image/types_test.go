@@ -66,15 +66,6 @@ func TestNewCachingRepository(t *testing.T) {
 	assert.NoError(t, err, "cache dir should exist")
 }
 
-func TestCachingRepository_Named(t *testing.T) {
-	inner := testutil.NewFakeRepo()
-	repo, err := NewCachingRepository(inner)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = repo.Close() })
-
-	assert.Equal(t, inner.Named().String(), repo.Named().String())
-}
-
 func TestCachingRepository_Resolve(t *testing.T) {
 	ctx := context.Background()
 

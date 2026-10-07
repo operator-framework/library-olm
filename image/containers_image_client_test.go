@@ -12,6 +12,7 @@ import (
 	ocispecv1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.podman.io/image/v5/directory"
 	"go.podman.io/image/v5/docker/reference"
 	"go.podman.io/image/v5/signature"
 	"go.podman.io/image/v5/types"
@@ -155,7 +156,7 @@ func TestNewContainersImageRepository(t *testing.T) {
 
 		repo, err := NewContainersImageRepository(ctx, imgRef, nil, WithSignatureVerification(VerifyNever))
 		require.NoError(t, err)
-		assert.Equal(t, ref.String(), repo.Named().String())
+		assert.Same(t, src, repo.imageSource)
 	})
 
 	t.Run("ImageSourceError", func(t *testing.T) {
@@ -339,7 +340,6 @@ func TestNewContainersImageRepository_SignatureVerification(t *testing.T) {
 
 func TestContainersImageRepository_ResolveSignatureVerification(t *testing.T) {
 	ctx := context.Background()
-	ref, _ := reference.ParseNormalizedNamed("example.com/test:latest")
 
 	t.Run("AcceptAllPolicySucceeds", func(t *testing.T) {
 		src := newFakeImageSource()
@@ -350,7 +350,7 @@ func TestContainersImageRepository_ResolveSignatureVerification(t *testing.T) {
 
 		policyCtx, err := VerifyWithPolicy(insecureAcceptAllPolicy(t))(nil)
 		require.NoError(t, err)
-		client := &ContainersImageRepository{ref: ref, imageSource: src, policyContext: policyCtx}
+		client := &ContainersImageRepository{imageSource: src, policyContext: policyCtx}
 
 		desc, err := client.Resolve(ctx)
 		require.NoError(t, err)
@@ -366,17 +366,35 @@ func TestContainersImageRepository_ResolveSignatureVerification(t *testing.T) {
 
 		policyCtx, err := VerifyWithPolicy(rejectAllPolicy(t))(nil)
 		require.NoError(t, err)
-		client := &ContainersImageRepository{ref: ref, imageSource: src, policyContext: policyCtx}
+		client := &ContainersImageRepository{imageSource: src, policyContext: policyCtx}
 
 		_, err = client.Resolve(ctx)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "image signature verification failed")
 	})
+
+	t.Run("RejectAllPolicyReportsNonDockerReference", func(t *testing.T) {
+		src := newFakeImageSource()
+		ref, err := directory.NewReference(t.TempDir())
+		require.NoError(t, err)
+		src.ref = ref
+		src.setPrimaryManifest(testutil.MustJSON(ocispecv1.Manifest{
+			Config: ocispecv1.Descriptor{Digest: digest.FromString("cfg")},
+		}))
+
+		policyCtx, err := VerifyWithPolicy(rejectAllPolicy(t))(nil)
+		require.NoError(t, err)
+		client := &ContainersImageRepository{imageSource: src, policyContext: policyCtx}
+		t.Cleanup(func() { assert.NoError(t, client.Close()) })
+
+		_, err = client.Resolve(ctx)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), fmt.Sprintf("image signature verification failed for image %q (resolved manifest digest ", "dir:"+ref.StringWithinTransport()))
+	})
 }
 
 func TestContainersImageRepository_FetchManifestSignatureVerification(t *testing.T) {
 	ctx := context.Background()
-	ref, _ := reference.ParseNormalizedNamed("example.com/test:latest")
 
 	t.Run("AcceptAllPolicySucceeds", func(t *testing.T) {
 		src := newFakeImageSource()
@@ -388,7 +406,7 @@ func TestContainersImageRepository_FetchManifestSignatureVerification(t *testing
 
 		policyCtx, err := VerifyWithPolicy(insecureAcceptAllPolicy(t))(nil)
 		require.NoError(t, err)
-		client := &ContainersImageRepository{ref: ref, imageSource: src, policyContext: policyCtx}
+		client := &ContainersImageRepository{imageSource: src, policyContext: policyCtx}
 
 		got, mediaType, err := client.FetchManifest(ctx, ocispecv1.Descriptor{Digest: dgst})
 		require.NoError(t, err)
@@ -406,7 +424,7 @@ func TestContainersImageRepository_FetchManifestSignatureVerification(t *testing
 
 		policyCtx, err := VerifyWithPolicy(rejectAllPolicy(t))(nil)
 		require.NoError(t, err)
-		client := &ContainersImageRepository{ref: ref, imageSource: src, policyContext: policyCtx}
+		client := &ContainersImageRepository{imageSource: src, policyContext: policyCtx}
 
 		_, _, err = client.FetchManifest(ctx, ocispecv1.Descriptor{Digest: dgst})
 		require.Error(t, err)

@@ -12,7 +12,6 @@ import (
 	"github.com/google/renameio/v2"
 	"github.com/opencontainers/go-digest"
 	ocispecv1 "github.com/opencontainers/image-spec/specs-go/v1"
-	"go.podman.io/image/v5/docker/reference"
 	"go.podman.io/image/v5/manifest"
 	"golang.org/x/sync/singleflight"
 )
@@ -47,10 +46,6 @@ func (m *syncMap[K, V]) Range(f func(K, V) bool) {
 //
 // Callers must call [Repository.Close] when done to release resources.
 type Repository interface {
-	// Named returns the repository reference. The returned value will
-	// implement [reference.NamedTagged] or [reference.Canonical].
-	Named() reference.Named
-
 	// Resolve resolves the repository reference to a content descriptor.
 	// The returned descriptor contains the digest, media type, and size
 	// of the manifest. Returns an error if the reference cannot be resolved
@@ -101,10 +96,6 @@ func NewCachingRepository(client Repository) (*CachingRepository, error) {
 		inner:    client,
 		cacheDir: cacheDir,
 	}, nil
-}
-
-func (s *CachingRepository) Named() reference.Named {
-	return s.inner.Named()
 }
 
 func (s *CachingRepository) Close() error {

@@ -16,7 +16,6 @@ import (
 	ocispecv1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.podman.io/image/v5/docker/reference"
 )
 
 // FakeManifest holds raw manifest bytes and their media type.
@@ -31,7 +30,6 @@ type FakeManifest struct {
 type FakeRepo struct {
 	Manifests map[string]FakeManifest
 	Blobs     map[string]func() io.ReadCloser
-	Named_    reference.Named
 
 	// ResolveDesc and ResolveErr control the return values of Resolve.
 	ResolveDesc ocispecv1.Descriptor
@@ -47,17 +45,13 @@ type FakeRepo struct {
 	CloseCount         atomic.Int32
 }
 
-// NewFakeRepo creates a FakeRepo with a default reference.
+// NewFakeRepo creates a FakeRepo with empty manifest and blob stores.
 func NewFakeRepo() *FakeRepo {
-	ref, _ := reference.ParseNormalizedNamed("example.com/test:latest")
 	return &FakeRepo{
 		Manifests: make(map[string]FakeManifest),
 		Blobs:     make(map[string]func() io.ReadCloser),
-		Named_:    ref,
 	}
 }
-
-func (r *FakeRepo) Named() reference.Named { return r.Named_ }
 
 func (r *FakeRepo) Close() error {
 	r.CloseCount.Add(1)
