@@ -21,6 +21,7 @@ func TestFindDependentsOnlyReportsInstalledOperatorsRequiringPackage(t *testing.
 		{name: "uninstalled", namespace: "third", packageName: "pending", properties: `[{"type":"olm.package.required","value":{"packageName":"widgets"}}]`},
 		{name: "unrelated", namespace: "fourth", packageName: "other", installedCSV: "other.v1", properties: `[{"type":"olm.package.required","value":{"packageName":"different"}}]`},
 		{name: "malformed", namespace: "fifth", packageName: "broken", installedCSV: "broken.v1", properties: "not JSON"},
+		{name: "widgets-op", namespace: "zero", packageName: "widgets", installedCSV: "widgets.v1", properties: `[{"type":"olm.package.required","value":{"packageName":"widgets"}}]`},
 	}
 	var resources []runtime.Object
 	for _, item := range objects {

@@ -115,17 +115,14 @@ func TestOperatorNameMatchingCommandIsPositionalArgument(t *testing.T) {
 			if namespaceFlag == nil {
 				t.Fatal("selected command has no namespace flag")
 			}
-			oldNamespace, oldChanged := namespaceFlag.Value.String(), namespaceFlag.Changed
-			t.Cleanup(func() {
-				if err := namespaceFlag.Value.Set(oldNamespace); err != nil {
-					t.Error(err)
-				}
-				namespaceFlag.Changed = oldChanged
-			})
-			if err := cmd.ParseFlags(args); err != nil {
+			// Parse the arguments on a disposable command so the global CLI
+			// command's flag values, changed bits, and parsed args stay untouched.
+			parser := &cobra.Command{}
+			parser.Flags().StringP(namespaceFlag.Name, namespaceFlag.Shorthand, "", "")
+			if err := parser.ParseFlags(args); err != nil {
 				t.Fatal(err)
 			}
-			positionals := cmd.Flags().Args()
+			positionals := parser.Flags().Args()
 			if err := cmd.ValidateArgs(positionals); err != nil {
 				t.Fatal(err)
 			}
