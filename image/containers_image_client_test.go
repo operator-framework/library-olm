@@ -44,8 +44,8 @@ func (f *fakeImageSource) setPrimaryManifest(data []byte) {
 	f.manifests[""] = testutil.FakeManifest{Bytes: data, MediaType: ocispecv1.MediaTypeImageManifest}
 }
 
-func (f *fakeImageSource) setManifest(dgst digest.Digest, data []byte, mediaType string) {
-	f.manifests[dgst.String()] = testutil.FakeManifest{Bytes: data, MediaType: mediaType}
+func (f *fakeImageSource) setManifest(dgst digest.Digest, data []byte) {
+	f.manifests[dgst.String()] = testutil.FakeManifest{Bytes: data, MediaType: ocispecv1.MediaTypeImageManifest}
 }
 
 func (f *fakeImageSource) Reference() types.ImageReference { return f.ref }
@@ -234,7 +234,7 @@ func TestContainersImageRepository_FetchManifest(t *testing.T) {
 			Config: ocispecv1.Descriptor{Digest: digest.FromString("cfg")},
 		})
 		dgst := digest.FromBytes(manifestData)
-		src.setManifest(dgst, manifestData, ocispecv1.MediaTypeImageManifest)
+		src.setManifest(dgst, manifestData)
 
 		client := &ContainersImageRepository{imageSource: src, policyContext: skipVerificationPolicyContext(t)}
 
@@ -258,7 +258,7 @@ func TestContainersImageRepository_FetchManifest(t *testing.T) {
 			Config: ocispecv1.Descriptor{Digest: digest.FromString("cfg")},
 		})
 		requestedDigest := digest.FromString("different")
-		src.setManifest(requestedDigest, manifestData, ocispecv1.MediaTypeImageManifest)
+		src.setManifest(requestedDigest, manifestData)
 		client := &ContainersImageRepository{imageSource: src, policyContext: skipVerificationPolicyContext(t)}
 
 		_, _, err := client.FetchManifest(ctx, ocispecv1.Descriptor{Digest: requestedDigest})
@@ -462,7 +462,7 @@ func TestContainersImageRepository_FetchManifestSignatureVerification(t *testing
 			Config: ocispecv1.Descriptor{Digest: digest.FromString("cfg")},
 		})
 		dgst := digest.FromBytes(manifestData)
-		src.setManifest(dgst, manifestData, ocispecv1.MediaTypeImageManifest)
+		src.setManifest(dgst, manifestData)
 
 		policyCtx, err := VerifyWithPolicy(insecureAcceptAllPolicy(t))(nil)
 		require.NoError(t, err)
@@ -480,7 +480,7 @@ func TestContainersImageRepository_FetchManifestSignatureVerification(t *testing
 			Config: ocispecv1.Descriptor{Digest: digest.FromString("cfg")},
 		})
 		dgst := digest.FromBytes(manifestData)
-		src.setManifest(dgst, manifestData, ocispecv1.MediaTypeImageManifest)
+		src.setManifest(dgst, manifestData)
 
 		policyCtx, err := VerifyWithPolicy(rejectAllPolicy(t))(nil)
 		require.NoError(t, err)
