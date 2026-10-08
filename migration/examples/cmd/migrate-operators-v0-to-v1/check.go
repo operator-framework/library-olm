@@ -25,7 +25,7 @@ Examples:
   migrate-operators-v0-to-v1 check my-operator -n operators
   migrate-operators-v0-to-v1 check --all`,
 	Args: cobra.MaximumNArgs(1),
-	RunE: runCheck,
+	RunE: runAfterArgumentValidation(validateCheckArguments, runCheck),
 }
 
 func init() {
@@ -33,14 +33,20 @@ func init() {
 	checkCmd.Flags().BoolVar(&checkAll, "all", false, "Check all Subscriptions on the cluster")
 }
 
-func runCheck(cmd *cobra.Command, args []string) error { //nolint:nestif
+func validateCheckArguments(_ *cobra.Command, args []string) error {
 	if checkAll && len(args) > 0 {
 		return fmt.Errorf("cannot specify both an operator name and --all")
 	}
 	if !checkAll && len(args) == 0 {
 		return fmt.Errorf("specify an operator name or --all")
 	}
+	if !checkAll && checkSubscriptionNamespace == "" {
+		return fmt.Errorf("-n/--namespace is required")
+	}
+	return nil
+}
 
+func runCheck(cmd *cobra.Command, args []string) error { //nolint:nestif
 	c, restCfg, err := newClient()
 	if err != nil {
 		return err
@@ -63,9 +69,6 @@ func runCheck(cmd *cobra.Command, args []string) error { //nolint:nestif
 	}
 
 	operatorName := args[0]
-	if checkSubscriptionNamespace == "" {
-		return fmt.Errorf("-n/--namespace is required")
-	}
 
 	target := checkSubscriptionNamespace + "/" + operatorName
 	output.checkStart(target)

@@ -27,21 +27,24 @@ Examples:
   migrate-operators-v0-to-v1 cleanup my-operator
   migrate-operators-v0-to-v1 cleanup --all`,
 	Args: cobra.MaximumNArgs(1),
-	RunE: runCleanup,
+	RunE: runAfterArgumentValidation(validateCleanupArguments, runCleanup),
 }
 
 func init() {
 	cleanupCmd.Flags().BoolVar(&cleanupAll, "all", false, "Cleanup all Conflict-state ClusterExtensions")
 }
 
-func runCleanup(cmd *cobra.Command, args []string) error { //nolint:nestif
+func validateCleanupArguments(_ *cobra.Command, args []string) error {
 	if cleanupAll && len(args) > 0 {
 		return fmt.Errorf("cannot specify both a CE name and --all")
 	}
 	if !cleanupAll && len(args) == 0 {
 		return fmt.Errorf("specify a ClusterExtension name or --all")
 	}
+	return nil
+}
 
+func runCleanup(cmd *cobra.Command, args []string) error { //nolint:nestif
 	c, restCfg, err := newClient()
 	if err != nil {
 		return err
