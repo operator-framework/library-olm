@@ -87,6 +87,7 @@ func (h *FBCHandler) Unpack(ctx context.Context, repo image.Repository, desc oci
 
 	filter := ociutil.CombineFilters(
 		ociutil.OnlyPaths(configDir),
+		ociutil.RequireRegularFilesOrDirectories(),
 		ociutil.RewritePath(configDir, "/"),
 		ociutil.AsCurrentUser(),
 	)

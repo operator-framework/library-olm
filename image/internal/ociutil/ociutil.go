@@ -105,6 +105,19 @@ func CombineFilters(filters ...LayerFilter) LayerFilter {
 	}
 }
 
+// RequireRegularFilesOrDirectories rejects tar entries other than regular files
+// and directories.
+func RequireRegularFilesOrDirectories() LayerFilter {
+	return func(h *tar.Header) (bool, error) {
+		switch h.Typeflag {
+		case tar.TypeReg, tar.TypeRegA, tar.TypeDir: //nolint:staticcheck // TypeRegA is deprecated but still a valid tar entry type.
+			return true, nil
+		default:
+			return false, fmt.Errorf("tar entry %q has unsupported type %q: only regular files and directories are allowed", h.Name, h.Typeflag)
+		}
+	}
+}
+
 // OnlyPaths returns a [LayerFilter] that keeps only tar entries at or under any
 // of the given paths, skipping everything else. Leading slashes are stripped from
 // both the filter paths and tar entry names before comparison. Empty strings in

@@ -158,10 +158,11 @@ func SetupSingleManifest(repo *FakeRepo, labels map[string]string, mediaType str
 	return desc, manifestBytes
 }
 
-// BuildTarLayer creates a tar archive containing files with the given name→content mapping.
+// BuildTarLayer creates a tar archive containing files with the given name→content mapping
+// and any additional headers.
 // Files are written in iteration order; callers needing deterministic output
 // should sort the keys beforehand.
-func BuildTarLayer(files map[string]string) ([]byte, error) {
+func BuildTarLayer(files map[string]string, headers ...tar.Header) ([]byte, error) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	for name, content := range files {
@@ -174,6 +175,11 @@ func BuildTarLayer(files map[string]string) ([]byte, error) {
 		}
 		if _, err := tw.Write([]byte(content)); err != nil {
 			return nil, fmt.Errorf("writing content %q: %w", name, err)
+		}
+	}
+	for _, header := range headers {
+		if err := tw.WriteHeader(&header); err != nil {
+			return nil, fmt.Errorf("writing header %q: %w", header.Name, err)
 		}
 	}
 	if err := tw.Close(); err != nil {

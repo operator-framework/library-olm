@@ -1,6 +1,7 @@
 package bundle
 
 import (
+	"archive/tar"
 	"context"
 	"os"
 	"path/filepath"
@@ -300,4 +301,38 @@ func TestRegistryV1Handler_Unpack(t *testing.T) {
 		err := h.Unpack(ctx, repo, desc, manifestBytes, t.TempDir())
 		require.Error(t, err)
 	})
+}
+
+func TestRegistryV1Handler_UnpackRejectsSpecialEntries(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		path     string
+		typeflag byte
+		wantErr  string
+	}{
+		{name: "HardLinkInManifests", path: "manifests/link", typeflag: tar.TypeLink, wantErr: "only regular files and directories are allowed"},
+		{name: "SymlinkInManifests", path: "manifests/link", typeflag: tar.TypeSymlink, wantErr: "only regular files and directories are allowed"},
+		{name: "DeviceInManifests", path: "manifests/device", typeflag: tar.TypeChar, wantErr: "only regular files and directories are allowed"},
+		{name: "HardLinkOutsideSelection", path: "other/link", typeflag: tar.TypeLink},
+		{name: "SymlinkOutsideSelection", path: "other/link", typeflag: tar.TypeSymlink},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := testutil.NewFakeRepo()
+			layer, err := testutil.BuildTarLayer(nil, tar.Header{
+				Name: tt.path, Linkname: "manifests/target", Typeflag: tt.typeflag, Mode: 0644,
+			})
+			require.NoError(t, err)
+			layerDesc := repo.AddBlob(layer, ocispecv1.MediaTypeImageLayer)
+			desc, manifestBytes := testutil.SetupSingleManifest(repo, map[string]string{
+				BundleMediaTypeLabel: BundleMediaTypeRegistryV1,
+			}, ocispecv1.MediaTypeImageManifest, layerDesc)
+
+			err = (&RegistryV1Handler{}).Unpack(context.Background(), repo, desc, manifestBytes, t.TempDir())
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }

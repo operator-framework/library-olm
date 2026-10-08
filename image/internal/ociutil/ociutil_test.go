@@ -60,6 +60,36 @@ func TestCombineFilters(t *testing.T) {
 	})
 }
 
+func TestRequireRegularFilesOrDirectories(t *testing.T) {
+	tests := []struct {
+		name     string
+		typeflag byte
+		allowed  bool
+	}{
+		{name: "RegularFile", typeflag: tar.TypeReg, allowed: true},
+		{name: "AlternateRegularFile", typeflag: tar.TypeRegA, allowed: true}, //nolint:staticcheck
+		{name: "Directory", typeflag: tar.TypeDir, allowed: true},
+		{name: "HardLink", typeflag: tar.TypeLink},
+		{name: "Symlink", typeflag: tar.TypeSymlink},
+		{name: "CharacterDevice", typeflag: tar.TypeChar},
+		{name: "BlockDevice", typeflag: tar.TypeBlock},
+		{name: "FIFO", typeflag: tar.TypeFifo},
+		{name: "GlobalHeader", typeflag: tar.TypeXGlobalHeader},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keep, err := RequireRegularFilesOrDirectories()(&tar.Header{Name: "entry", Typeflag: tt.typeflag})
+			if !tt.allowed {
+				assert.False(t, keep)
+				require.ErrorContains(t, err, "only regular files and directories are allowed")
+				return
+			}
+			assert.True(t, keep)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestOnlyPaths(t *testing.T) {
 	t.Run("FileUnderWantedPath", func(t *testing.T) {
 		filter := OnlyPaths("manifests")

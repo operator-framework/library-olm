@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"archive/tar"
 	"context"
 	"os"
 	"path/filepath"
@@ -473,6 +474,40 @@ func TestFBCHandler_Unpack(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "resolving platform manifest")
 	})
+}
+
+func TestFBCHandler_UnpackRejectsSpecialEntries(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		path     string
+		typeflag byte
+		wantErr  string
+	}{
+		{name: "HardLinkInConfigs", path: "configs/link", typeflag: tar.TypeLink, wantErr: "only regular files and directories are allowed"},
+		{name: "SymlinkInConfigs", path: "configs/link", typeflag: tar.TypeSymlink, wantErr: "only regular files and directories are allowed"},
+		{name: "FIFOInConfigs", path: "configs/pipe", typeflag: tar.TypeFifo, wantErr: "only regular files and directories are allowed"},
+		{name: "HardLinkOutsideSelection", path: "other/link", typeflag: tar.TypeLink},
+		{name: "SymlinkOutsideSelection", path: "other/link", typeflag: tar.TypeSymlink},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := testutil.NewFakeRepo()
+			layer, err := testutil.BuildTarLayer(nil, tar.Header{
+				Name: tt.path, Linkname: "configs/target", Typeflag: tt.typeflag, Mode: 0644,
+			})
+			require.NoError(t, err)
+			layerDesc := repo.AddBlob(layer, ocispecv1.MediaTypeImageLayer)
+			desc, manifestBytes := testutil.SetupSingleManifest(repo, map[string]string{
+				ConfigDirLabel: "/configs",
+			}, ocispecv1.MediaTypeImageManifest, layerDesc)
+
+			err = (&FBCHandler{}).Unpack(context.Background(), repo, desc, manifestBytes, t.TempDir())
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestFBCHandler_Discover(t *testing.T) {

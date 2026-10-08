@@ -71,6 +71,7 @@ func (h *RegistryV1Handler) Unpack(ctx context.Context, repo image.Repository, _
 
 	filter := ociutil.CombineFilters(
 		ociutil.OnlyPaths(manifestsDir, metadataDir),
+		ociutil.RequireRegularFilesOrDirectories(),
 		ociutil.AsCurrentUser(),
 	)
 	return ociutil.ApplyLayers(ctx, repo, manifestBytes, dest, filter)
