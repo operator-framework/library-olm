@@ -1,0 +1,136 @@
+package migration
+
+import (
+	"context"
+	"encoding/json"
+	"reflect"
+	"strings"
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
+	ocv1 "github.com/operator-framework/operator-controller/api/v1"
+)
+
+func TestGetBundleInfoDropsSelectorButKeepsDeploymentConfig(t *testing.T) {
+	sub, csv := healthySubscriptionFixtures()
+	sub.Spec.CatalogSource = "catalog"
+	sub.Spec.CatalogSourceNamespace = "catalogs"
+	sub.Spec.Config = &operatorsv1alpha1.SubscriptionConfig{
+		Selector:     &metav1.LabelSelector{MatchLabels: map[string]string{"app": "widgets"}},
+		NodeSelector: map[string]string{"kubernetes.io/os": "linux"},
+		Env:          []corev1.EnvVar{{Name: "EXAMPLE", Value: "value"}},
+	}
+	cs := &operatorsv1alpha1.CatalogSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "catalog", Namespace: "catalogs"},
+		Spec: operatorsv1alpha1.CatalogSourceSpec{
+			SourceType: operatorsv1alpha1.SourceTypeGrpc,
+			Image:      "registry.example/catalog:latest",
+		},
+	}
+	m := migrationTestClient(t, sub, csv, cs)
+	var warnings []ProgressEvent
+	m.Progress = func(event ProgressEvent) {
+		if event.Status == ProgressWarning {
+			warnings = append(warnings, event)
+		}
+	}
+	info, err := m.GetBundleInfo(context.Background(), Options{SubscriptionName: sub.Name, SubscriptionNamespace: sub.Namespace}, csv, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.SubscriptionConfig == nil || info.SubscriptionConfig.Selector != nil {
+		t.Fatalf("mapped Subscription config retains unsupported selector: %#v", info.SubscriptionConfig)
+	}
+	if !reflect.DeepEqual(info.SubscriptionConfig.NodeSelector, sub.Spec.Config.NodeSelector) || !reflect.DeepEqual(info.SubscriptionConfig.Env, sub.Spec.Config.Env) {
+		t.Fatalf("mapped Subscription config lost supported fields: %#v", info.SubscriptionConfig)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0].Message, "selector") {
+		t.Fatalf("selector warning = %#v", warnings)
+	}
+	if sub.Spec.Config.Selector == nil {
+		t.Fatal("mapping mutated the original Subscription config")
+	}
+}
+
+func TestClusterExtensionCatalogAndBackupFieldMappings(t *testing.T) {
+	for _, tt := range []struct {
+		name, channel, wantVersion string
+		manual                     bool
+	}{
+		{name: "manual approval", channel: "stable", wantVersion: "1.2.3", manual: true},
+		{name: "automatic approval", channel: "", wantVersion: "", manual: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			m := migrationTestClient(t)
+			m.Client = failingMigrationClient{Client: m.Client, failCEAfterCreate: true}
+			opts := Options{
+				SubscriptionName: "sub", SubscriptionNamespace: "ns", ClusterExtensionName: "widgets", InstallNamespace: "ns",
+				AcknowledgeWatchScopeChange: true,
+			}
+			info := &MigrationInfo{
+				PackageName: "widgets", Version: "1.2.3", Channel: tt.channel, ManualApproval: tt.manual,
+				ResolvedCatalogName: "widgets-catalog", SubscriptionBackupJSON: `{"package":"widgets"}`,
+				OperatorGroupBackupJSON: `{"targetNamespaces":[]}`,
+				SubscriptionConfig:      &operatorsv1alpha1.SubscriptionConfig{Env: []corev1.EnvVar{{Name: "EXAMPLE", Value: "value"}}},
+			}
+			if _, _, err := m.createClusterExtension(ctx, opts, info); err == nil {
+				t.Fatal("injected post-create error was not returned")
+			}
+			var ce ocv1.ClusterExtension
+			if err := m.Client.Get(ctx, client.ObjectKey{Name: opts.ClusterExtensionName}, &ce); err != nil {
+				t.Fatal(err)
+			}
+			if ce.Spec.Namespace != "ns" || ce.Spec.Source.SourceType != ocv1.SourceTypeCatalog || ce.Spec.Source.Catalog.PackageName != "widgets" {
+				t.Fatalf("ClusterExtension base mapping = %#v", ce.Spec)
+			}
+			catalog := ce.Spec.Source.Catalog
+			if catalog.Version != tt.wantVersion {
+				t.Errorf("catalog version = %q, want %q", catalog.Version, tt.wantVersion)
+			}
+			if tt.channel == "" && len(catalog.Channels) != 0 || tt.channel != "" && !reflect.DeepEqual(catalog.Channels, []string{tt.channel}) {
+				t.Errorf("catalog channels = %q, want %q", catalog.Channels, tt.channel)
+			}
+			if catalog.Selector == nil || catalog.Selector.MatchLabels[LabelMetadataName] != info.ResolvedCatalogName {
+				t.Errorf("catalog selector = %#v", catalog.Selector)
+			}
+			encoded, err := json.Marshal(ce)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &document); err != nil {
+				t.Fatal(err)
+			}
+			var spec map[string]json.RawMessage
+			if err := json.Unmarshal(document["spec"], &spec); err != nil {
+				t.Fatal(err)
+			}
+			if _, found := spec["serviceAccount"]; found {
+				t.Errorf("deprecated serviceAccount was set: %s", encoded)
+			}
+			for key, want := range map[string]string{
+				MigratedFromSubscriptionAnnotation:                  "ns/sub",
+				MigrationSubscriptionBackupAnnotation:               info.SubscriptionBackupJSON,
+				MigrationOperatorGroupBackupAnnotation:              info.OperatorGroupBackupJSON,
+				AnnotationAcknowledgedPrefix + "watch-scope-change": "true",
+			} {
+				if got := ce.Annotations[key]; got != want {
+					t.Errorf("annotation %q = %q, want %q", key, got, want)
+				}
+			}
+			var inline map[string]json.RawMessage
+			if ce.Spec.Config == nil || ce.Spec.Config.Inline == nil || json.Unmarshal(ce.Spec.Config.Inline.Raw, &inline) != nil {
+				t.Fatalf("inline deployment config = %#v", ce.Spec.Config)
+			}
+			var config operatorsv1alpha1.SubscriptionConfig
+			if err := json.Unmarshal(inline["deploymentConfig"], &config); err != nil || !reflect.DeepEqual(config.Env, info.SubscriptionConfig.Env) {
+				t.Errorf("deploymentConfig = %#v, err=%v", config, err)
+			}
+		})
+	}
+}
