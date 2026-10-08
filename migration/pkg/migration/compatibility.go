@@ -26,6 +26,7 @@ func (m *Migrator) CheckCompatibility(ctx context.Context, opts Options, csv *op
 		return nil, err
 	}
 	report.Checks = append(report.Checks, ogChecks...)
+	report.Checks = append(report.Checks, checkAllNamespacesSupported(csv))
 
 	// Dependency checks (C2 — hard block)
 	report.Checks = append(report.Checks, checkNoDependencies(bundleProperties)...)
@@ -171,6 +172,25 @@ func (m *Migrator) checkAllNamespacesMode(ctx context.Context, opts Options) ([]
 
 func isEmptyLabelSelector(s *metav1.LabelSelector) bool {
 	return s == nil || (len(s.MatchLabels) == 0 && len(s.MatchExpressions) == 0)
+}
+
+// checkAllNamespacesSupported is a hard block: acknowledging a change in watch
+// scope cannot make a bundle that only supports Own/SingleNamespace run globally.
+func checkAllNamespacesSupported(csv *operatorsv1alpha1.ClusterServiceVersion) CheckResult {
+	for _, mode := range csv.Spec.InstallModes {
+		if mode.Type == operatorsv1alpha1.InstallModeTypeAllNamespaces && mode.Supported {
+			return CheckResult{
+				Name:    "AllNamespaces install mode supported",
+				Passed:  true,
+				Message: "CSV supports AllNamespaces install mode",
+			}
+		}
+	}
+	return CheckResult{
+		Name:    "AllNamespaces install mode supported",
+		Passed:  false,
+		Message: "CSV does not declare AllNamespaces install mode as supported; --acknowledge-watch-scope-change cannot override bundle capabilities",
+	}
 }
 
 // olmProperty represents a single entry in the operatorframework.io/properties annotation.

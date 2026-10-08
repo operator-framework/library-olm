@@ -40,6 +40,16 @@ func acknowledgmentCases() map[string]acknowledgmentCase {
 				t.Fatal(err)
 			}
 		}},
+		"unsupported-all-namespaces": {check: "AllNamespaces install mode supported", mutate: func(t *testing.T, ctx context.Context, c client.Client, _ *operatorsv1alpha1.Subscription, csv *operatorsv1alpha1.ClusterServiceVersion, og *operatorsv1.OperatorGroup) {
+			og.Spec.TargetNamespaces = []string{og.Namespace}
+			if err := c.Update(ctx, og); err != nil {
+				t.Fatal(err)
+			}
+			csv.Spec.InstallModes = []operatorsv1alpha1.InstallMode{{Type: operatorsv1alpha1.InstallModeTypeOwnNamespace, Supported: true}}
+			if err := c.Update(ctx, csv); err != nil {
+				t.Fatal(err)
+			}
+		}},
 		"operator-condition": {flag: "operator-condition", check: "No OperatorCondition usage", mutate: func(t *testing.T, ctx context.Context, c client.Client, _ *operatorsv1alpha1.Subscription, csv *operatorsv1alpha1.ClusterServiceVersion, _ *operatorsv1.OperatorGroup) {
 			condition := &operatorsv1.OperatorCondition{ObjectMeta: metav1.ObjectMeta{Name: csv.Name, Namespace: csv.Namespace}}
 			if err := c.Create(ctx, condition); err != nil {

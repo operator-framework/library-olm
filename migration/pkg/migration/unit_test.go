@@ -139,7 +139,13 @@ func migrationTestClient(t *testing.T, objects ...runtime.Object) *Migrator {
 
 func healthySubscriptionFixtures() (*operatorsv1alpha1.Subscription, *operatorsv1alpha1.ClusterServiceVersion) {
 	sub := &operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: "sub", Namespace: "ns"}, Spec: &operatorsv1alpha1.SubscriptionSpec{Package: "widgets"}, Status: operatorsv1alpha1.SubscriptionStatus{InstalledCSV: "widgets.v1", State: operatorsv1alpha1.SubscriptionStateAtLatest}}
-	csv := &operatorsv1alpha1.ClusterServiceVersion{ObjectMeta: metav1.ObjectMeta{Name: "widgets.v1", Namespace: "ns"}, Status: operatorsv1alpha1.ClusterServiceVersionStatus{Phase: operatorsv1alpha1.CSVPhaseSucceeded, Reason: operatorsv1alpha1.CSVReasonInstallSuccessful}}
+	csv := &operatorsv1alpha1.ClusterServiceVersion{
+		ObjectMeta: metav1.ObjectMeta{Name: "widgets.v1", Namespace: "ns"},
+		Spec: operatorsv1alpha1.ClusterServiceVersionSpec{
+			InstallModes: []operatorsv1alpha1.InstallMode{{Type: operatorsv1alpha1.InstallModeTypeAllNamespaces, Supported: true}},
+		},
+		Status: operatorsv1alpha1.ClusterServiceVersionStatus{Phase: operatorsv1alpha1.CSVPhaseSucceeded, Reason: operatorsv1alpha1.CSVReasonInstallSuccessful},
+	}
 	return sub, csv
 }
 
@@ -227,7 +233,12 @@ func TestCheckReadinessRequiresClusterObjectSetCRD(t *testing.T) {
 
 func TestCompatibilityOperatorGroupAndConditionOverrides(t *testing.T) {
 	og := &operatorsv1.OperatorGroup{ObjectMeta: metav1.ObjectMeta{Name: "og", Namespace: "ns"}, Spec: operatorsv1.OperatorGroupSpec{TargetNamespaces: []string{"target"}, ServiceAccountName: "restricted"}}
-	csv := &operatorsv1alpha1.ClusterServiceVersion{ObjectMeta: metav1.ObjectMeta{Name: "widgets.v1", Namespace: "ns"}}
+	csv := &operatorsv1alpha1.ClusterServiceVersion{
+		ObjectMeta: metav1.ObjectMeta{Name: "widgets.v1", Namespace: "ns"},
+		Spec: operatorsv1alpha1.ClusterServiceVersionSpec{
+			InstallModes: []operatorsv1alpha1.InstallMode{{Type: operatorsv1alpha1.InstallModeTypeAllNamespaces, Supported: true}},
+		},
+	}
 	oc := &operatorsv1.OperatorCondition{ObjectMeta: metav1.ObjectMeta{Name: "widgets.v1", Namespace: "ns"}, Status: operatorsv1.OperatorConditionStatus{Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue}}}}
 	m := migrationTestClient(t, og, oc)
 	report, err := m.CheckCompatibility(context.Background(), Options{SubscriptionNamespace: "ns"}, csv, "")
@@ -237,6 +248,42 @@ func TestCompatibilityOperatorGroupAndConditionOverrides(t *testing.T) {
 	report, err = m.CheckCompatibility(context.Background(), Options{SubscriptionNamespace: "ns", AcknowledgeWatchScopeChange: true, AcknowledgeScopedServiceAccount: true, AcknowledgeOperatorCondition: true}, csv, "")
 	if err != nil || !report.Passed() {
 		t.Fatalf("acknowledged=%#v err=%v", report, err)
+	}
+}
+
+func TestCompatibilityRequiresAllNamespacesInstallMode(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		modes []operatorsv1alpha1.InstallMode
+		want  bool
+	}{
+		{name: "supported", modes: []operatorsv1alpha1.InstallMode{{Type: operatorsv1alpha1.InstallModeTypeOwnNamespace, Supported: true}, {Type: operatorsv1alpha1.InstallModeTypeAllNamespaces, Supported: true}}, want: true},
+		{name: "explicitly unsupported", modes: []operatorsv1alpha1.InstallMode{{Type: operatorsv1alpha1.InstallModeTypeAllNamespaces, Supported: false}}},
+		{name: "own namespace only", modes: []operatorsv1alpha1.InstallMode{{Type: operatorsv1alpha1.InstallModeTypeOwnNamespace, Supported: true}}},
+		{name: "single namespace only", modes: []operatorsv1alpha1.InstallMode{{Type: operatorsv1alpha1.InstallModeTypeSingleNamespace, Supported: true}}},
+		{name: "missing declaration"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			og := &operatorsv1.OperatorGroup{ObjectMeta: metav1.ObjectMeta{Name: "og", Namespace: "ns"}, Spec: operatorsv1.OperatorGroupSpec{TargetNamespaces: []string{"ns"}}}
+			csv := &operatorsv1alpha1.ClusterServiceVersion{ObjectMeta: metav1.ObjectMeta{Name: "widgets.v1", Namespace: "ns"}, Spec: operatorsv1alpha1.ClusterServiceVersionSpec{InstallModes: tc.modes}}
+			m := migrationTestClient(t, og)
+			report, err := m.CheckCompatibility(t.Context(), Options{SubscriptionNamespace: "ns", AcknowledgeWatchScopeChange: true}, csv, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if report.Passed() != tc.want {
+				t.Fatalf("CheckCompatibility() passed = %t, want %t: %+v", report.Passed(), tc.want, report.Checks)
+			}
+			for _, check := range report.Checks {
+				if check.Name == "AllNamespaces install mode supported" {
+					if check.Passed != tc.want {
+						t.Fatalf("install mode check = %+v, want passed %t", check, tc.want)
+					}
+					return
+				}
+			}
+			t.Fatal("missing AllNamespaces install mode check")
+		})
 	}
 }
 

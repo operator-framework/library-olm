@@ -74,8 +74,10 @@ Verified during Phase 8 E2E.
 
 ## Phase 3 — Compatibility checks & acknowledgment framework — [OPRUN-4719](https://redhat.atlassian.net/browse/OPRUN-4719)
 **Goal:** All eligibility rules (R3) and the override mechanism (R2.5).
-- `compatibility.go`: implement C1, C4, C5, C6, C8 as overridable (soft) checks; C2 and C3
-  as hard (non-overridable) blocks. Add `checkNoOLMv0APIAccess` (C5, inspecting all installed
+- `compatibility.go`: implement C1, C4, C5, C6, C8 as overridable (soft) checks; C1a, C2, and C3
+  as hard (non-overridable) blocks. C1a verifies that the installed CSV declares AllNamespaces
+  support; acknowledging a watch-scope change cannot override missing bundle support. Add
+  `checkNoOLMv0APIAccess` (C5, inspecting all installed
   RBAC, **excluding** `operatorconditions`, flagging only if OLMv0 API access exists without
   OLMv1 RBAC). Keep the OperatorCondition-**status** check (C4, R9).
 - `types.go`: `Options` gains one `bool` per soft flag — `AcknowledgeWatchScopeChange`,
