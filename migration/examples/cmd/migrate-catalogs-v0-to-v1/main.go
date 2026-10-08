@@ -61,7 +61,13 @@ Examples:
   migrate-catalogs-v0-to-v1
   migrate-catalogs-v0-to-v1 --dry-run
   migrate-catalogs-v0-to-v1 --delete-catalogsource`,
-	RunE: runMigrateCatalogs,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Flag, positional-argument, and output-format validation have passed.
+		// Cluster and migration errors should not print command usage.
+		cmd.SilenceUsage = true
+		return runMigrateCatalogs(cmd, args)
+	},
 }
 
 func init() {
@@ -72,7 +78,6 @@ func init() {
 	rootCmd.Flags().StringVar(&outputMode, "output", clioutput.Text, "Output format: "+strings.Join(outputFormats.Names(), " or "))
 	rootCmd.PersistentPreRunE = func(_ *cobra.Command, _ []string) error { return outputFormats.Validate(outputMode) }
 	rootCmd.SilenceErrors = true
-	rootCmd.SilenceUsage = true
 }
 
 func main() {
