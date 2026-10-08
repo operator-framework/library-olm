@@ -3,6 +3,7 @@ package image
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -162,6 +163,9 @@ type cachedManifest struct {
 }
 
 func (s *CachingRepository) FetchManifest(ctx context.Context, desc ocispecv1.Descriptor) ([]byte, string, error) {
+	if err := desc.Digest.Validate(); err != nil {
+		return nil, "", fmt.Errorf("invalid manifest digest %q: %w", desc.Digest, err)
+	}
 	digestKey := desc.Digest.String()
 
 	if m, ok := s.manifests.Load(digestKey); ok {
@@ -197,6 +201,9 @@ func (s *CachingRepository) fetchAndCacheManifest(ctx context.Context, desc ocis
 }
 
 func (s *CachingRepository) FetchBlob(ctx context.Context, desc ocispecv1.Descriptor) (io.ReadCloser, error) {
+	if err := desc.Digest.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid blob digest %q: %w", desc.Digest, err)
+	}
 	blobPath := filepath.Join(s.blobsDir(), desc.Digest.String())
 
 	if f, err := os.Open(blobPath); err == nil {

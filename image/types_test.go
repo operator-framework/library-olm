@@ -328,6 +328,21 @@ func TestCachingRepository_FetchManifest(t *testing.T) {
 	})
 }
 
+func TestCachingRepository_FetchManifestRejectsInvalidDigest(t *testing.T) {
+	inner := testutil.NewFakeRepo()
+	repo, err := NewCachingRepository(inner)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = repo.Close() })
+
+	desc := ocispecv1.Descriptor{Digest: digest.Digest("sha256:x/../../../outside")}
+	inner.Manifests[desc.Digest.String()] = testutil.FakeManifest{Bytes: []byte("manifest")}
+	_, _, err = repo.FetchManifest(context.Background(), desc)
+	require.ErrorIs(t, err, digest.ErrDigestInvalidLength)
+	assert.Contains(t, err.Error(), "invalid manifest digest")
+	assert.Equal(t, int32(0), inner.FetchManifestCount.Load())
+	assert.Empty(t, repo.CachedDescriptors())
+}
+
 // blockingFakeRepo wraps a FakeRepo, blocking Resolve, FetchManifest, and
 // FetchBlob until a channel is closed. This allows tests to control timing
 // for concurrent singleflight scenarios.
@@ -497,6 +512,49 @@ func TestCachingRepository_FetchBlob(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int32(0), inner.FetchBlobCount.Load(), "inner should not be called")
 	})
+}
+
+func TestCachingRepository_FetchBlobRejectsTraversalDigest(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		outsideExists bool
+	}{
+		{name: "ExistingFile", outsideExists: true},
+		{name: "MissingFile", outsideExists: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+			t.Setenv("TMPDIR", tempDir)
+			inner := testutil.NewFakeRepo()
+			repo, err := NewCachingRepository(inner)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = repo.Close() })
+
+			desc := ocispecv1.Descriptor{Digest: digest.Digest("sha256:x/../../../outside")}
+			outsidePath := filepath.Join(tempDir, "outside")
+			require.Equal(t, outsidePath, filepath.Join(repo.blobsDir(), desc.Digest.String()))
+			if tc.outsideExists {
+				require.NoError(t, os.WriteFile(outsidePath, []byte("private"), 0600))
+			}
+			inner.Blobs[desc.Digest.String()] = func() io.ReadCloser {
+				return io.NopCloser(bytes.NewReader([]byte("attacker content")))
+			}
+
+			reader, err := repo.FetchBlob(context.Background(), desc)
+			require.Nil(t, reader)
+			require.ErrorIs(t, err, digest.ErrDigestInvalidLength)
+			assert.Contains(t, err.Error(), "invalid blob digest")
+			assert.Equal(t, int32(0), inner.FetchBlobCount.Load())
+			if tc.outsideExists {
+				contents, err := os.ReadFile(outsidePath)
+				require.NoError(t, err)
+				assert.Equal(t, []byte("private"), contents)
+			} else {
+				_, err := os.Stat(outsidePath)
+				require.ErrorIs(t, err, os.ErrNotExist)
+			}
+		})
+	}
 }
 
 func TestCachingRepository_Close(t *testing.T) {
