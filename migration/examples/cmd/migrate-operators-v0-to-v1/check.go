@@ -65,10 +65,13 @@ func runCheck(cmd *cobra.Command, args []string) error { //nolint:nestif
 		if err != nil {
 			return fmt.Errorf("scan failed: %w", err)
 		}
+		if err := progressError(); err != nil {
+			return err
+		}
 		if err := output.scanResults("check", results); err != nil {
 			return err
 		}
-		return progressError()
+		return nil
 	}
 
 	operatorName := args[0]
@@ -89,8 +92,11 @@ func runCheck(cmd *cobra.Command, args []string) error { //nolint:nestif
 	if err != nil {
 		return fmt.Errorf("pre-migration check failed: %w", err)
 	}
+	if err := progressError(); err != nil {
+		return err
+	}
 	if err := output.checkResult("check", target, *result); err != nil {
 		return err
 	}
-	return progressError()
+	return nil
 }
