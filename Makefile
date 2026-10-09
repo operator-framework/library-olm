@@ -5,6 +5,7 @@ ROOT_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 BIN_DIR  := $(ROOT_DIR)/bin
 
 GOLANG_VERSION := $(shell sed -En 's/^go (.*)$$/\1/p' "go.mod")
+GO_BUILD_TAGS := containers_image_openpgp
 
 # bingo manages consistent tooling versions.
 include .bingo/Variables.mk
@@ -40,13 +41,17 @@ build-migrate-catalogs: ## Build migrate-catalogs-v0-to-v1 into bin/
 
 .PHONY: build-all
 build-all: ## Build and verify all packages (library + CLIs)
-	go build ./...
+	go build -tags "$(GO_BUILD_TAGS)" ./...
+
+.PHONY: image/test
+image/test: ## Run image package unit tests
+	go test -tags "$(GO_BUILD_TAGS)" ./image/...
 
 ##@ Lint & Verify
 
 .PHONY: lint
 lint: $(GOLANGCI_LINT) ## Run golangci-lint
-	$(GOLANGCI_LINT) run ./...
+	$(GOLANGCI_LINT) run --build-tags "$(GO_BUILD_TAGS)" ./...
 
 .PHONY: fmt
 fmt: ## Run gofmt
@@ -54,7 +59,7 @@ fmt: ## Run gofmt
 
 .PHONY: vet
 vet: ## Run go vet
-	go vet ./...
+	go vet -tags "$(GO_BUILD_TAGS)" ./...
 
 .PHONY: tidy
 tidy: ## Run go mod tidy
