@@ -115,8 +115,10 @@ result, and terminal-error envelope. Each catalog result includes its per-source
 outcome (`created`, `adopted`, `skipped`, `error`, or `dry-run`), reason, and notes.
 Library callers receive typed progress through `CatalogMigrator.Progress` and can
 use `migration/pkg/clioutput` for text or JSONL rendering.
-The catalog CLI fails if JSONL progress cannot be written; a unit test covers the
-empty-result case, which does not need a cluster.
+Both CLIs fail on text or JSONL progress-write errors. Operator unit tests cover
+the first structured error, text-write failure, and a failed batch result rather
+than a success result; catalog unit tests cover text and JSONL failures even when
+the result set is empty. These output tests do not need a cluster.
 
 `make migration/test-e2e-fixture-matrix` runs only deterministic fixture scenarios. `make
 migration/test-e2e-live-matrix` runs only the real-operator smoke scenarios. Both use the Kind-generated
