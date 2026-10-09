@@ -90,7 +90,12 @@ func runCleanup(cmd *cobra.Command, args []string) error { //nolint:nestif
 		var firstErr error
 		for _, ceName := range conflictCEs {
 			m.Progress = progressFuncFor("cleanup", ceName)
+			startProgress()
 			err := m.Cleanup(ctx, migration.Options{ClusterExtensionName: ceName})
+			clearProgress()
+			if err == nil {
+				err = progressError()
+			}
 			if writeErr := output.batchResult("cleanup", ceName, err); writeErr != nil {
 				return writeErr
 			}
@@ -107,7 +112,12 @@ func runCleanup(cmd *cobra.Command, args []string) error { //nolint:nestif
 	m.Progress = progressFuncFor("cleanup", ceName)
 	output.singleStart("cleanup", ceName)
 
+	startProgress()
 	err = m.Cleanup(ctx, migration.Options{ClusterExtensionName: ceName})
+	clearProgress()
+	if err == nil {
+		err = progressError()
+	}
 	if outputErr := output.singleResult("cleanup", ceName, err); outputErr != nil {
 		return outputErr
 	}

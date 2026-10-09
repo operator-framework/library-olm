@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -18,6 +19,7 @@ import (
 	ocv1 "github.com/operator-framework/operator-controller/api/v1"
 
 	"github.com/operator-framework/library-olm/migration/pkg/catalogmigration"
+	"github.com/operator-framework/library-olm/migration/pkg/clioutput"
 )
 
 const (
@@ -41,6 +43,7 @@ var (
 	dryRun                      bool
 	deleteCatalogSource         bool
 	acknowledgePriorityOverflow bool
+	outputMode                  = clioutput.Text
 )
 
 var rootCmd = &cobra.Command{
@@ -66,10 +69,15 @@ func init() {
 	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print what would be created without modifying the cluster")
 	rootCmd.Flags().BoolVar(&deleteCatalogSource, "delete-catalogsource", false, "Delete source CatalogSource after migration (only when no Subscription references it)")
 	rootCmd.Flags().BoolVar(&acknowledgePriorityOverflow, "acknowledge-priority-overflow", false, "Cap out-of-range priority at MaxInt32/MinInt32 and proceed")
+	rootCmd.Flags().StringVar(&outputMode, "output", clioutput.Text, "Output format: "+strings.Join(outputFormats.Names(), " or "))
+	rootCmd.PersistentPreRunE = func(_ *cobra.Command, _ []string) error { return outputFormats.Validate(outputMode) }
+	rootCmd.SilenceErrors = true
+	rootCmd.SilenceUsage = true
 }
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
+		selectedCatalogOutput().fatal(err)
 		os.Exit(1)
 	}
 }
@@ -121,23 +129,24 @@ func runMigrateCatalogs(cmd *cobra.Command, _ []string) error {
 	}
 
 	cm := catalogmigration.NewCatalogMigrator(c)
+	output := selectedCatalogOutput()
+	cm.Progress = output.progress
 	opts := catalogmigration.CatalogMigratorOptions{
 		DryRun:                      dryRun,
 		DeleteCatalogSource:         deleteCatalogSource,
 		AcknowledgePriorityOverflow: acknowledgePriorityOverflow,
 	}
 
-	if dryRun {
-		fmt.Printf("\n🔍 Dry run — no cluster changes will be made.\n\n")
-	} else {
-		fmt.Printf("\n🔄 Migrating CatalogSources to ClusterCatalogs...\n\n")
-	}
+	output.start(dryRun)
 
 	results, err := cm.MigrateCatalogs(cmd.Context(), opts)
 	if err != nil {
 		return fmt.Errorf("catalog migration failed: %w", err)
 	}
+	return output.results(results)
+}
 
+func reportCatalogText(results []catalogmigration.CatalogMigrationResult) error {
 	// Print results grouped by status
 	var created, adopted, skipped, errored, dryResults []catalogmigration.CatalogMigrationResult
 	for _, r := range results {

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/operator-framework/library-olm/migration/pkg/clioutput"
 	"github.com/operator-framework/library-olm/migration/pkg/migration"
 )
 
@@ -15,24 +16,94 @@ type recordingFormatter struct {
 	records []outputRecord
 }
 
-func (*recordingFormatter) structured() bool { return true }
+func (*recordingFormatter) Structured() bool { return true }
 
-func (f *recordingFormatter) writeRecord(record outputRecord) error {
+func (f *recordingFormatter) WriteRecord(_ io.Writer, record outputRecord) error {
 	f.records = append(f.records, record)
 	return nil
+}
+
+type failingProgressFormatter struct {
+	first, later error
+	writes       int
+	records      []outputRecord
+}
+
+func (*failingProgressFormatter) Structured() bool { return true }
+
+func (f *failingProgressFormatter) WriteRecord(_ io.Writer, record outputRecord) error {
+	if record.Type == "progress" {
+		f.writes++
+		if f.writes == 1 {
+			return f.first
+		}
+		return f.later
+	}
+	f.records = append(f.records, record)
+	return nil
+}
+
+func TestOperatorProgressRetainsFirstStructuredWriteFailure(t *testing.T) {
+	first := errors.New("first progress write failed")
+	formatter := &failingProgressFormatter{first: first, later: errors.New("later progress write failed")}
+	oldMode, oldFormats := outputMode, outputFormats
+	outputFormats = clioutput.NewRegistry()
+	outputFormats.Register("failing", formatter)
+	outputMode = "failing"
+	t.Cleanup(func() {
+		outputMode, outputFormats = oldMode, oldFormats
+		startProgress()
+		clearProgress()
+	})
+
+	startProgress()
+	progress := progressFuncFor("convert", "operators/widget")
+	progress(migration.ProgressEvent{Step: migration.ProgressStepProfile, Status: migration.ProgressStarted})
+	progress(migration.ProgressEvent{Step: migration.ProgressStepProfile, Status: migration.ProgressCompleted})
+	clearProgress()
+	if err := progressError(); !errors.Is(err, first) {
+		t.Fatalf("progress error = %v, want first write failure", err)
+	}
+}
+
+func TestOperatorProgressReportsTextWriteFailure(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	oldStdout, oldMode := os.Stdout, outputMode
+	os.Stdout, outputMode = writer, clioutput.Text
+	t.Cleanup(func() {
+		os.Stdout, outputMode = oldStdout, oldMode
+		_ = writer.Close()
+		startProgress()
+		clearProgress()
+	})
+
+	startProgress()
+	progressFuncFor("convert", "operators/widget")(migration.ProgressEvent{Step: migration.ProgressStepProfile, Status: migration.ProgressStarted, Message: "starting"})
+	clearProgress()
+	if err := progressError(); err == nil || !strings.Contains(err.Error(), "write operator progress") {
+		t.Fatalf("text progress write error = %v", err)
+	}
 }
 
 func TestOutputFormatterRegistration(t *testing.T) {
 	formatter := &recordingFormatter{}
 	oldMode := outputMode
-	outputFormatters["test"] = formatter
+	oldFormats := outputFormats
+	outputFormats = clioutput.NewRegistry()
+	outputFormats.Register("test", formatter)
 	outputMode = "test"
 	t.Cleanup(func() {
 		outputMode = oldMode
-		delete(outputFormatters, "test")
+		outputFormats = oldFormats
 	})
 
-	if err := validateOutputFormat(); err != nil || !structuredOutput() {
+	if err := outputFormats.Validate(outputMode); err != nil || !structuredOutput() {
 		t.Fatalf("registered format was not selected: %v", err)
 	}
 	progressFuncFor("convert", "operators/widget")(migration.ProgressEvent{
@@ -46,7 +117,7 @@ func TestOutputFormatterRegistration(t *testing.T) {
 	}
 
 	outputMode = "unsupported"
-	if err := validateOutputFormat(); err == nil || !strings.Contains(err.Error(), "unsupported") {
+	if err := outputFormats.Validate(outputMode); err == nil || !strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("invalid format validation = %v", err)
 	}
 	if structuredOutput() {
@@ -57,11 +128,13 @@ func TestOutputFormatterRegistration(t *testing.T) {
 func TestCommandOutputUsesSelectedFormatter(t *testing.T) {
 	formatter := &recordingFormatter{}
 	oldMode := outputMode
-	outputFormatters["test"] = formatter
+	oldFormats := outputFormats
+	outputFormats = clioutput.NewRegistry()
+	outputFormats.Register("test", formatter)
 	outputMode = "test"
 	t.Cleanup(func() {
 		outputMode = oldMode
-		delete(outputFormatters, "test")
+		outputFormats = oldFormats
 	})
 
 	output := selectedCommandOutput()

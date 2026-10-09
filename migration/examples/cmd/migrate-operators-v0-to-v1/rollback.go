@@ -79,7 +79,12 @@ func runRollback(cmd *cobra.Command, args []string) error { //nolint:nestif
 		var firstErr error
 		for _, name := range targets {
 			m.Progress = progressFuncFor("rollback", name)
+			startProgress()
 			err := m.Rollback(ctx, migration.Options{ClusterExtensionName: name, AcknowledgeInstalled: rollbackAcknowledgeInstalled})
+			clearProgress()
+			if err == nil {
+				err = progressError()
+			}
 			if writeErr := output.batchResult("rollback", name, err); writeErr != nil {
 				return writeErr
 			}
@@ -96,7 +101,12 @@ func runRollback(cmd *cobra.Command, args []string) error { //nolint:nestif
 	m.Progress = progressFuncFor("rollback", ceName)
 	output.singleStart("rollback", ceName)
 
+	startProgress()
 	err = m.Rollback(ctx, migration.Options{ClusterExtensionName: ceName, AcknowledgeInstalled: rollbackAcknowledgeInstalled})
+	clearProgress()
+	if err == nil {
+		err = progressError()
+	}
 	if outputErr := output.singleResult("rollback", ceName, err); outputErr != nil {
 		return outputErr
 	}

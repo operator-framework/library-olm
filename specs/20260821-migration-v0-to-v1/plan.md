@@ -112,6 +112,8 @@ flag is set; CE carries the matching annotation.
   then COS with orphan cascade (fallback: new COS revision → `Succeeded=True` → orphan delete);
   restore Subscription from the backup annotation (`startingCSV` → `installedCSV`).
 - `cleanup <ce-name> | --all`: for `Conflict`; delete Subscription (orphan) + `CleanupOLMv0Resources`.
+- Fail operator commands on text or JSONL progress-write errors before reporting a
+  successful check, scan, or conversion result.
 - CLI files under `migration/examples/cmd/migrate-operators-v0-to-v1/` (one file per verb).
 
 **Depends on:** Phases 1–3. **Exit:** `check`, `convert` (single + `--all`), `rollback`, and
@@ -123,6 +125,10 @@ flag is set; CE carries the matching annotation.
 - List CatalogSources; skip already-migrated (matching image); create `ClusterCatalog` from
   the image and wait `Serving=True`; report per source; `--dry-run`.
 - Report non-image sources (configmap/internal/address) as not migratable.
+- Keep `MigrateCatalogs` result semantics while emitting typed progress, notes, and failures
+  through the same callback used by operator migration. Share text/JSONL output utilities
+  across both CLIs and expose `--output` on the catalog CLI. Treat text and JSONL
+  progress-write failures as command errors, including for an empty scan.
 
 **Depends on:** Phase 1. **Exit:** N CatalogSources → N serving ClusterCatalogs; operator scan
 then reports catalog-available.

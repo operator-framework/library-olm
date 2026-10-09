@@ -21,6 +21,8 @@ API groups referenced:
 - `Rollback(ctx, opts)` → restore an operator to OLMv0 management.
 - `Cleanup(ctx, opts)` → finish a partial migration (Conflict state).
 - A separate catalog-migration API for `CatalogSource` → `ClusterCatalog`.
+  `CatalogMigrator.Progress` uses the same typed `ProgressEvent` callback as operator migration;
+  its existing per-source result slice remains the authoritative outcome report.
 
 **R1.2 — CLI command surface.** Two binaries. `migrate-catalogs-v0-to-v1` (with
 `--dry-run`) migrates catalogs. `migrate-operators-v0-to-v1` follows a kubectl/`oc`-style
@@ -62,6 +64,15 @@ after creating the `ClusterCatalog`, but only when no `Subscription` references 
 conditions required. Default: leave the `CatalogSource` in place.
 `--acknowledge-priority-overflow` caps an out-of-range `spec.priority` at `math.MaxInt32` /
 `math.MinInt32` and proceeds rather than skipping the CatalogSource.
+Both CLIs accept `--output=text|jsonl` (default `text`). JSONL uses one record per line
+for progress, per-target results, and terminal errors; catalog result data retains the
+per-source outcome, reason, and informational notes. Library callers can use the same
+progress callback and `migration/pkg/clioutput` rendering utilities.
+Both CLIs must exit nonzero when progress output cannot be written in text or
+JSONL mode. The operator CLI must not emit a successful check, scan, or conversion
+result after a progress-write failure. A catalog progress-write failure must
+cause a nonzero exit even when no CatalogSources were found; per-source result
+reporting remains otherwise unchanged.
 
 **R1.3 — Four-state classification.** Every `Subscription` is `Eligible`, `Ineligible`,
 `AlreadyMigrated`, or `Conflict`, each with a specific human-readable reason.

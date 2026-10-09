@@ -110,6 +110,15 @@ one JSON object per line. Records have a `type` (`progress`, `scan`, `check`,
 `command`, and, for single-operator work, `target`.
 For example, `migrate-operators-v0-to-v1 convert my-operator -n operators
 --dry-run --output=jsonl` emits a structured preview without raw resource data.
+The catalog CLI also accepts `--output=jsonl`; its records use the same progress,
+result, and terminal-error envelope. Each catalog result includes its per-source
+outcome (`created`, `adopted`, `skipped`, `error`, or `dry-run`), reason, and notes.
+Library callers receive typed progress through `CatalogMigrator.Progress` and can
+use `migration/pkg/clioutput` for text or JSONL rendering.
+Both CLIs fail on text or JSONL progress-write errors. Operator unit tests cover
+the first structured error, text-write failure, and a failed batch result rather
+than a success result; catalog unit tests cover text and JSONL failures even when
+the result set is empty. These output tests do not need a cluster.
 
 `make migration/test-e2e-fixture-matrix` runs only deterministic fixture scenarios. `make
 migration/test-e2e-live-matrix` runs only the real-operator smoke scenarios. Both use the Kind-generated

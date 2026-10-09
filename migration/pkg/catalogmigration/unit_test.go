@@ -2,7 +2,9 @@ package catalogmigration
 
 import (
 	"context"
+	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +15,8 @@ import (
 
 	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	ocv1 "github.com/operator-framework/operator-controller/api/v1"
+
+	"github.com/operator-framework/library-olm/migration/pkg/migration"
 )
 
 func TestValidatePriority(t *testing.T) {
@@ -66,12 +70,16 @@ func TestMigrateCatalogsDryRunAndAdoption(t *testing.T) {
 		return &operatorsv1alpha1.CatalogSource{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Spec: operatorsv1alpha1.CatalogSourceSpec{SourceType: operatorsv1alpha1.SourceTypeGrpc, Image: ref}}
 	}
 	sharedA, sharedB := image("shared", "one", "registry/shared:1"), image("shared", "two", "registry/shared:1")
+	sharedA.Spec.Secrets = []string{"pull-secret"}
 	different := image("shared", "three", "registry/other:1")
 	configmap := &operatorsv1alpha1.CatalogSource{ObjectMeta: metav1.ObjectMeta{Name: "cm", Namespace: "one"}, Spec: operatorsv1alpha1.CatalogSourceSpec{SourceType: operatorsv1alpha1.SourceTypeConfigmap}}
 	existing := &ocv1.ClusterCatalog{ObjectMeta: metav1.ObjectMeta{Name: "already"}, Spec: ocv1.ClusterCatalogSpec{Source: ocv1.CatalogSource{Image: &ocv1.ImageSource{Ref: "registry/covered:1"}}}}
 	covered := image("covered", "one", "registry/covered:1")
 	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sharedA, sharedB, different, configmap, existing, covered).Build()
-	results, err := NewCatalogMigrator(client).MigrateCatalogs(context.Background(), CatalogMigratorOptions{DryRun: true})
+	cm := NewCatalogMigrator(client)
+	var events []migration.ProgressEvent
+	cm.Progress = func(event migration.ProgressEvent) { events = append(events, event) }
+	results, err := cm.MigrateCatalogs(context.Background(), CatalogMigratorOptions{DryRun: true})
 	if err != nil || len(results) != 5 {
 		t.Fatalf("results=%#v err=%v", results, err)
 	}
@@ -94,6 +102,83 @@ func TestMigrateCatalogsDryRunAndAdoption(t *testing.T) {
 	}
 	if !foundSkipped || !foundAdopt {
 		t.Fatalf("missing skipped/adopt results: %#v", results)
+	}
+	var scanned, skipped, previewed, noted bool
+	for _, event := range events {
+		scanned = scanned || (event.Step == migration.ProgressStepScan && event.Status == migration.ProgressCompleted)
+		skipped = skipped || (event.Target == "one/cm" && event.Status == migration.ProgressWarning)
+		previewed = previewed || (event.Target == "one/covered" && event.Status == migration.ProgressCompleted)
+		noted = noted || (event.Target == "one/shared" && event.Status == migration.ProgressNote)
+	}
+	if !scanned || !skipped || !previewed || !noted {
+		t.Fatalf("missing scan, source, or informational progress events: %#v", events)
+	}
+}
+
+type catalogListFailure struct{ client.Client }
+
+func (c catalogListFailure) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*operatorsv1alpha1.CatalogSourceList); ok {
+		return errors.New("catalog listing denied")
+	}
+	return c.Client.List(ctx, list, opts...)
+}
+
+type catalogCreateFailure struct {
+	client.Client
+	cause error
+}
+
+func (c catalogCreateFailure) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if _, ok := obj.(*ocv1.ClusterCatalog); ok {
+		return c.cause
+	}
+	return c.Client.Create(ctx, obj, opts...)
+}
+
+func TestMigrateCatalogsReportsPerSourceFailure(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := operatorsv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := ocv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	source := &operatorsv1alpha1.CatalogSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "source", Namespace: "ns"},
+		Spec:       operatorsv1alpha1.CatalogSourceSpec{SourceType: operatorsv1alpha1.SourceTypeGrpc, Image: "example.com/catalog:v1"},
+	}
+	cause := errors.New("catalog creation denied")
+	client := catalogCreateFailure{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(source).Build(), cause: cause}
+	cm := NewCatalogMigrator(client)
+	var events []migration.ProgressEvent
+	cm.Progress = func(event migration.ProgressEvent) { events = append(events, event) }
+	results, err := cm.MigrateCatalogs(t.Context(), CatalogMigratorOptions{})
+	if err != nil || len(results) != 1 || results[0].Status != "error" {
+		t.Fatalf("results = %#v, error = %v", results, err)
+	}
+	found := false
+	for _, event := range events {
+		if event.Target == "ns/source" && event.Status == migration.ProgressFailed && errors.Is(event.Err, cause) && strings.Contains(event.Err.Error(), "catalog creation denied") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing per-source failure event: %#v", events)
+	}
+}
+
+func TestMigrateCatalogsReportsListFailure(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := operatorsv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	cm := NewCatalogMigrator(catalogListFailure{Client: fake.NewClientBuilder().WithScheme(scheme).Build()})
+	var events []migration.ProgressEvent
+	cm.Progress = func(event migration.ProgressEvent) { events = append(events, event) }
+	_, err := cm.MigrateCatalogs(t.Context(), CatalogMigratorOptions{})
+	if err == nil || len(events) != 2 || events[0].Status != migration.ProgressStarted || events[1].Status != migration.ProgressFailed || !errors.Is(events[1].Err, err) {
+		t.Fatalf("MigrateCatalogs() error = %v, events = %#v", err, events)
 	}
 }
 
