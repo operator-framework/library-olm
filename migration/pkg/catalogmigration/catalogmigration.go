@@ -9,9 +9,11 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -82,9 +84,9 @@ func (cm *CatalogMigrator) listFailure(kind string, err error) error {
 // If any image differs, all sources in that group are namespace-qualified.
 //
 // The returned slice contains one outcome per source. Per-source create,
-// annotation, or serving failures appear as results with Status "error" rather
-// than as the returned error; callers must inspect every result. The returned
-// error covers failures to list the required cluster objects. DryRun reports
+// annotation, serving, or deletion-preflight failures appear as results with
+// Status "error" rather than as the returned error; callers must inspect every
+// result. The returned error covers failures to list the source catalogs. DryRun reports
 // proposed actions without creating or annotating catalogs.
 func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigratorOptions) ([]CatalogMigrationResult, error) {
 	cm.progress(migration.ProgressEvent{Step: migration.ProgressStepScan, Status: migration.ProgressStarted, Message: "Scanning CatalogSources and migration references"})
@@ -100,29 +102,29 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 		return nil, cm.listFailure("ClusterCatalogs", err)
 	}
 
-	// Build map of existing ClusterCatalogs by image ref
-	existingByImage := make(map[string]*ocv1.ClusterCatalog)
+	// Keep all existing catalogs for each image. More than one ClusterCatalog
+	// can technically reference an image; resolveExistingClusterCatalog chooses
+	// one deterministically rather than depending on list order.
+	existingByImage := make(map[string][]*ocv1.ClusterCatalog)
+	existingByName := make(map[string]*ocv1.ClusterCatalog)
 	for i := range ccList.Items {
 		cc := &ccList.Items[i]
+		existingByName[cc.Name] = cc
 		if cc.Spec.Source.Image != nil && cc.Spec.Source.Image.Ref != "" {
-			existingByImage[cc.Spec.Source.Image.Ref] = cc
+			existingByImage[cc.Spec.Source.Image.Ref] = append(existingByImage[cc.Spec.Source.Image.Ref], cc)
 		}
 	}
-
-	// List all Subscriptions to detect which CatalogSources are still referenced
-	var subList operatorsv1alpha1.SubscriptionList
-	if err := cm.Client.List(ctx, &subList); err != nil {
-		return nil, cm.listFailure("Subscriptions", err)
+	for _, catalogs := range existingByImage {
+		sort.Slice(catalogs, func(i, j int) bool { return catalogs[i].Name < catalogs[j].Name })
 	}
+	sort.Slice(csList.Items, func(i, j int) bool {
+		if csList.Items[i].Namespace == csList.Items[j].Namespace {
+			return csList.Items[i].Name < csList.Items[j].Name
+		}
+		return csList.Items[i].Namespace < csList.Items[j].Namespace
+	})
+
 	cm.progress(migration.ProgressEvent{Step: migration.ProgressStepScan, Status: migration.ProgressCompleted, Message: fmt.Sprintf("Found %d CatalogSource(s)", len(csList.Items))})
-
-	// Build set of referenced CatalogSources
-	referencedCS := make(map[string]bool)
-	for _, sub := range subList.Items {
-		key := fmt.Sprintf("%s/%s", sub.Spec.CatalogSourceNamespace, sub.Spec.CatalogSource)
-		referencedCS[key] = true
-	}
-
 	// Determine naming strategy: group by name, check for image conflicts
 	type csEntry struct {
 		cs    operatorsv1alpha1.CatalogSource
@@ -199,7 +201,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 	}
 
 	// Track which ClusterCatalog names we've already created this run (for consolidation)
-	createdThisRun := make(map[string]bool)
+	createdThisRun := make(map[string]string) // ClusterCatalog name → source image
 
 	// Process image-type CatalogSources
 	for _, cs := range csList.Items {
@@ -244,30 +246,46 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 		csRef := fmt.Sprintf("%s/%s", cs.Namespace, cs.Name)
 
 		// Check if already created this run (consolidation case)
-		if createdThisRun[ccName] {
-			recordResult(CatalogMigrationResult{
+		if image, ok := createdThisRun[ccName]; ok {
+			if image != cs.Spec.Image {
+				collisionErr := fmt.Errorf("ClusterCatalog %s already selected with image %q, which does not match CatalogSource image %q", ccName, image, cs.Spec.Image)
+				recordResult(CatalogMigrationResult{
+					CatalogSourceName:      cs.Name,
+					CatalogSourceNamespace: cs.Namespace,
+					ClusterCatalogName:     ccName,
+					Status:                 "error",
+					Reason:                 collisionErr.Error(),
+					Notes:                  notes,
+				}, collisionErr)
+				continue
+			}
+			result := CatalogMigrationResult{
 				CatalogSourceName:      cs.Name,
 				CatalogSourceNamespace: cs.Namespace,
 				ClusterCatalogName:     ccName,
 				Status:                 "adopted",
 				Reason:                 fmt.Sprintf("consolidated into shared ClusterCatalog %s", ccName),
 				Notes:                  notes,
-			}, nil)
+			}
+			cm.handleCatalogSourceDeletion(ctx, &cs, csRef, opts, &result)
+			recordResult(result, nil)
 			continue
 		}
 
 		// Check if an existing ClusterCatalog matches by image
-		if existing, found := existingByImage[cs.Spec.Image]; found {
+		if existing := resolveExistingClusterCatalog(existingByImage[cs.Spec.Image], ccName); existing != nil {
 			// Adopt: set annotation if not already present
 			if opts.DryRun {
-				recordResult(CatalogMigrationResult{
+				result := CatalogMigrationResult{
 					CatalogSourceName:      cs.Name,
 					CatalogSourceNamespace: cs.Namespace,
 					ClusterCatalogName:     existing.Name,
 					Status:                 "dry-run",
 					Reason:                 fmt.Sprintf("would adopt existing ClusterCatalog %s", existing.Name),
 					Notes:                  notes,
-				}, nil)
+				}
+				cm.handleCatalogSourceDeletion(ctx, &cs, csRef, opts, &result)
+				recordResult(result, nil)
 				continue
 			}
 
@@ -283,33 +301,52 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 				continue
 			}
 
-			createdThisRun[existing.Name] = true
-			recordResult(CatalogMigrationResult{
+			createdThisRun[existing.Name] = cs.Spec.Image
+			result := CatalogMigrationResult{
 				CatalogSourceName:      cs.Name,
 				CatalogSourceNamespace: cs.Namespace,
 				ClusterCatalogName:     existing.Name,
 				Status:                 "adopted",
 				Reason:                 "existing ClusterCatalog with matching image adopted",
 				Notes:                  notes,
-			}, nil)
-
-			// Handle --delete-catalogsource
-			if opts.DeleteCatalogSource && !referencedCS[csRef] {
-				_ = cm.Client.Delete(ctx, &cs)
 			}
+			cm.handleCatalogSourceDeletion(ctx, &cs, csRef, opts, &result)
+			recordResult(result, nil)
+			continue
+		}
+
+		// A different image already owns the name this source would use. Do not
+		// rely on Create returning AlreadyExists: report a safe, actionable
+		// per-source error and leave both resources unchanged.
+		if existing := existingByName[ccName]; existing != nil {
+			existingImage := ""
+			if existing.Spec.Source.Image != nil {
+				existingImage = existing.Spec.Source.Image.Ref
+			}
+			collisionErr := fmt.Errorf("ClusterCatalog %s already exists with image %q, which does not match CatalogSource image %q", ccName, existingImage, cs.Spec.Image)
+			recordResult(CatalogMigrationResult{
+				CatalogSourceName:      cs.Name,
+				CatalogSourceNamespace: cs.Namespace,
+				ClusterCatalogName:     ccName,
+				Status:                 "error",
+				Reason:                 collisionErr.Error(),
+				Notes:                  notes,
+			}, collisionErr)
 			continue
 		}
 
 		// Create new ClusterCatalog
 		if opts.DryRun {
-			recordResult(CatalogMigrationResult{
+			result := CatalogMigrationResult{
 				CatalogSourceName:      cs.Name,
 				CatalogSourceNamespace: cs.Namespace,
 				ClusterCatalogName:     ccName,
 				Status:                 "dry-run",
 				Reason:                 fmt.Sprintf("would create ClusterCatalog %s from image %s", ccName, cs.Spec.Image),
 				Notes:                  notes,
-			}, nil)
+			}
+			cm.handleCatalogSourceDeletion(ctx, &cs, csRef, opts, &result)
+			recordResult(result, nil)
 			continue
 		}
 
@@ -361,25 +398,86 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 			continue
 		}
 
-		createdThisRun[ccName] = true
-		existingByImage[cs.Spec.Image] = cc
+		createdThisRun[ccName] = cs.Spec.Image
+		existingByImage[cs.Spec.Image] = append(existingByImage[cs.Spec.Image], cc)
+		existingByName[cc.Name] = cc
 
-		recordResult(CatalogMigrationResult{
+		result := CatalogMigrationResult{
 			CatalogSourceName:      cs.Name,
 			CatalogSourceNamespace: cs.Namespace,
 			ClusterCatalogName:     ccName,
 			Status:                 "created",
 			Reason:                 fmt.Sprintf("created from image %s", cs.Spec.Image),
 			Notes:                  notes,
-		}, nil)
-
-		// Handle --delete-catalogsource
-		if opts.DeleteCatalogSource && !referencedCS[csRef] {
-			_ = cm.Client.Delete(ctx, &cs)
 		}
+		cm.handleCatalogSourceDeletion(ctx, &cs, csRef, opts, &result)
+		recordResult(result, nil)
 	}
 
 	return results, nil
+}
+
+// resolveExistingClusterCatalog returns a matching catalog. Prefer the name
+// selected for this CatalogSource, then use the lexicographically first match
+// so a duplicate image reference cannot make migration nondeterministic.
+func resolveExistingClusterCatalog(catalogs []*ocv1.ClusterCatalog, preferredName string) *ocv1.ClusterCatalog {
+	var fallback *ocv1.ClusterCatalog
+	for _, catalog := range catalogs {
+		if catalog.Name == preferredName {
+			return catalog
+		}
+		if fallback == nil || catalog.Name < fallback.Name {
+			fallback = catalog
+		}
+	}
+	return fallback
+}
+
+// handleCatalogSourceDeletion implements the deliberately conservative source
+// cleanup policy. It records both a proposed dry-run deletion and failures so
+// callers never mistake a migrated catalog for successful source cleanup.
+func (cm *CatalogMigrator) handleCatalogSourceDeletion(ctx context.Context, cs *operatorsv1alpha1.CatalogSource, csRef string, opts CatalogMigratorOptions, result *CatalogMigrationResult) {
+	if !opts.DeleteCatalogSource {
+		return
+	}
+	var subscriptions operatorsv1alpha1.SubscriptionList
+	if err := cm.Client.List(ctx, &subscriptions); err != nil {
+		result.Status = "error"
+		result.Reason = fmt.Sprintf("%s; failed to list Subscriptions before CatalogSource deletion: %v", result.Reason, err)
+		return
+	}
+	for _, sub := range subscriptions.Items {
+		if sub.Spec != nil && sub.Spec.CatalogSourceNamespace+"/"+sub.Spec.CatalogSource == csRef {
+			result.Notes = append(result.Notes, "CatalogSource retained because one or more Subscriptions still reference it")
+			return
+		}
+	}
+	var current operatorsv1alpha1.CatalogSource
+	if err := cm.Client.Get(ctx, client.ObjectKeyFromObject(cs), &current); err != nil {
+		if apierrors.IsNotFound(err) {
+			result.Notes = append(result.Notes, "CatalogSource already absent")
+			return
+		}
+		result.Status = "error"
+		result.Reason = fmt.Sprintf("%s; failed to get CatalogSource before deletion: %v", result.Reason, err)
+		return
+	}
+	if current.Spec.SourceType != operatorsv1alpha1.SourceTypeGrpc || current.Spec.Image != cs.Spec.Image || (cs.UID != "" && current.UID != cs.UID) {
+		result.Status = "error"
+		result.Reason = fmt.Sprintf("%s; CatalogSource changed since migration began; refusing to delete it", result.Reason)
+		return
+	}
+	if opts.DryRun {
+		result.Notes = append(result.Notes, "would delete unreferenced CatalogSource")
+		return
+	}
+	uid, resourceVersion := current.UID, current.ResourceVersion
+	if err := cm.Client.Delete(ctx, &current, client.Preconditions{UID: &uid, ResourceVersion: &resourceVersion}); err != nil && !apierrors.IsNotFound(err) {
+		result.Status = "error"
+		result.Reason = fmt.Sprintf("%s; failed to delete unreferenced CatalogSource: %v", result.Reason, err)
+		return
+	}
+	result.Notes = append(result.Notes, "deleted unreferenced CatalogSource")
 }
 
 // annotateIfNotPresent sets MigratedFromCatalogSourceAnnotation on the ClusterCatalog

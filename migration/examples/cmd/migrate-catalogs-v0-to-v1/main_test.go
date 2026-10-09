@@ -1,6 +1,8 @@
 package main
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestShouldUseInClusterConfig(t *testing.T) {
 	testCases := []struct {
@@ -20,5 +22,14 @@ func TestShouldUseInClusterConfig(t *testing.T) {
 				t.Fatalf("shouldUseInClusterConfig(%q, %t) = %t, want %t", testCase.kubeconfig, testCase.kubeconfigEnvSet, got, testCase.want)
 			}
 		})
+	}
+}
+
+func TestFormatResultNotes(t *testing.T) {
+	if got := formatResultNotes(nil); got != "" {
+		t.Fatalf("formatResultNotes(nil) = %q, want empty", got)
+	}
+	if got, want := formatResultNotes([]string{"would delete unreferenced CatalogSource", "other note"}), "    note: would delete unreferenced CatalogSource\n    note: other note\n"; got != want {
+		t.Fatalf("formatResultNotes() = %q, want %q", got, want)
 	}
 }

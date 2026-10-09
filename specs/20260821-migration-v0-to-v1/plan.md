@@ -129,6 +129,8 @@ flag is set; CE carries the matching annotation.
   through the same callback used by operator migration. Share text/JSONL output utilities
   across both CLIs and expose `--output` on the catalog CLI. Treat text and JSONL
   progress-write failures as command errors, including for an empty scan.
+- Before optional CatalogSource deletion, recheck current Subscription references and retain
+  the source on lookup failure or image/name conflict.
 
 **Depends on:** Phase 1. **Exit:** N CatalogSources → N serving ClusterCatalogs; operator scan
 then reports catalog-available.
