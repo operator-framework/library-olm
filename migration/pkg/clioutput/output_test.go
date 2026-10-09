@@ -36,9 +36,15 @@ func TestProgressRecordUsesEventTargetAndError(t *testing.T) {
 func TestTextProgressAndError(t *testing.T) {
 	var out, errOut bytes.Buffer
 	pending := ""
-	WriteTextProgress(&out, migration.ProgressEvent{Step: migration.ProgressStepCatalog, Status: migration.ProgressWaiting, Message: "waiting"}, true, &pending)
-	WriteTextProgress(&out, migration.ProgressEvent{Step: migration.ProgressStepCatalog, Status: migration.ProgressWarning, Message: "backup warning", Err: errors.New("denied")}, true, &pending)
-	ClearTextProgress(&out, &pending)
+	if err := WriteTextProgress(&out, migration.ProgressEvent{Step: migration.ProgressStepCatalog, Status: migration.ProgressWaiting, Message: "waiting"}, true, &pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteTextProgress(&out, migration.ProgressEvent{Step: migration.ProgressStepCatalog, Status: migration.ProgressWarning, Message: "backup warning", Err: errors.New("denied")}, true, &pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := ClearTextProgress(&out, &pending); err != nil {
+		t.Fatal(err)
+	}
 	if pending != "" || !strings.Contains(out.String(), "backup warning: denied") {
 		t.Fatalf("text progress = %q, pending = %q", out.String(), pending)
 	}
@@ -47,6 +53,24 @@ func TestTextProgressAndError(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "Error: failed") {
 		t.Fatalf("text error = %q", errOut.String())
+	}
+}
+
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestTextProgressReportsWriteFailure(t *testing.T) {
+	cause := errors.New("output closed")
+	pending := ""
+	if err := WriteTextProgress(failingWriter{cause}, migration.ProgressEvent{Status: migration.ProgressStarted, Message: "starting"}, true, &pending); !errors.Is(err, cause) {
+		t.Fatalf("progress write error = %v, want %v", err, cause)
+	}
+	if err := WriteTextProgress(failingWriter{cause}, migration.ProgressEvent{Status: migration.ProgressWaiting, Message: "waiting"}, true, &pending); !errors.Is(err, cause) {
+		t.Fatalf("waiting write error = %v, want %v", err, cause)
+	}
+	if err := ClearTextProgress(failingWriter{cause}, &pending); !errors.Is(err, cause) {
+		t.Fatalf("clear write error = %v, want %v", err, cause)
 	}
 }
 

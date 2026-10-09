@@ -41,9 +41,16 @@ func selectedCatalogOutput() catalogOutput {
 			}
 		},
 		progress: func(event migration.ProgressEvent) {
-			clioutput.WriteTextProgress(os.Stdout, event, true, &pending)
+			if err := clioutput.WriteTextProgress(os.Stdout, event, true, &pending); err != nil && progressWriteErr == nil {
+				progressWriteErr = fmt.Errorf("write catalog progress: %w", err)
+			}
 		},
-		results: reportCatalogText,
+		results: func(results []catalogmigration.CatalogMigrationResult) error {
+			if err := reportCatalogText(results); err != nil {
+				return err
+			}
+			return progressWriteErr
+		},
 		fatal: func(err error) {
 			_ = clioutput.WriteError(os.Stdout, os.Stderr, formatter, err)
 		},
@@ -60,9 +67,6 @@ func selectedCatalogOutput() catalogOutput {
 				return err
 			}
 			return progressWriteErr
-		}
-		output.fatal = func(err error) {
-			_ = clioutput.WriteError(os.Stdout, os.Stderr, formatter, err)
 		}
 	}
 	return output

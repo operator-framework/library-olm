@@ -11,8 +11,35 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/operator-framework/library-olm/migration/pkg/clioutput"
 	"github.com/operator-framework/library-olm/migration/pkg/migration"
 )
+
+func TestConvertBatchFailsWhenProgressCannotBeWritten(t *testing.T) {
+	cause := errors.New("progress output failed")
+	formatter := &failingProgressFormatter{first: cause, later: cause}
+	oldMode, oldFormats := outputMode, outputFormats
+	outputFormats = clioutput.NewRegistry()
+	outputFormats.Register("failing", formatter)
+	outputMode = "failing"
+	t.Cleanup(func() {
+		outputMode, outputFormats = oldMode, oldFormats
+	})
+
+	results := []migration.OperatorScanResult{{SubscriptionName: "widget", SubscriptionNamespace: "operators", Status: migration.OperatorStatusEligible}}
+	err := convertBatch(t.Context(), results, migration.Options{}, false, false,
+		func(context.Context, migration.Options) error {
+			progressFuncFor("convert", "operators/widget")(migration.ProgressEvent{Step: migration.ProgressStepProfile, Status: migration.ProgressStarted})
+			return nil
+		},
+		func(migration.Options) error { t.Fatal("unexpected preview"); return nil })
+	if !errors.Is(err, cause) {
+		t.Fatalf("batch error = %v, want progress write failure", err)
+	}
+	if len(formatter.records) != 1 || formatter.records[0].Status != migration.ProgressFailed {
+		t.Fatalf("batch reported success despite progress failure: %#v", formatter.records)
+	}
+}
 
 func TestConvertBatchJSONLines(t *testing.T) {
 	reader, writer, err := os.Pipe()

@@ -132,6 +132,9 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 		if err := output.scanResults("convert", results); err != nil {
 			return err
 		}
+		if err := progressError(); err != nil {
+			return err
+		}
 
 		return convertBatch(ctx, results, batchOpts, convertDryRun, convertContinueOnErr, func(ctx context.Context, opts migration.Options) error {
 			m.Progress = progressFuncFor("convert", opts.SubscriptionNamespace+"/"+opts.SubscriptionName)
@@ -162,7 +165,13 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	opts.ApplyDefaults()
 
 	if convertDryRun {
-		if err := runConvertDryRun(cmd, m, opts); err != nil {
+		startProgress()
+		err := runConvertDryRun(cmd, m, opts)
+		clearProgress()
+		if err != nil {
+			return err
+		}
+		if err := progressError(); err != nil {
 			return err
 		}
 		return output.dryRunDone(opts.SubscriptionNamespace + "/" + opts.SubscriptionName)
@@ -176,6 +185,9 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	clearProgress()
 	if err != nil {
 		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := progressError(); err != nil {
+		return err
 	}
 	return output.convertDone(target, operatorName)
 }

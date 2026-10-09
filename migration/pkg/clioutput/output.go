@@ -136,47 +136,57 @@ func ResultRecord(command, target string, resultErr error) Record {
 // ErrorRecord maps a terminal command error to the common CLI envelope.
 func ErrorRecord(err error) Record { return Record{Type: "error", Error: err.Error()} }
 
-// WriteTextProgress renders one event, retaining a pending waiting message so
-// the next event can clear the same terminal line.
-// WriteTextProgress renders a typed progress event in the human-readable style.
-func WriteTextProgress(out io.Writer, event migration.ProgressEvent, running bool, pending *string) {
+// WriteTextProgress renders a typed progress event, retaining a pending waiting
+// message so the next event can clear the same terminal line.
+func WriteTextProgress(out io.Writer, event migration.ProgressEvent, running bool, pending *string) error {
 	if *pending != "" {
-		fmt.Fprintf(out, "\r%80s\r", "")
+		if _, err := fmt.Fprintf(out, "\r%80s\r", ""); err != nil {
+			return err
+		}
 		*pending = ""
 	}
 	switch event.Status {
 	case migration.ProgressStarted:
-		fmt.Fprintf(out, "\n%s%s%s%s\n", colorBold, colorCyan, event.Message, colorReset)
+		_, err := fmt.Fprintf(out, "\n%s%s%s%s\n", colorBold, colorCyan, event.Message, colorReset)
+		return err
 	case migration.ProgressWaiting:
 		if running {
 			*pending = event.Message
-			fmt.Fprintf(out, "\r  %s%s%s", colorDim, event.Message, colorReset)
+			_, err := fmt.Fprintf(out, "\r  %s%s%s", colorDim, event.Message, colorReset)
+			return err
 		}
 	case migration.ProgressCompleted:
 		message := event.Message
 		if message == "" {
 			message = fmt.Sprintf("%s complete", event.Step)
 		}
-		fmt.Fprintf(out, "  %s✓%s %s\n", colorGreen, colorReset, message)
+		_, err := fmt.Fprintf(out, "  %s✓%s %s\n", colorGreen, colorReset, message)
+		return err
 	case migration.ProgressFailed:
-		fmt.Fprintf(out, "  %s✗%s %s\n", colorRed, colorReset, event.Message)
+		_, err := fmt.Fprintf(out, "  %s✗%s %s\n", colorRed, colorReset, event.Message)
+		return err
 	case migration.ProgressWarning:
 		message := event.Message
 		if event.Err != nil {
 			message = fmt.Sprintf("%s: %v", message, event.Err)
 		}
-		fmt.Fprintf(out, "  %s⚠%s  %s\n", colorYellow, colorReset, message)
+		_, err := fmt.Fprintf(out, "  %s⚠%s  %s\n", colorYellow, colorReset, message)
+		return err
 	case migration.ProgressNote:
-		fmt.Fprintf(out, "  %s\n", event.Message)
+		_, err := fmt.Fprintf(out, "  %s\n", event.Message)
+		return err
 	}
+	return nil
 }
 
 // ClearTextProgress clears a waiting message left on the terminal line.
-func ClearTextProgress(out io.Writer, pending *string) {
+func ClearTextProgress(out io.Writer, pending *string) error {
+	var err error
 	if *pending != "" {
-		fmt.Fprintf(out, "\r%80s\r", "")
+		_, err = fmt.Fprintf(out, "\r%80s\r", "")
 	}
 	*pending = ""
+	return err
 }
 
 // WriteError writes a terminal error using the selected formatter, or to

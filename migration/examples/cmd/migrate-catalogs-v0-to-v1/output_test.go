@@ -191,3 +191,24 @@ func TestCatalogProgressWriteFailureWithNoResultsIsReturned(t *testing.T) {
 		t.Fatalf("catalog result failure was masked by progress write failure: %v", err)
 	}
 }
+
+func TestCatalogTextProgressWriteFailureWithNoResultsIsReturned(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	oldStdout, oldMode := os.Stdout, outputMode
+	os.Stdout, outputMode = writer, clioutput.Text
+	t.Cleanup(func() {
+		os.Stdout, outputMode = oldStdout, oldMode
+		_ = writer.Close()
+	})
+	output := selectedCatalogOutput()
+	output.progress(migration.ProgressEvent{Step: migration.ProgressStepScan, Status: migration.ProgressStarted, Message: "scanning"})
+	if err := output.results(nil); err == nil || !strings.Contains(err.Error(), "write catalog progress") {
+		t.Fatalf("text progress write error = %v", err)
+	}
+}

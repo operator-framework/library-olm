@@ -7,7 +7,6 @@ package catalogmigration
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -156,21 +155,19 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 	}
 
 	var results []CatalogMigrationResult
-	recordResult := func(result CatalogMigrationResult) {
+	recordResult := func(result CatalogMigrationResult, cause error) {
 		results = append(results, result)
 		target := result.CatalogSourceNamespace + "/" + result.CatalogSourceName
 		status := migration.ProgressCompleted
-		var eventErr error
 		switch result.Status {
 		case "skipped":
 			status = migration.ProgressWarning
 		case "error":
 			status = migration.ProgressFailed
-			eventErr = errors.New(result.Reason)
 		}
 		cm.progress(migration.ProgressEvent{
 			Step: migration.ProgressStepCatalog, Status: status,
-			Target: target, Message: fmt.Sprintf("CatalogSource %s: %s", target, result.Reason), Err: eventErr,
+			Target: target, Message: fmt.Sprintf("CatalogSource %s: %s", target, result.Reason), Err: cause,
 		})
 		for _, note := range result.Notes {
 			cm.progress(migration.ProgressEvent{Step: migration.ProgressStepCatalog, Status: migration.ProgressNote, Target: target, Message: note})
@@ -198,7 +195,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 			CatalogSourceNamespace: cs.Namespace,
 			Status:                 "skipped",
 			Reason:                 reason,
-		})
+		}, nil)
 	}
 
 	// Track which ClusterCatalog names we've already created this run (for consolidation)
@@ -228,7 +225,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 				ClusterCatalogName:     ccName,
 				Status:                 "skipped",
 				Reason:                 priorityErr.Error(),
-			})
+			}, nil)
 			continue
 		}
 
@@ -255,7 +252,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 				Status:                 "adopted",
 				Reason:                 fmt.Sprintf("consolidated into shared ClusterCatalog %s", ccName),
 				Notes:                  notes,
-			})
+			}, nil)
 			continue
 		}
 
@@ -270,7 +267,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 					Status:                 "dry-run",
 					Reason:                 fmt.Sprintf("would adopt existing ClusterCatalog %s", existing.Name),
 					Notes:                  notes,
-				})
+				}, nil)
 				continue
 			}
 
@@ -282,7 +279,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 					Status:                 "error",
 					Reason:                 fmt.Sprintf("failed to annotate existing ClusterCatalog: %v", err),
 					Notes:                  notes,
-				})
+				}, fmt.Errorf("failed to annotate existing ClusterCatalog: %w", err))
 				continue
 			}
 
@@ -294,7 +291,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 				Status:                 "adopted",
 				Reason:                 "existing ClusterCatalog with matching image adopted",
 				Notes:                  notes,
-			})
+			}, nil)
 
 			// Handle --delete-catalogsource
 			if opts.DeleteCatalogSource && !referencedCS[csRef] {
@@ -312,7 +309,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 				Status:                 "dry-run",
 				Reason:                 fmt.Sprintf("would create ClusterCatalog %s from image %s", ccName, cs.Spec.Image),
 				Notes:                  notes,
-			})
+			}, nil)
 			continue
 		}
 
@@ -346,7 +343,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 				Status:                 "error",
 				Reason:                 fmt.Sprintf("failed to create ClusterCatalog: %v", err),
 				Notes:                  notes,
-			})
+			}, fmt.Errorf("failed to create ClusterCatalog: %w", err))
 			continue
 		}
 
@@ -360,7 +357,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 				Status:                 "error",
 				Reason:                 fmt.Sprintf("ClusterCatalog not serving: %v", err),
 				Notes:                  notes,
-			})
+			}, fmt.Errorf("ClusterCatalog not serving: %w", err))
 			continue
 		}
 
@@ -374,7 +371,7 @@ func (cm *CatalogMigrator) MigrateCatalogs(ctx context.Context, opts CatalogMigr
 			Status:                 "created",
 			Reason:                 fmt.Sprintf("created from image %s", cs.Spec.Image),
 			Notes:                  notes,
-		})
+		}, nil)
 
 		// Handle --delete-catalogsource
 		if opts.DeleteCatalogSource && !referencedCS[csRef] {

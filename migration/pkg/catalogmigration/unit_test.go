@@ -124,11 +124,14 @@ func (c catalogListFailure) List(ctx context.Context, list client.ObjectList, op
 	return c.Client.List(ctx, list, opts...)
 }
 
-type catalogCreateFailure struct{ client.Client }
+type catalogCreateFailure struct {
+	client.Client
+	cause error
+}
 
 func (c catalogCreateFailure) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
 	if _, ok := obj.(*ocv1.ClusterCatalog); ok {
-		return errors.New("catalog creation denied")
+		return c.cause
 	}
 	return c.Client.Create(ctx, obj, opts...)
 }
@@ -145,7 +148,8 @@ func TestMigrateCatalogsReportsPerSourceFailure(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "source", Namespace: "ns"},
 		Spec:       operatorsv1alpha1.CatalogSourceSpec{SourceType: operatorsv1alpha1.SourceTypeGrpc, Image: "example.com/catalog:v1"},
 	}
-	client := catalogCreateFailure{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(source).Build()}
+	cause := errors.New("catalog creation denied")
+	client := catalogCreateFailure{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(source).Build(), cause: cause}
 	cm := NewCatalogMigrator(client)
 	var events []migration.ProgressEvent
 	cm.Progress = func(event migration.ProgressEvent) { events = append(events, event) }
@@ -155,7 +159,7 @@ func TestMigrateCatalogsReportsPerSourceFailure(t *testing.T) {
 	}
 	found := false
 	for _, event := range events {
-		if event.Target == "ns/source" && event.Status == migration.ProgressFailed && event.Err != nil && strings.Contains(event.Err.Error(), "catalog creation denied") {
+		if event.Target == "ns/source" && event.Status == migration.ProgressFailed && errors.Is(event.Err, cause) && strings.Contains(event.Err.Error(), "catalog creation denied") {
 			found = true
 		}
 	}

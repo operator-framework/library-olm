@@ -20,9 +20,10 @@ const (
 )
 
 var (
-	progressMu      sync.Mutex
-	progressRunning bool
-	progressMsg     string
+	progressMu       sync.Mutex
+	progressRunning  bool
+	progressMsg      string
+	progressWriteErr error
 )
 
 type outputRecord = clioutput.Record
@@ -93,17 +94,28 @@ func progressFuncFor(command, target string) migration.ProgressFunc {
 func progressFuncWithContext(event migration.ProgressEvent, command, target string) {
 	progressMu.Lock()
 	defer progressMu.Unlock()
+	var err error
 	if structuredOutput() {
-		_ = writeOutputRecord(clioutput.ProgressRecord(command, target, event))
-		return
+		err = writeOutputRecord(clioutput.ProgressRecord(command, target, event))
+	} else {
+		err = clioutput.WriteTextProgress(os.Stdout, event, progressRunning, &progressMsg)
 	}
-	clioutput.WriteTextProgress(os.Stdout, event, progressRunning, &progressMsg)
+	if err != nil && progressWriteErr == nil {
+		progressWriteErr = fmt.Errorf("write operator progress: %w", err)
+	}
 }
 
 func startProgress() {
 	progressMu.Lock()
 	progressRunning = true
+	progressWriteErr = nil
 	progressMu.Unlock()
+}
+
+func progressError() error {
+	progressMu.Lock()
+	defer progressMu.Unlock()
+	return progressWriteErr
 }
 
 func clearProgress() {
@@ -114,7 +126,9 @@ func clearProgress() {
 		progressMu.Unlock()
 		return
 	}
-	clioutput.ClearTextProgress(os.Stdout, &progressMsg)
+	if err := clioutput.ClearTextProgress(os.Stdout, &progressMsg); err != nil && progressWriteErr == nil {
+		progressWriteErr = fmt.Errorf("clear operator progress: %w", err)
+	}
 	progressMu.Unlock()
 }
 

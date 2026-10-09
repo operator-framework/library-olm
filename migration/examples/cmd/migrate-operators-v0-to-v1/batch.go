@@ -32,6 +32,9 @@ func convertBatch(ctx context.Context, results []migration.OperatorScanResult, d
 			err = migrate(ctx, opts)
 		}
 		clearProgress()
+		if err == nil {
+			err = progressError()
+		}
 		if outputErr := output.batchResult("convert", target, err); outputErr != nil {
 			return outputErr
 		}
