@@ -21,25 +21,25 @@ func TestCommandRejectsAmbiguousAndMissingTargets(t *testing.T) {
 		{
 			name: "check",
 			run: func(args []string) error {
-				return runCheck(cmd, args)
+				return validateCheckArguments(cmd, args)
 			},
 		},
 		{
 			name: "convert",
 			run: func(args []string) error {
-				return runConvert(cmd, args)
+				return validateConvertArguments(cmd, args)
 			},
 		},
 		{
 			name: "cleanup",
 			run: func(args []string) error {
-				return runCleanup(cmd, args)
+				return validateCleanupArguments(cmd, args)
 			},
 		},
 		{
 			name: "rollback",
 			run: func(args []string) error {
-				return runRollback(cmd, args)
+				return validateRollbackArguments(cmd, args)
 			},
 		},
 	}
@@ -75,8 +75,8 @@ func TestConvertAllRejectsSingleOperatorFlags(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			convertAll = true
 			convertNamespace, convertCEName = tt.namespace, tt.ceName
-			if err := runConvert(cmd, nil); err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("runConvert(--all) error = %v, want %q before client creation", err, tt.want)
+			if err := validateConvertArguments(cmd, nil); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("validateConvertArguments(--all) error = %v, want %q", err, tt.want)
 			}
 		})
 	}
@@ -89,8 +89,8 @@ func TestConvertAllRejectsSingleOperatorFlags(t *testing.T) {
 			if err := cmd.Flags().Set(flag, ""); err != nil {
 				t.Fatal(err)
 			}
-			if err := runConvert(cmd, nil); err == nil || !strings.Contains(err.Error(), "cannot be combined with --all") {
-				t.Fatalf("runConvert(--all --%s '') error = %v, want flag rejection", flag, err)
+			if err := validateConvertArguments(cmd, nil); err == nil || !strings.Contains(err.Error(), "cannot be combined with --all") {
+				t.Fatalf("validateConvertArguments(--all --%s '') error = %v, want flag rejection", flag, err)
 			}
 		})
 	}

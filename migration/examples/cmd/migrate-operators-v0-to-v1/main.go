@@ -62,12 +62,23 @@ func init() {
 		return validateOutputFormat()
 	}
 	rootCmd.SilenceErrors = true
-	rootCmd.SilenceUsage = true
 
 	rootCmd.AddCommand(checkCmd)
 	rootCmd.AddCommand(convertCmd)
 	rootCmd.AddCommand(rollbackCmd)
 	rootCmd.AddCommand(cleanupCmd)
+}
+
+// runAfterArgumentValidation lets Cobra show usage for invalid arguments, but
+// suppresses it once command execution (and possible cluster interaction) begins.
+func runAfterArgumentValidation(validate, run func(*cobra.Command, []string) error) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		if err := validate(cmd, args); err != nil {
+			return err
+		}
+		cmd.SilenceUsage = true
+		return run(cmd, args)
+	}
 }
 
 func main() {

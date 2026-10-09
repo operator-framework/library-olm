@@ -29,7 +29,7 @@ Examples:
   migrate-operators-v0-to-v1 rollback my-operator --acknowledge-installed
   migrate-operators-v0-to-v1 rollback --all --acknowledge-installed`,
 	Args: cobra.MaximumNArgs(1),
-	RunE: runRollback,
+	RunE: runAfterArgumentValidation(validateRollbackArguments, runRollback),
 }
 
 func init() {
@@ -37,14 +37,17 @@ func init() {
 	rollbackCmd.Flags().BoolVar(&rollbackAcknowledgeInstalled, "acknowledge-installed", false, "Confirm rollback even when CE is Installed=True")
 }
 
-func runRollback(cmd *cobra.Command, args []string) error { //nolint:nestif
+func validateRollbackArguments(_ *cobra.Command, args []string) error {
 	if rollbackAll && len(args) > 0 {
 		return fmt.Errorf("cannot specify both a CE name and --all")
 	}
 	if !rollbackAll && len(args) == 0 {
 		return fmt.Errorf("specify a ClusterExtension name or --all")
 	}
+	return nil
+}
 
+func runRollback(cmd *cobra.Command, args []string) error { //nolint:nestif
 	c, restCfg, err := newClient()
 	if err != nil {
 		return err

@@ -46,7 +46,7 @@ Examples:
   migrate-operators-v0-to-v1 convert --all
   migrate-operators-v0-to-v1 convert --all --continue-on-error`,
 	Args: cobra.MaximumNArgs(1),
-	RunE: runConvert,
+	RunE: runAfterArgumentValidation(validateConvertArguments, runConvert),
 }
 
 func init() {
@@ -67,7 +67,7 @@ func init() {
 	convertCmd.Flags().BoolVar(&convertAckNotSteady, "acknowledge-not-steady-state", false, "Acknowledge that the operator is not at steady state")
 }
 
-func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
+func validateConvertArguments(cmd *cobra.Command, args []string) error {
 	if convertAll && len(args) > 0 {
 		return fmt.Errorf("cannot specify both an operator name and --all")
 	}
@@ -83,7 +83,24 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	if convertAll && (convertCEName != "" || cmd.Flags().Changed("ce-name")) {
 		return fmt.Errorf("--ce-name cannot be combined with --all; each operator uses its Subscription name")
 	}
+	if !convertAll {
+		if convertNamespace == "" {
+			return fmt.Errorf("-n/--namespace is required")
+		}
+		if convertSystemManagedNs && convertInstallNs != "" {
+			return fmt.Errorf("--system-managed-install-namespace cannot be combined with --install-namespace")
+		}
+		if convertSystemManagedNs && convertAckNamespaceDelete {
+			return fmt.Errorf("--system-managed-install-namespace cannot be combined with --acknowledge-namespace-delete")
+		}
+		if convertAckNamespaceDelete && (convertInstallNs == "" || convertInstallNs == convertNamespace) {
+			return fmt.Errorf("--acknowledge-namespace-delete requires --install-namespace to differ from -n/--namespace")
+		}
+	}
+	return nil
+}
 
+func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 	c, restCfg, err := newClient()
 	if err != nil {
 		return err
@@ -126,9 +143,6 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 
 	// Single operator
 	operatorName := args[0]
-	if convertNamespace == "" {
-		return fmt.Errorf("-n/--namespace is required")
-	}
 
 	opts := migration.Options{
 		SubscriptionName:                operatorName,
@@ -146,15 +160,6 @@ func runConvert(cmd *cobra.Command, args []string) error { //nolint:nestif
 		AcknowledgeNotSteadyState:       convertAckNotSteady,
 	}
 	opts.ApplyDefaults()
-	if opts.SystemManagedInstallNamespace && convertInstallNs != "" {
-		return fmt.Errorf("--system-managed-install-namespace cannot be combined with --install-namespace")
-	}
-	if opts.SystemManagedInstallNamespace && opts.AcknowledgeNamespaceDelete {
-		return fmt.Errorf("--system-managed-install-namespace cannot be combined with --acknowledge-namespace-delete")
-	}
-	if opts.AcknowledgeNamespaceDelete && opts.InstallNamespace == opts.SubscriptionNamespace {
-		return fmt.Errorf("--acknowledge-namespace-delete requires --install-namespace to differ from -n/--namespace")
-	}
 
 	if convertDryRun {
 		if err := runConvertDryRun(cmd, m, opts); err != nil {
