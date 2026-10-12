@@ -165,6 +165,17 @@ multiple conversion/preview failures to verify stop-on-error, continuation, and
 nonzero results after partial failure (V1.7). Unit tests also verify that batch
 classification applies acknowledgment flags and rejects `-n` or `--ce-name` with `--all`.
 
+`make migration/test-e2e-live-batch` repeats the four-state selection check with
+one operator installed by OLMv0 and three isolated state markers. It has its own
+CLI coverage directory and runs in the live CI job.
+
+`make migration/test-e2e-acceptance` replays the ecr-secret snapshot separately for
+four focused cases: non-image CatalogSource refusal before mutation (V2.11),
+dependent-operator warnings during check, dry-run, and conversion (V4.4),
+conversion of a Subscription named like a CLI command (V1.8), and full
+deploymentConfig mapping into both the ClusterExtension and operator Deployment
+(V3.12, except post-upgrade persistence). Each case contributes CLI coverage.
+
 After `make migration/e2e-fixture-setup`, run
 `make migration/test-e2e-acknowledgments` for V2.1–V2.10, including V2.1a. Each of thirteen cases
 replays the ecr-secret snapshot independently. Soft checks cover scoped target
@@ -228,6 +239,7 @@ operator through OLMv0 and deletes it as an OLMv1 extension afterward.
 ```bash
 make migration/e2e-setup
 make migration/test-e2e-live-matrix
+make migration/test-e2e-live-batch
 make migration/test-e2e-live-namespace-delete
 make migration/e2e-teardown
 ```
@@ -241,6 +253,7 @@ controllers. It replays the committed OLMv0 snapshots.
 make migration/e2e-fixture-setup
 make migration/test-e2e-fixture-matrix
 make migration/test-e2e-batch
+make migration/test-e2e-acceptance
 make migration/test-e2e-acknowledgments
 make migration/test-e2e-backup
 make migration/test-e2e-cross-namespace

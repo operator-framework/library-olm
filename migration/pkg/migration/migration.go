@@ -126,6 +126,12 @@ func (m *Migrator) migrate(ctx context.Context, opts Options, nextStep func(Prog
 	if !compat.Passed() {
 		return fmt.Errorf("operator is not compatible with OLMv1 migration (%d issues found)", len(compat.FailedChecks()))
 	}
+	if dependents := m.findDependents(ctx, info.PackageName); len(dependents) > 0 {
+		m.progress(ProgressEvent{
+			Step: ProgressStepCheck, Status: ProgressWarning,
+			Message: dependentsWarning(info.PackageName, dependents),
+		})
+	}
 
 	nextStep(ProgressStepCatalog, "Determining target ClusterCatalog")
 	catalogName, err := m.ResolveClusterCatalog(ctx, info, m.RESTConfig)

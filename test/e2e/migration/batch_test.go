@@ -19,20 +19,24 @@ import (
 	"github.com/operator-framework/library-olm/migration/pkg/migration"
 )
 
-// TestFixtureBatchSafety uses real API objects and the CLI; failure-continuation
-// is tested deterministically at the CLI batch boundary in unit tests.
-func TestFixtureBatchSafety(t *testing.T) {
+// TestBatchSafety uses real API objects and the CLI against either replayed
+// fixtures or one live OLMv0 install. Failure-continuation is tested at the
+// CLI batch boundary in unit tests.
+func TestBatchSafety(t *testing.T) {
 	if os.Getenv("E2E_BATCH_TEST") != "true" {
-		t.Skip("dedicated batch fixture invocation")
+		t.Skip("dedicated batch invocation")
 	}
-	if os.Getenv("E2E_SUITE") != "fixture" {
-		t.Fatal("batch safety requires controller-free OLMv0 fixtures")
+	if suite := os.Getenv("E2E_SUITE"); suite != "fixture" && suite != "real-operator" {
+		t.Fatal("batch safety requires an OLMv0 fixture or live installation")
 	}
 	namespace, name := os.Getenv("E2E_NAMESPACE"), os.Getenv("E2E_SUBSCRIPTION")
 	_, c, _ := newMigrator(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Minute)
 	defer cancel()
 	t.Cleanup(func() { collectArtifacts(t, namespace) })
+	if os.Getenv("E2E_SUITE") == "real-operator" {
+		waitForCompletedInstallPlan(t, namespace, name)
+	}
 	run(t, binary(t, "migrate-catalogs-v0-to-v1"), "--kubeconfig", os.Getenv("KUBECONFIG"))
 	var original operatorsv1alpha1.Subscription
 	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &original); err != nil {

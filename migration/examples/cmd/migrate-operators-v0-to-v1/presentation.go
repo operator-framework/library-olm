@@ -70,6 +70,9 @@ func selectedCommandOutput() commandOutput {
 			} else {
 				printCheckResults(result.FailedChecks)
 			}
+			for _, warning := range result.Warnings {
+				warn(warning)
+			}
 			return nil
 		},
 		dryRunPreview: printDryRunPreview,

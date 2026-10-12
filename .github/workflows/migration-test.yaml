@@ -49,6 +49,8 @@ jobs:
         run: make migration/test-e2e-fixture-matrix
       - name: Verify batch selection and dry-run safety
         run: make migration/test-e2e-batch
+      - name: Verify fixture acceptance cases
+        run: make migration/test-e2e-acceptance
       - name: Verify soft acknowledgments and hard-block refusal
         run: make migration/test-e2e-acknowledgments
       - name: Verify backup contents and deletion ordering
@@ -160,6 +162,8 @@ jobs:
         run: make migration/e2e-setup
       - name: Run live-operator migration tests
         run: make migration/test-e2e-live-matrix
+      - name: Verify live four-state batch selection
+        run: make migration/test-e2e-live-batch
       - name: Verify acknowledged live source-namespace deletion
         run: make migration/test-e2e-live-namespace-delete
       - name: Tear down live cluster
