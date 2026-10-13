@@ -18,11 +18,11 @@ make -C "$demo_root" build
 # Operator checks need a serving ClusterCatalog. Migrate the OLMv0 bootstrap
 # CatalogSource now so install.sh only changes the requested operator.
 catalog=operatorhubio-catalog
-for attempt in {1..30}; do
+for attempt in {1..31}; do
 	if kubectl -n olm get "catalogsource/$catalog" >/dev/null 2>&1; then
 		break
 	fi
-	if (( attempt == 30 )); then
+	if (( attempt == 31 )); then
 		echo "CatalogSource olm/$catalog did not appear within five minutes" >&2
 		exit 1
 	fi

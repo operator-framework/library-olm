@@ -16,12 +16,18 @@ demo_require_cluster() {
 		return 1
 	fi
 	local context
-	context=$(kubectl config current-context)
+	if ! context=$(kubectl config current-context 2>/dev/null); then
+		echo "Cannot read the demo kubeconfig at $KUBECONFIG; run setup.sh to recreate it" >&2
+		return 1
+	fi
 	if [[ $context != "kind-$demo_cluster" ]]; then
 		echo "Refusing to use context $context; expected kind-$demo_cluster" >&2
 		return 1
 	fi
-	kubectl get nodes >/dev/null
+	if ! kubectl get nodes >/dev/null 2>&1; then
+		echo "Cannot reach demo cluster $demo_cluster using $KUBECONFIG; run setup.sh or inspect the cluster with kubectl" >&2
+		return 1
+	fi
 }
 
 demo_require_binary() {

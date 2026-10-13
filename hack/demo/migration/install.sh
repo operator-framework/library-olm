@@ -16,6 +16,7 @@ operator_fields "$1"
 existing_namespace=$(kubectl get namespace "$E2E_NAMESPACE" --ignore-not-found -o name)
 if [[ -n $existing_namespace ]]; then
 	echo "Namespace $E2E_NAMESPACE already exists; refusing to replace it" >&2
+	echo "Inspect the existing installation before retrying. To start fresh, run hack/demo/migration/teardown.sh then hack/demo/migration/setup.sh (this deletes the demo cluster)." >&2
 	exit 1
 fi
 

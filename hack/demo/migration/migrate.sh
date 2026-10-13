@@ -49,9 +49,14 @@ if [[ ${targets[0]} == all ]]; then
 	"$demo_root/bin/migrate-operators-v0-to-v1" --kubeconfig "$KUBECONFIG" convert --all "${flags[@]}"
 else
 	# Preflight the entire named set before performing the first mutation.
-	for target in "${targets[@]}"; do demo_installed_operator "$target"; done
+	packages=()
+	namespaces=()
 	for target in "${targets[@]}"; do
-		operator_fields "$target"
-		"$demo_root/bin/migrate-operators-v0-to-v1" --kubeconfig "$KUBECONFIG" convert "$E2E_PACKAGE" -n "$E2E_NAMESPACE" "${flags[@]}"
+		demo_installed_operator "$target"
+		packages+=("$E2E_PACKAGE")
+		namespaces+=("$E2E_NAMESPACE")
+	done
+	for index in "${!packages[@]}"; do
+		"$demo_root/bin/migrate-operators-v0-to-v1" --kubeconfig "$KUBECONFIG" convert "${packages[index]}" -n "${namespaces[index]}" "${flags[@]}"
 	done
 fi
