@@ -26,7 +26,8 @@ func TestBatchSafety(t *testing.T) {
 	if os.Getenv("E2E_BATCH_TEST") != "true" {
 		t.Skip("dedicated batch invocation")
 	}
-	if suite := os.Getenv("E2E_SUITE"); suite != "fixture" && suite != "real-operator" {
+	suite := os.Getenv("E2E_SUITE")
+	if suite != "fixture" && suite != "real-operator" {
 		t.Fatal("batch safety requires an OLMv0 fixture or live installation")
 	}
 	namespace, name := os.Getenv("E2E_NAMESPACE"), os.Getenv("E2E_SUBSCRIPTION")
@@ -34,7 +35,7 @@ func TestBatchSafety(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Minute)
 	defer cancel()
 	t.Cleanup(func() { collectArtifacts(t, namespace) })
-	if os.Getenv("E2E_SUITE") == "real-operator" {
+	if suite == "real-operator" {
 		waitForCompletedInstallPlan(t, namespace, name)
 	}
 	run(t, binary(t, "migrate-catalogs-v0-to-v1"), "--kubeconfig", os.Getenv("KUBECONFIG"))
@@ -97,8 +98,12 @@ func TestBatchSafety(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKeyFromObject(&original), &after); err != nil {
 		t.Fatal(err)
 	}
-	if after.UID != original.UID || !reflect.DeepEqual(after.Spec, original.Spec) || !reflect.DeepEqual(after.Status, original.Status) {
-		t.Fatal("batch preview changed source Subscription")
+	if after.UID != original.UID || !reflect.DeepEqual(after.Spec, original.Spec) {
+		t.Fatal("batch preview changed source Subscription identity or spec")
+	}
+	// OLMv0 may reconcile live Subscription status while the preview runs.
+	if suite == "fixture" && !reflect.DeepEqual(after.Status, original.Status) {
+		t.Fatal("batch preview changed fixture Subscription status")
 	}
 	assertNoMigrationObjects(t, name)
 	run(t, cli, "convert", "--all", "--kubeconfig", os.Getenv("KUBECONFIG"))
