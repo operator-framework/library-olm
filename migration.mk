@@ -81,24 +81,54 @@ migration/e2e-teardown: $(KIND) ## Delete the dedicated migration kind cluster
 
 .PHONY: migration/e2e-install-v0
 migration/e2e-install-v0: ## Install one migration E2E operator (E2E_OPERATOR=name) or all via OLMv0
-	@if [[ "$(E2E_OPERATOR)" != all ]]; then E2E_OPERATOR="$(E2E_OPERATOR)" KUBECONFIG="$(E2E_KUBECONFIG)" bash -c 'source "$$1"; operator_fields "$$E2E_OPERATOR"' -- ./hack/e2e/migration/operators.sh; fi
-	@for operator in $$(awk -F '\t' -v wanted="$(E2E_OPERATOR)" 'NF==3 && $$1 !~ /^#/ && (wanted=="all" || $$1==wanted) {print $$1}' test/e2e/migration/operators.tsv); do KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/install-v0.sh "$$operator"; done
+	@if [[ "$(E2E_OPERATOR)" != all ]]; then \
+		E2E_OPERATOR="$(E2E_OPERATOR)" KUBECONFIG="$(E2E_KUBECONFIG)" bash -c 'source "$$1"; operator_fields "$$E2E_OPERATOR"' -- ./hack/e2e/migration/operators.sh; \
+	fi
+	@for operator in $$(awk -F '\t' -v wanted="$(E2E_OPERATOR)" 'NF==3 && $$1 !~ /^#/ && (wanted=="all" || $$1==wanted) {print $$1}' test/e2e/migration/operators.tsv); do \
+		KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/install-v0.sh "$$operator"; \
+	done
 
 .PHONY: migration/e2e-snapshot-v0
 migration/e2e-snapshot-v0: ## Snapshot OLMv0 installs for one migration E2E operator or all
-	@for operator in $$(awk -F '\t' -v wanted="$(E2E_OPERATOR)" 'NF==3 && $$1 !~ /^#/ && (wanted=="all" || $$1==wanted) {print $$1}' test/e2e/migration/operators.tsv); do KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/snapshot-v0.sh "$$operator"; done
+	@for operator in $$(awk -F '\t' -v wanted="$(E2E_OPERATOR)" 'NF==3 && $$1 !~ /^#/ && (wanted=="all" || $$1==wanted) {print $$1}' test/e2e/migration/operators.tsv); do \
+		KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/snapshot-v0.sh "$$operator"; \
+	done
 
 .PHONY: migration/e2e-install-fixture-v0
 migration/e2e-install-fixture-v0: ## Replay one OLMv0 install snapshot, or all, as fixtures
-	@for operator in $$(awk -F '\t' -v wanted="$(E2E_OPERATOR)" 'NF==3 && $$1 !~ /^#/ && (wanted=="all" || $$1==wanted) {print $$1}' test/e2e/migration/operators.tsv); do KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$operator"; done
+	@for operator in $$(awk -F '\t' -v wanted="$(E2E_OPERATOR)" 'NF==3 && $$1 !~ /^#/ && (wanted=="all" || $$1==wanted) {print $$1}' test/e2e/migration/operators.tsv); do \
+		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$operator"; \
+	done
 
 .PHONY: migration/test-e2e-live-matrix
 migration/test-e2e-live-matrix: migration/build ## Install and migrate all three operators from live OLMv0
-	@set -euo pipefail; while IFS=$$'\t' read -r package channel namespace; do [[ -z "$$package" || "$$package" == \#* ]] && continue; coverage_dir="$(E2E_COVERAGE_DIR)/live/$$package"; artifact_dir="$(E2E_ARTIFACTS)/live/$$package"; mkdir -p "$$coverage_dir"; KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/install-v0.sh "$$package"; KUBECONFIG="$(E2E_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$$artifact_dir" E2E_SUITE=real-operator E2E_NAMESPACE="$$namespace" E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -timeout "$(E2E_TIMEOUT)"; KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; done < test/e2e/migration/operators.tsv
+	@set -euo pipefail; \
+	while IFS=$$'\t' read -r package channel namespace; do \
+		[[ -z "$$package" || "$$package" == \#* ]] && continue; \
+		coverage_dir="$(E2E_COVERAGE_DIR)/live/$$package"; \
+		artifact_dir="$(E2E_ARTIFACTS)/live/$$package"; \
+		mkdir -p "$$coverage_dir"; \
+		KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
+		KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/install-v0.sh "$$package"; \
+		KUBECONFIG="$(E2E_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$$artifact_dir" E2E_SUITE=real-operator E2E_NAMESPACE="$$namespace" E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -timeout "$(E2E_TIMEOUT)"; \
+		KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
+	done < test/e2e/migration/operators.tsv
 
 .PHONY: migration/test-e2e-live-namespace-delete
 migration/test-e2e-live-namespace-delete: migration/build ## Verify acknowledged source-namespace deletion with live OLMv0
-	@set -euo pipefail; package=ecr-secret-operator; namespace=migration-e2e-ecr-secret; target="$$namespace-target"; coverage_dir="$(E2E_COVERAGE_DIR)/live/cross-namespace-delete"; artifact_dir="$(E2E_ARTIFACTS)/live/cross-namespace-delete"; mkdir -p "$$coverage_dir"; KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_KUBECONFIG)" kubectl delete namespace "$$target" --ignore-not-found --wait=true; KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/install-v0.sh "$$package"; KUBECONFIG="$(E2E_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$$artifact_dir" E2E_SUITE=real-operator E2E_LIVE_NAMESPACE_DELETE_TEST=true E2E_NAMESPACE="$$namespace" E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestLiveCrossNamespaceDeletionMigration$$' -timeout "$(E2E_TIMEOUT)"; KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_KUBECONFIG)" kubectl delete namespace "$$target" --ignore-not-found --wait=true
+	@set -euo pipefail; \
+	package=ecr-secret-operator; \
+	namespace=migration-e2e-ecr-secret; \
+	target="$$namespace-target"; \
+	coverage_dir="$(E2E_COVERAGE_DIR)/live/cross-namespace-delete"; \
+	artifact_dir="$(E2E_ARTIFACTS)/live/cross-namespace-delete"; \
+	mkdir -p "$$coverage_dir"; \
+	KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
+	KUBECONFIG="$(E2E_KUBECONFIG)" kubectl delete namespace "$$target" --ignore-not-found --wait=true; \
+	KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/install-v0.sh "$$package"; \
+	KUBECONFIG="$(E2E_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$$artifact_dir" E2E_SUITE=real-operator E2E_LIVE_NAMESPACE_DELETE_TEST=true E2E_NAMESPACE="$$namespace" E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestLiveCrossNamespaceDeletionMigration$$' -timeout "$(E2E_TIMEOUT)"; \
+	KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
+	KUBECONFIG="$(E2E_KUBECONFIG)" kubectl delete namespace "$$target" --ignore-not-found --wait=true
 
 .PHONY: migration/test-e2e-live-batch
 # Earlier live scenarios may restore OLMv0 Subscriptions; isolate --all first.
@@ -121,32 +151,106 @@ migration/test-e2e-live-batch: migration/build $(KIND) ## Verify four-state batc
 
 .PHONY: migration/test-e2e-fixture-matrix
 migration/test-e2e-fixture-matrix: migration/build ## Replay and migrate all three OLMv0 install snapshots
-	@set -euo pipefail; while IFS=$$'\t' read -r package channel namespace; do [[ -z "$$package" || "$$package" == \#* ]] && continue; coverage_dir="$(E2E_COVERAGE_DIR)/fixture/$$package"; artifact_dir="$(E2E_ARTIFACTS)/fixture/$$package"; mkdir -p "$$coverage_dir"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$$artifact_dir" E2E_SUITE=fixture E2E_NAMESPACE="$$namespace" E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -timeout "$(E2E_TIMEOUT)"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; done < test/e2e/migration/operators.tsv
+	@set -euo pipefail; \
+	while IFS=$$'\t' read -r package channel namespace; do \
+		[[ -z "$$package" || "$$package" == \#* ]] && continue; \
+		coverage_dir="$(E2E_COVERAGE_DIR)/fixture/$$package"; \
+		artifact_dir="$(E2E_ARTIFACTS)/fixture/$$package"; \
+		mkdir -p "$$coverage_dir"; \
+		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
+		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; \
+		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$$artifact_dir" E2E_SUITE=fixture E2E_NAMESPACE="$$namespace" E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -timeout "$(E2E_TIMEOUT)"; \
+		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
+	done < test/e2e/migration/operators.tsv
 
 .PHONY: migration/test-e2e-batch
 migration/test-e2e-batch: migration/build ## Verify four-state batch selection and non-mutating batch preview
-	@set -euo pipefail; package=ecr-secret-operator; coverage_dir="$(E2E_COVERAGE_DIR)/fixture/batch"; mkdir -p "$$coverage_dir"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/fixture/batch" E2E_SUITE=fixture E2E_BATCH_TEST=true E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestBatchSafety$$' -timeout "$(E2E_TIMEOUT)"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"
+	@set -euo pipefail; \
+	package=ecr-secret-operator; \
+	coverage_dir="$(E2E_COVERAGE_DIR)/fixture/batch"; \
+	mkdir -p "$$coverage_dir"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/fixture/batch" E2E_SUITE=fixture E2E_BATCH_TEST=true E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestBatchSafety$$' -timeout "$(E2E_TIMEOUT)"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"
 
 .PHONY: migration/test-e2e-acceptance
 migration/test-e2e-acceptance: migration/build $(KIND) ## Verify remaining fixture acceptance cases with CLI coverage
 	@E2E_CLUSTER_NAME="$(E2E_FIXTURE_CLUSTER_NAME)" E2E_KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" KIND="$(KIND)" ./hack/e2e/migration/require-kind-cluster.sh
-	@set -euo pipefail; package=ecr-secret-operator; for scenario in non-image-source dependents-warning command-name deployment-config; do coverage_dir="$(E2E_COVERAGE_DIR)/fixture/acceptance/$$scenario"; mkdir -p "$$coverage_dir"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" kubectl delete clusterextension/check --ignore-not-found --wait=true; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" kubectl delete clusterobjectsets -l 'olm.operatorframework.io/owner-name=check' --ignore-not-found --wait=true; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/fixture/acceptance/$$scenario" E2E_SUITE=fixture E2E_ACCEPTANCE_CASE="$$scenario" E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestFixtureAcceptanceCases$$' -timeout "$(E2E_TIMEOUT)"; done; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"
+	@set -euo pipefail; \
+	package=ecr-secret-operator; \
+	for scenario in non-image-source dependents-warning command-name deployment-config; do \
+		coverage_dir="$(E2E_COVERAGE_DIR)/fixture/acceptance/$$scenario"; \
+		mkdir -p "$$coverage_dir"; \
+		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" kubectl delete clusterextension/check --ignore-not-found --wait=true; \
+		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" kubectl delete clusterobjectsets -l 'olm.operatorframework.io/owner-name=check' --ignore-not-found --wait=true; \
+		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
+		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; \
+		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/fixture/acceptance/$$scenario" E2E_SUITE=fixture E2E_ACCEPTANCE_CASE="$$scenario" E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestFixtureAcceptanceCases$$' -timeout "$(E2E_TIMEOUT)"; \
+	done; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"
 
 .PHONY: migration/test-e2e-acknowledgments
 migration/test-e2e-acknowledgments: migration/build ## Verify each soft acknowledgment and non-overridable hard block
-	@set -euo pipefail; package=ecr-secret-operator; for scenario in watch-target watch-selector unsupported-all-namespaces operator-condition olmv0-api-access scoped-serviceaccount subscription-state csv-phase package-dependency gvk-dependency apiservice generated-dependency missing-package; do coverage_dir="$(E2E_COVERAGE_DIR)/fixture/acknowledgments/$$scenario"; mkdir -p "$$coverage_dir"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/fixture/acknowledgments/$$scenario" E2E_SUITE=fixture E2E_ACKNOWLEDGMENT_CASE="$$scenario" E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestFixtureAcknowledgments$$' -timeout "$(E2E_TIMEOUT)"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; done
+	@set -euo pipefail; \
+	package=ecr-secret-operator; \
+	for scenario in watch-target watch-selector unsupported-all-namespaces \
+		operator-condition olmv0-api-access scoped-serviceaccount \
+		subscription-state csv-phase package-dependency gvk-dependency \
+		apiservice generated-dependency missing-package; do \
+		coverage_dir="$(E2E_COVERAGE_DIR)/fixture/acknowledgments/$$scenario"; \
+		mkdir -p "$$coverage_dir"; \
+		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
+		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; \
+		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/fixture/acknowledgments/$$scenario" E2E_SUITE=fixture E2E_ACKNOWLEDGMENT_CASE="$$scenario" E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestFixtureAcknowledgments$$' -timeout "$(E2E_TIMEOUT)"; \
+		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
+	done
 
 .PHONY: migration/test-e2e-backup
 migration/test-e2e-backup: migration/build ## Verify backup contents, before-delete ordering, and non-fatal write failures
-	@set -euo pipefail; package=ecr-secret-operator; for scenario in success write-failure delete-denied; do coverage_dir="$(E2E_COVERAGE_DIR)/fixture/backup/$$scenario"; mkdir -p "$$coverage_dir"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/fixture/backup/$$scenario" E2E_SUITE=fixture E2E_BACKUP_CASE="$$scenario" E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestFixtureBackupDirectory$$' -timeout "$(E2E_TIMEOUT)"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; done
+	@set -euo pipefail; \
+	package=ecr-secret-operator; \
+	for scenario in success write-failure delete-denied; do \
+		coverage_dir="$(E2E_COVERAGE_DIR)/fixture/backup/$$scenario"; \
+		mkdir -p "$$coverage_dir"; \
+		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
+		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; \
+		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/fixture/backup/$$scenario" E2E_SUITE=fixture E2E_BACKUP_CASE="$$scenario" E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestFixtureBackupDirectory$$' -timeout "$(E2E_TIMEOUT)"; \
+		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
+	done
 
 .PHONY: migration/test-e2e-cross-namespace
 migration/test-e2e-cross-namespace: migration/build ## Verify fixture migration into a different install namespace
-	@set -euo pipefail; package=ecr-secret-operator; namespace=migration-e2e-ecr-secret; target="$$namespace-target"; coverage_dir="$(E2E_COVERAGE_DIR)/fixture/cross-namespace"; artifact_dir="$(E2E_ARTIFACTS)/fixture/cross-namespace"; mkdir -p "$$coverage_dir"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" kubectl delete namespace "$$target" --ignore-not-found --wait=true; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$$artifact_dir" E2E_SUITE=fixture E2E_CROSS_NAMESPACE_TEST=true E2E_NAMESPACE="$$namespace" E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestCrossNamespaceMigration$$' -timeout "$(E2E_TIMEOUT)"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" kubectl delete namespace "$$target" --ignore-not-found --wait=true; : 'The source fixture namespace contains captured OLMv0 finalizers. install-fixture-v0.sh releases them before the next replay; CI tears down the Kind cluster.'
+	@set -euo pipefail; \
+	package=ecr-secret-operator; \
+	namespace=migration-e2e-ecr-secret; \
+	target="$$namespace-target"; \
+	coverage_dir="$(E2E_COVERAGE_DIR)/fixture/cross-namespace"; \
+	artifact_dir="$(E2E_ARTIFACTS)/fixture/cross-namespace"; \
+	mkdir -p "$$coverage_dir"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" kubectl delete namespace "$$target" --ignore-not-found --wait=true; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$$artifact_dir" E2E_SUITE=fixture E2E_CROSS_NAMESPACE_TEST=true E2E_NAMESPACE="$$namespace" E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestCrossNamespaceMigration$$' -timeout "$(E2E_TIMEOUT)"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" kubectl delete namespace "$$target" --ignore-not-found --wait=true; \
+	: 'The source fixture namespace contains captured OLMv0 finalizers. install-fixture-v0.sh releases them before the next replay; CI tears down the Kind cluster.'
 
 .PHONY: migration/test-e2e-system-managed-namespace
 migration/test-e2e-system-managed-namespace: migration/build ## Verify migration into the OLMv1 system-managed namespace
-	@set -euo pipefail; package=ecr-secret-operator; namespace=migration-e2e-ecr-secret; target="$$package"; coverage_dir="$(E2E_COVERAGE_DIR)/fixture/system-managed-namespace"; artifact_dir="$(E2E_ARTIFACTS)/fixture/system-managed-namespace"; mkdir -p "$$coverage_dir"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" kubectl delete namespace "$$target" --ignore-not-found --wait=true; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$$artifact_dir" E2E_SUITE=fixture E2E_SYSTEM_MANAGED_NAMESPACE_TEST=true E2E_NAMESPACE="$$namespace" E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestSystemManagedNamespaceMigration$$' -timeout "$(E2E_TIMEOUT)"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" kubectl delete namespace "$$target" --ignore-not-found --wait=true
+	@set -euo pipefail; \
+	package=ecr-secret-operator; \
+	namespace=migration-e2e-ecr-secret; \
+	target="$$package"; \
+	coverage_dir="$(E2E_COVERAGE_DIR)/fixture/system-managed-namespace"; \
+	artifact_dir="$(E2E_ARTIFACTS)/fixture/system-managed-namespace"; \
+	mkdir -p "$$coverage_dir"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" kubectl delete namespace "$$target" --ignore-not-found --wait=true; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$$artifact_dir" E2E_SUITE=fixture E2E_SYSTEM_MANAGED_NAMESPACE_TEST=true E2E_NAMESPACE="$$namespace" E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestSystemManagedNamespaceMigration$$' -timeout "$(E2E_TIMEOUT)"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" kubectl delete namespace "$$target" --ignore-not-found --wait=true
 
 .PHONY: migration/test-e2e-in-cluster-job
 migration/test-e2e-in-cluster-job: migration/e2e-fixture-setup migration/build-e2e-image ## Run migration CLIs in a fixture-cluster Job (no coverage collection)
@@ -156,12 +260,27 @@ migration/test-e2e-in-cluster-job: migration/e2e-fixture-setup migration/build-e
 
 .PHONY: migration/test-e2e-cos-supersession
 migration/test-e2e-cos-supersession: migration/e2e-fixture-setup migration/build ## Verify migration COS is superseded by the catalog revision
-	@set -euo pipefail; package=ecr-secret-operator; coverage_profile="$(E2E_COVERAGE_DIR)/cos-supersession/cos-supersession-coverage.out"; mkdir -p "$$(dirname "$$coverage_profile")"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/cos-supersession" E2E_SUITE=fixture E2E_COS_SUPERSESSION_TEST=true E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e -covermode=count -coverpkg=./migration/... -coverprofile="$$coverage_profile" ./test/e2e/migration -run '^TestPrecreatedClusterObjectSetSupersession$$' -timeout "$(E2E_TIMEOUT)"; if [[ "$(E2E_KEEP_RESOURCES)" != true ]]; then KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; else echo "Retaining migration resources for inspection"; fi
+	@set -euo pipefail; \
+	package=ecr-secret-operator; \
+	coverage_profile="$(E2E_COVERAGE_DIR)/cos-supersession/cos-supersession-coverage.out"; \
+	mkdir -p "$$(dirname "$$coverage_profile")"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/cos-supersession" E2E_SUITE=fixture E2E_COS_SUPERSESSION_TEST=true E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e -covermode=count -coverpkg=./migration/... -coverprofile="$$coverage_profile" ./test/e2e/migration -run '^TestPrecreatedClusterObjectSetSupersession$$' -timeout "$(E2E_TIMEOUT)"; \
+	if [[ "$(E2E_KEEP_RESOURCES)" != true ]]; then \
+		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
+	else \
+		echo "Retaining migration resources for inspection"; \
+	fi
 
 .PHONY: migration/e2e-delete-v1
 migration/e2e-delete-v1: ## Delete one migration E2E operator as OLMv1, or all
-	@if [[ "$(E2E_OPERATOR)" != all ]]; then E2E_OPERATOR="$(E2E_OPERATOR)" KUBECONFIG="$(E2E_KUBECONFIG)" bash -c 'source "$$1"; operator_fields "$$E2E_OPERATOR"' -- ./hack/e2e/migration/operators.sh; fi
-	@for operator in $$(awk -F '\t' -v wanted="$(E2E_OPERATOR)" 'NF==3 && $$1 !~ /^#/ && (wanted=="all" || $$1==wanted) {print $$1}' test/e2e/migration/operators.tsv); do KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$operator"; done
+	@if [[ "$(E2E_OPERATOR)" != all ]]; then \
+		E2E_OPERATOR="$(E2E_OPERATOR)" KUBECONFIG="$(E2E_KUBECONFIG)" bash -c 'source "$$1"; operator_fields "$$E2E_OPERATOR"' -- ./hack/e2e/migration/operators.sh; \
+	fi
+	@for operator in $$(awk -F '\t' -v wanted="$(E2E_OPERATOR)" 'NF==3 && $$1 !~ /^#/ && (wanted=="all" || $$1==wanted) {print $$1}' test/e2e/migration/operators.tsv); do \
+		KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$operator"; \
+	done
 
 .PHONY: migration/test-e2e-fixture
 migration/test-e2e-fixture: migration/build ## Run deterministic fixture migration tests against the fixture kubeconfig
@@ -182,7 +301,14 @@ migration/test-e2e-real-operator: migration/build ## Run real-operator migration
 migration/report-coverage-all: ## Display coverage from existing unit, E2E CLI, and E2E package profiles
 	@mkdir -p $(COVERAGE_DIR)
 	@test -f "$(UNIT_COVERAGE_PROFILE)" || { echo "unit coverage is missing; run make migration/test-unit first" >&2; exit 2; }
-	@coverage_dirs="$$(find "$(E2E_COVERAGE_DIR)" -type f -name 'covmeta.*' -printf '%h\n' 2>/dev/null | sort -u | paste -sd, -)"; test -n "$$coverage_dirs" || { echo "no E2E CLI coverage found; run both E2E matrices before migration/report-coverage-all" >&2; exit 2; }; go tool covdata textfmt -i="$$coverage_dirs" -o="$(E2E_COVERAGE_PROFILE)"; profiles=("$(UNIT_COVERAGE_PROFILE)" "$(E2E_COVERAGE_PROFILE)"); while IFS= read -r profile; do profiles+=("$$profile"); done < <(find "$(E2E_COVERAGE_DIR)" -type f -name '*-coverage.out' -print); awk 'FNR == 1 { next } { key = $$1 " " $$2; if (!(key in count)) order[++n] = key; count[key] += $$3 } END { print "mode: count"; for (i = 1; i <= n; i++) print order[i] " " count[order[i]] }' "$${profiles[@]}" > "$(ALL_COVERAGE_PROFILE)"; go tool cover -func="$(ALL_COVERAGE_PROFILE)"
+	@coverage_dirs="$$(find "$(E2E_COVERAGE_DIR)" -type f -name 'covmeta.*' -printf '%h\n' 2>/dev/null | sort -u | paste -sd, -)"; \
+	test -n "$$coverage_dirs" || { echo "no E2E CLI coverage found; run both E2E matrices before migration/report-coverage-all" >&2; exit 2; }; \
+	go tool covdata textfmt -i="$$coverage_dirs" -o="$(E2E_COVERAGE_PROFILE)"; \
+	profiles=("$(UNIT_COVERAGE_PROFILE)" "$(E2E_COVERAGE_PROFILE)"); \
+	while IFS= read -r profile; do profiles+=("$$profile"); \
+	done < <(find "$(E2E_COVERAGE_DIR)" -type f -name '*-coverage.out' -print); \
+	awk 'FNR == 1 { next } { key = $$1 " " $$2; if (!(key in count)) order[++n] = key; count[key] += $$3 } END { print "mode: count"; for (i = 1; i <= n; i++) print order[i] " " count[order[i]] }' "$${profiles[@]}" > "$(ALL_COVERAGE_PROFILE)"; \
+	go tool cover -func="$(ALL_COVERAGE_PROFILE)"
 
 .PHONY: migration/test-coverage-all
 migration/test-coverage-all: migration/test-unit migration/report-coverage-all ## Run unit tests and display combined unit and collected E2E CLI coverage
