@@ -101,8 +101,18 @@ migration/test-e2e-live-namespace-delete: migration/build ## Verify acknowledged
 	@set -euo pipefail; package=ecr-secret-operator; namespace=migration-e2e-ecr-secret; target="$$namespace-target"; coverage_dir="$(E2E_COVERAGE_DIR)/live/cross-namespace-delete"; artifact_dir="$(E2E_ARTIFACTS)/live/cross-namespace-delete"; mkdir -p "$$coverage_dir"; KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_KUBECONFIG)" kubectl delete namespace "$$target" --ignore-not-found --wait=true; KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/install-v0.sh "$$package"; KUBECONFIG="$(E2E_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$$artifact_dir" E2E_SUITE=real-operator E2E_LIVE_NAMESPACE_DELETE_TEST=true E2E_NAMESPACE="$$namespace" E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestLiveCrossNamespaceDeletionMigration$$' -timeout "$(E2E_TIMEOUT)"; KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_KUBECONFIG)" kubectl delete namespace "$$target" --ignore-not-found --wait=true
 
 .PHONY: migration/test-e2e-live-batch
+# Earlier live scenarios may restore OLMv0 Subscriptions; isolate --all first.
 migration/test-e2e-live-batch: migration/build ## Verify four-state batch selection against a live OLMv0 install
-	@set -euo pipefail; package=ecr-secret-operator; coverage_dir="$(E2E_COVERAGE_DIR)/live/batch"; mkdir -p "$$coverage_dir"; KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/install-v0.sh "$$package"; KUBECONFIG="$(E2E_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/live/batch" E2E_SUITE=real-operator E2E_BATCH_TEST=true E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestBatchSafety$$' -timeout "$(E2E_TIMEOUT)"; KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"
+	@set -euo pipefail; \
+	while IFS=$$'\t' read -r operator channel namespace; do \
+		[[ -z "$$operator" || "$$operator" == \#* ]] && continue; \
+		KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$operator"; \
+		KUBECONFIG="$(E2E_KUBECONFIG)" kubectl delete namespace "$$namespace" --ignore-not-found --wait=true; \
+	done < test/e2e/migration/operators.tsv; \
+	package=ecr-secret-operator; coverage_dir="$(E2E_COVERAGE_DIR)/live/batch"; mkdir -p "$$coverage_dir"; \
+	KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/install-v0.sh "$$package"; \
+	KUBECONFIG="$(E2E_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/live/batch" E2E_SUITE=real-operator E2E_BATCH_TEST=true E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestBatchSafety$$' -timeout "$(E2E_TIMEOUT)"; \
+	KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"
 
 .PHONY: migration/test-e2e-fixture-matrix
 migration/test-e2e-fixture-matrix: migration/build ## Replay and migrate all three OLMv0 install snapshots
