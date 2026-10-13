@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -31,18 +32,32 @@ func TestBatchSafety(t *testing.T) {
 		t.Fatal("batch safety requires an OLMv0 fixture or live installation")
 	}
 	namespace, name := os.Getenv("E2E_NAMESPACE"), os.Getenv("E2E_SUBSCRIPTION")
+	eligible := []client.ObjectKey{{Namespace: namespace, Name: name}}
+	if suite == "real-operator" {
+		second := client.ObjectKey{Namespace: os.Getenv("E2E_BATCH_SECOND_NAMESPACE"), Name: os.Getenv("E2E_BATCH_SECOND_OPERATOR")}
+		if second.Namespace == "" || second.Name == "" {
+			t.Fatal("live batch requires E2E_BATCH_SECOND_OPERATOR and E2E_BATCH_SECOND_NAMESPACE")
+		}
+		eligible = append(eligible, second)
+	}
 	_, c, _ := newMigrator(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Minute)
 	defer cancel()
 	t.Cleanup(func() { collectArtifacts(t, namespace) })
 	if suite == "real-operator" {
-		waitForCompletedInstallPlan(t, namespace, name)
+		t.Cleanup(func() { collectArtifacts(t, eligible[1].Namespace) })
+		for _, operator := range eligible {
+			waitForCompletedInstallPlan(t, operator.Namespace, operator.Name)
+		}
 	}
 	run(t, binary(t, "migrate-catalogs-v0-to-v1"), "--kubeconfig", os.Getenv("KUBECONFIG"))
-	var original operatorsv1alpha1.Subscription
-	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &original); err != nil {
-		t.Fatal(err)
+	originals := make([]operatorsv1alpha1.Subscription, len(eligible))
+	for i, operator := range eligible {
+		if err := c.Get(ctx, operator, &originals[i]); err != nil {
+			t.Fatal(err)
+		}
 	}
+	original := &originals[0]
 	for _, state := range []string{"conflict", "ineligible"} {
 		sub := &operatorsv1alpha1.Subscription{
 			ObjectMeta: metav1.ObjectMeta{Name: "batch-" + state, Namespace: namespace},
@@ -87,27 +102,43 @@ func TestBatchSafety(t *testing.T) {
 		}
 		previous := -1
 		for _, state := range []string{"Conflict", "Ineligible", "AlreadyMigrated", "Eligible"} {
-			index := strings.Index(out, "=== "+state+" (1) ===")
+			count := 1
+			if state == "Eligible" {
+				count = len(eligible)
+			}
+			index := strings.Index(out, fmt.Sprintf("=== %s (%d) ===", state, count))
 			if index <= previous {
 				t.Fatalf("missing/out-of-order batch state %s:\n%s", state, out)
 			}
 			previous = index
 		}
+		for _, operator := range eligible {
+			if !strings.Contains(out[previous:], "✓ "+operator.Namespace+"/"+operator.Name+" (") {
+				t.Fatalf("eligible section omitted %s/%s:\n%s", operator.Namespace, operator.Name, out)
+			}
+		}
 	}
-	var after operatorsv1alpha1.Subscription
-	if err := c.Get(ctx, client.ObjectKeyFromObject(&original), &after); err != nil {
-		t.Fatal(err)
+	for i, operator := range eligible {
+		var after operatorsv1alpha1.Subscription
+		if err := c.Get(ctx, operator, &after); err != nil {
+			t.Fatal(err)
+		}
+		if after.UID != originals[i].UID || !reflect.DeepEqual(after.Spec, originals[i].Spec) {
+			t.Fatalf("batch preview changed %s/%s identity or spec", operator.Namespace, operator.Name)
+		}
+		// OLMv0 may reconcile live Subscription status while the preview runs.
+		if suite == "fixture" && !reflect.DeepEqual(after.Status, originals[i].Status) {
+			t.Fatal("batch preview changed fixture Subscription status")
+		}
+		assertNoMigrationObjects(t, operator.Name)
 	}
-	if after.UID != original.UID || !reflect.DeepEqual(after.Spec, original.Spec) {
-		t.Fatal("batch preview changed source Subscription identity or spec")
-	}
-	// OLMv0 may reconcile live Subscription status while the preview runs.
-	if suite == "fixture" && !reflect.DeepEqual(after.Status, original.Status) {
-		t.Fatal("batch preview changed fixture Subscription status")
-	}
-	assertNoMigrationObjects(t, name)
 	run(t, cli, "convert", "--all", "--kubeconfig", os.Getenv("KUBECONFIG"))
-	run(t, "kubectl", "wait", "--for=condition=Installed", "clusterextension/"+name, "--timeout=10m")
+	for _, operator := range eligible {
+		run(t, "kubectl", "wait", "--for=condition=Installed", "clusterextension/"+operator.Name, "--timeout=10m")
+		if out, err := output("kubectl", "get", "subscription/"+operator.Name, "-n", operator.Namespace); err == nil {
+			t.Fatalf("converted Subscription %s/%s remains:\n%s", operator.Namespace, operator.Name, out)
+		}
+	}
 	for _, state := range []string{"conflict", "ineligible"} {
 		run(t, "kubectl", "get", "subscription/batch-"+state, "-n", namespace)
 		out, err := output("kubectl", "get", "clusterobjectsets", "-l", migration.LabelOwnerName+"=batch-"+state, "-o", "name")

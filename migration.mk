@@ -110,10 +110,14 @@ migration/test-e2e-live-batch: migration/build $(KIND) ## Verify four-state batc
 		KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$operator"; \
 		KUBECONFIG="$(E2E_KUBECONFIG)" kubectl delete namespace "$$namespace" --ignore-not-found --wait=true; \
 	done < test/e2e/migration/operators.tsv; \
-	package=ecr-secret-operator; coverage_dir="$(E2E_COVERAGE_DIR)/live/batch"; mkdir -p "$$coverage_dir"; \
-	KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/install-v0.sh "$$package"; \
-	KUBECONFIG="$(E2E_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/live/batch" E2E_SUITE=real-operator E2E_BATCH_TEST=true E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestBatchSafety$$' -timeout "$(E2E_TIMEOUT)"; \
-	KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"
+	coverage_dir="$(E2E_COVERAGE_DIR)/live/batch"; mkdir -p "$$coverage_dir"; \
+	for operator in ecr-secret-operator redis-operator; do \
+		KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/install-v0.sh "$$operator"; \
+	done; \
+	KUBECONFIG="$(E2E_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/live/batch" E2E_SUITE=real-operator E2E_BATCH_TEST=true E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION=ecr-secret-operator E2E_BATCH_SECOND_OPERATOR=redis-operator E2E_BATCH_SECOND_NAMESPACE=migration-e2e-redis go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestBatchSafety$$' -timeout "$(E2E_TIMEOUT)"; \
+	for operator in ecr-secret-operator redis-operator; do \
+		KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$operator"; \
+	done
 
 .PHONY: migration/test-e2e-fixture-matrix
 migration/test-e2e-fixture-matrix: migration/build ## Replay and migrate all three OLMv0 install snapshots

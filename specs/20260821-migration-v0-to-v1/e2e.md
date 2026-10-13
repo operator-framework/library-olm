@@ -166,7 +166,8 @@ nonzero results after partial failure (V1.7). Unit tests also verify that batch
 classification applies acknowledgment flags and rejects `-n` or `--ce-name` with `--all`.
 
 `make migration/test-e2e-live-batch` repeats the four-state selection check with
-one operator installed by OLMv0 and three isolated state markers. It has its own
+two operators installed by OLMv0 and three isolated state markers. It asserts
+that both eligible operators are selected and converted. It has its own
 CLI coverage directory and runs in the live CI job.
 The live batch and fixture acceptance targets verify that their kubeconfig
 identifies the corresponding Kind cluster before deleting any test resources.
