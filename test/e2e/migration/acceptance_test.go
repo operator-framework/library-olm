@@ -136,6 +136,12 @@ func testDependentsWarning(t *testing.T, ctx context.Context, c client.Client, c
 			t.Fatalf("%v omitted dependent warning: %v\n%s", command, err, out)
 		}
 	}
+	for _, command := range [][]string{{"check", "--all"}, {"convert", "--dry-run", "--output=jsonl", sub.Name, "-n", sub.Namespace}} {
+		out, err := output(cli, append(command, "--kubeconfig", os.Getenv("KUBECONFIG"))...)
+		if err != nil || !strings.Contains(out, sub.Namespace+"/"+dependent.Name) || !strings.Contains(out, "may depend") {
+			t.Fatalf("%v omitted dependent warning: %v\n%s", command, err, out)
+		}
+	}
 	out, err := output(cli, append([]string{"convert"}, args...)...)
 	if err != nil || !strings.Contains(out, sub.Namespace+"/"+dependent.Name) || !strings.Contains(out, "may depend") {
 		t.Fatalf("conversion omitted dependent warning: %v\n%s", err, out)

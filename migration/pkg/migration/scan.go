@@ -336,6 +336,9 @@ func PrintScanSummary(results []OperatorScanResult, printf func(string, ...inter
 			case OperatorStatusEligible:
 				printf("  ✓ %s/%s (%s)\n", r.SubscriptionNamespace, r.SubscriptionName, r.PackageName)
 			}
+			for _, warning := range r.Warnings {
+				printf("      ⚠️  %s\n", warning)
+			}
 		}
 	}
 }

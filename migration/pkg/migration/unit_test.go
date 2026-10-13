@@ -1115,12 +1115,15 @@ func TestScanStatesAndPublicHelpers(t *testing.T) {
 		{Status: OperatorStatusConflict, SubscriptionNamespace: "ns", SubscriptionName: "conflict", Error: fmt.Errorf("overlap")},
 		{Status: OperatorStatusIneligible, SubscriptionNamespace: "ns", SubscriptionName: "bad", FailedChecks: []CheckResult{{Name: "readiness", Message: "not ready"}}},
 		{Status: OperatorStatusAlreadyMigrated, State: "ClusterExtension done-ce"},
-		{Status: OperatorStatusEligible, SubscriptionNamespace: "ns", SubscriptionName: "good", PackageName: "widgets"},
+		{Status: OperatorStatusEligible, SubscriptionNamespace: "ns", SubscriptionName: "good", PackageName: "widgets", Warnings: []string{"ns/dependent may depend on widgets"}},
 	}, func(format string, args ...interface{}) { fmt.Fprintf(&summary, format, args...) })
 	for _, status := range []string{"Conflict", "Ineligible", "AlreadyMigrated", "Eligible"} {
 		if !strings.Contains(summary.String(), status) {
 			t.Errorf("summary missing %q: %s", status, summary.String())
 		}
+	}
+	if !strings.Contains(summary.String(), "ns/dependent may depend on widgets") {
+		t.Errorf("summary omitted dependent warning: %s", summary.String())
 	}
 }
 

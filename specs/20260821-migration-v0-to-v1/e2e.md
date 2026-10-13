@@ -168,6 +168,8 @@ classification applies acknowledgment flags and rejects `-n` or `--ce-name` with
 `make migration/test-e2e-live-batch` repeats the four-state selection check with
 one operator installed by OLMv0 and three isolated state markers. It has its own
 CLI coverage directory and runs in the live CI job.
+The live batch and fixture acceptance targets verify that their kubeconfig
+identifies the corresponding Kind cluster before deleting any test resources.
 
 `make migration/test-e2e-acceptance` replays the ecr-secret snapshot separately for
 four focused cases: non-image CatalogSource refusal before mutation (V2.11),

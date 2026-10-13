@@ -102,7 +102,8 @@ migration/test-e2e-live-namespace-delete: migration/build ## Verify acknowledged
 
 .PHONY: migration/test-e2e-live-batch
 # Earlier live scenarios may restore OLMv0 Subscriptions; isolate --all first.
-migration/test-e2e-live-batch: migration/build ## Verify four-state batch selection against a live OLMv0 install
+migration/test-e2e-live-batch: migration/build $(KIND) ## Verify four-state batch selection against a live OLMv0 install
+	@E2E_CLUSTER_NAME="$(E2E_CLUSTER_NAME)" E2E_KUBECONFIG="$(E2E_KUBECONFIG)" KIND="$(KIND)" ./hack/e2e/migration/require-kind-cluster.sh
 	@set -euo pipefail; \
 	while IFS=$$'\t' read -r operator channel namespace; do \
 		[[ -z "$$operator" || "$$operator" == \#* ]] && continue; \
@@ -123,7 +124,8 @@ migration/test-e2e-batch: migration/build ## Verify four-state batch selection a
 	@set -euo pipefail; package=ecr-secret-operator; coverage_dir="$(E2E_COVERAGE_DIR)/fixture/batch"; mkdir -p "$$coverage_dir"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/fixture/batch" E2E_SUITE=fixture E2E_BATCH_TEST=true E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestBatchSafety$$' -timeout "$(E2E_TIMEOUT)"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"
 
 .PHONY: migration/test-e2e-acceptance
-migration/test-e2e-acceptance: migration/build ## Verify remaining fixture acceptance cases with CLI coverage
+migration/test-e2e-acceptance: migration/build $(KIND) ## Verify remaining fixture acceptance cases with CLI coverage
+	@E2E_CLUSTER_NAME="$(E2E_FIXTURE_CLUSTER_NAME)" E2E_KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" KIND="$(KIND)" ./hack/e2e/migration/require-kind-cluster.sh
 	@set -euo pipefail; package=ecr-secret-operator; for scenario in non-image-source dependents-warning command-name deployment-config; do coverage_dir="$(E2E_COVERAGE_DIR)/fixture/acceptance/$$scenario"; mkdir -p "$$coverage_dir"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" kubectl delete clusterextension/check --ignore-not-found --wait=true; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" kubectl delete clusterobjectsets -l 'olm.operatorframework.io/owner-name=check' --ignore-not-found --wait=true; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/fixture/acceptance/$$scenario" E2E_SUITE=fixture E2E_ACCEPTANCE_CASE="$$scenario" E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestFixtureAcceptanceCases$$' -timeout "$(E2E_TIMEOUT)"; done; KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"
 
 .PHONY: migration/test-e2e-acknowledgments

@@ -176,6 +176,32 @@ func TestCommandOutputUsesSelectedFormatter(t *testing.T) {
 	}
 }
 
+func TestStructuredDryRunChecksPreservesWarnings(t *testing.T) {
+	formatter := &recordingFormatter{}
+	oldMode, oldFormats := outputMode, outputFormats
+	outputFormats = clioutput.NewRegistry()
+	outputFormats.Register("test", formatter)
+	outputMode = "test"
+	t.Cleanup(func() {
+		outputMode, outputFormats = oldMode, oldFormats
+	})
+
+	result := migration.OperatorScanResult{
+		SubscriptionNamespace: "operators", SubscriptionName: "widget",
+		Status: migration.OperatorStatusEligible, Warnings: []string{"other depends on widget"},
+	}
+	if err := selectedCommandOutput().dryRunChecks("operators/widget", result); err != nil {
+		t.Fatal(err)
+	}
+	if len(formatter.records) != 1 || formatter.records[0].Type != "check" || formatter.records[0].Command != "convert" {
+		t.Fatalf("dry-run check records = %#v", formatter.records)
+	}
+	data, ok := formatter.records[0].Data.(scanResultRecord)
+	if !ok || len(data.Warnings) != 1 || data.Warnings[0] != "other depends on widget" {
+		t.Fatalf("dry-run check lost warnings: %#v", formatter.records[0].Data)
+	}
+}
+
 func TestProgressFuncRendersStructuredEvents(t *testing.T) {
 	reader, writer, err := os.Pipe()
 	if err != nil {
