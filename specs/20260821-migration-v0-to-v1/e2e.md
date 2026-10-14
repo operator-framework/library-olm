@@ -11,7 +11,7 @@ pushes to `main`.
 | Suite | Cluster | Catalog content | Purpose |
 |---|---|---|---|
 | `fixture` | kind + OLMv1 + OLMv0 CRDs only (no OLMv0 controllers) | Committed OLMv0-install snapshots and a digest-pinned CatalogSource | Deterministic coverage of V1, V2, V3, V4. |
-| `real-operator` | separate kind cluster with OLMv0 + OLMv1 | OLMv0's installed OperatorHub catalog | Covers V5.2–V5.6 plus cleanup and healthy rollback (V5.8). V5.7 upgrade remains a gap. |
+| `real-operator` | separate kind cluster with OLMv0 + OLMv1 | OLMv0's installed OperatorHub catalog | Covers V5.2–V5.6 plus cleanup, healthy rollback, and remigration (V5.8). V5.7 upgrade remains a gap. |
 | `in-cluster-job` | fixture cluster | A replayed ecr-secret-operator installation | Proves both CLIs authenticate and migrate using only a Pod ServiceAccount. |
 | `kind-only` | kind + OLMv1 | Local fixture objects, no OLMv0 controllers | Fast contract tests for resource rendering and COS adoption prerequisites. |
 
@@ -75,7 +75,7 @@ public mutable catalog.
 | V4.7 | Cross-namespace fixture migration | Target namespace is created with copied PSA/SCC labels; source Deployments are scaled to zero before target creation; CE and rendered Deployment use the target; collected source Deployment is removed while the source namespace remains. |
 | V4.7 | Acknowledged live namespace deletion | A real OLMv0 installation is converted with `--acknowledge-namespace-delete`; after CE installation in the target namespace, OLMv0 finalizes the CSV and the source namespace is deleted. |
 | V4.8 | System-managed namespace fixture migration | Against the experimental controller profile, verify the explicit opt-in omits `spec.namespace`, migration imports the prepared bundle-metadata namespace into its COS, the catalog COS takes ownership, OLMv1 manages the target Deployment there, and source copies are removed. Unit tests verify unsupported CRDs reject the mode before mutation. |
-| V1.4, V3.18 | Rollback | Refusal without acknowledgment for installed CE; CE/COS deletion and Subscription restoration with acknowledgment; on-disk backup files exist before deletion. |
+| V1.4, V3.18 | Rollback and remigration | Refusal without acknowledgment for installed CE; CE/COS deletion and Subscription restoration with acknowledgment; preserved Deployments lose OLMv1 ownership metadata, retain their UIDs, and are adopted by new COS revisions on a second conversion; on-disk backup files exist before deletion. |
 | V1.5, V4.1 | Conflict cleanup | CE stays; Subscription and OLMv0 artifacts are removed; shared OperatorGroup is retained. |
 | V1.6–V1.8, V2.10 | Batch and argument behavior | Four-section ordering; only Eligible converts; stop/continue behavior; a Subscription named `check` works. |
 | V2.1–V2.9, V4.3–V4.5 | Eligibility matrix | One test per incompatibility, expected reason, no mutation on refusal, acknowledgment flips only soft cases. |
@@ -148,7 +148,7 @@ InstallPlan is removed before rollback; the original source InstallPlan is retai
 An unacknowledged rollback
 preserves CE backup annotations and COS revisions; an acknowledged rollback must remove all
 CE/COS management, including revision annotations on preserved workloads, and restore the original Subscription spec, an `AtLatestKnown` Subscription,
-a `Succeeded` CSV, and available Deployments within ten minutes. Unit tests additionally verify
+a `Succeeded` CSV, and available Deployments within ten minutes. The test then runs `convert` again, waits for the new CE to install, and checks that the same Deployment UIDs have revision annotations and controller references to new COS revisions. Unit tests additionally verify
 orphan deletion policies, preservation of unrelated revisions, revision-list preflight failures,
 and recovery creation/reconciliation failures without changing the backup. Conflict-cleanup
 regressions cover CSV discovery without Subscription status, refusal to remove shared or

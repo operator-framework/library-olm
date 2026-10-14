@@ -501,12 +501,21 @@ func TestMigration(t *testing.T) {
 		assertRollbackResourcesRetained(t, rollbackState)
 		_, kubeClient, _ := newMigrator(t)
 		beforeRefusal := captureRollbackManagement(t, kubeClient, subscription)
+		ownedDeployments := captureRollbackOwnedDeployments(t, kubeClient, rollbackState, beforeRefusal)
 		if _, err := output(binary(t, "migrate-operators-v0-to-v1"), "rollback", subscription, "--kubeconfig", os.Getenv("KUBECONFIG")); err == nil {
 			t.Fatal("rollback of an installed ClusterExtension succeeded without acknowledgment")
 		}
 		assertRollbackManagementRetained(t, kubeClient, beforeRefusal)
 		run(t, binary(t, "migrate-operators-v0-to-v1"), "rollback", subscription, "--acknowledge-installed", "--kubeconfig", os.Getenv("KUBECONFIG"))
 		assertRollbackRestored(t, kubeClient, rollbackState, beforeRefusal)
+		assertRollbackDeploymentsReleased(t, kubeClient, ownedDeployments)
+		run(t, binary(t, "migrate-operators-v0-to-v1"), "convert", subscription, "-n", namespace, "--kubeconfig", os.Getenv("KUBECONFIG"))
+		run(t, "kubectl", "wait", "--for=jsonpath={.status.conditions[?(@.type=='Installed')].status}=True", "clusterextension/"+subscription, "--timeout=10m")
+		if _, err := output("kubectl", "get", "subscription", subscription, "-n", namespace); err == nil {
+			t.Fatal("Subscription still exists after remigration")
+		}
+		afterRemigration := captureRollbackManagement(t, kubeClient, subscription)
+		assertRemigrationAdoptedDeployments(t, kubeClient, ownedDeployments, beforeRefusal, afterRemigration)
 	}
 }
 

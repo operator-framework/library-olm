@@ -12,6 +12,8 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -103,6 +105,101 @@ func assertRollbackResourcesRetained(t *testing.T, snapshot *rollbackSnapshot) {
 type rollbackManagement struct {
 	extension ocv1.ClusterExtension
 	revisions []ocv1.ClusterObjectSet
+}
+
+const (
+	revisionAnnotation = "olm.operatorframework.io/revision"
+	managedByLabel     = "app.kubernetes.io/managed-by"
+	managedLabel       = "boxcutter-managed"
+)
+
+type ownedDeployment struct {
+	key client.ObjectKey
+	uid types.UID
+}
+
+func captureRollbackOwnedDeployments(t *testing.T, kubeClient client.Client, snapshot *rollbackSnapshot, management rollbackManagement) []ownedDeployment {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	revisionUIDs := make(map[types.UID]bool, len(management.revisions))
+	for i := range management.revisions {
+		revisionUIDs[management.revisions[i].UID] = true
+	}
+	owned := make([]ownedDeployment, 0, len(snapshot.deployments))
+	for _, name := range snapshot.deployments {
+		key := client.ObjectKey{Namespace: snapshot.subscription.Namespace, Name: name}
+		var deployment appsv1.Deployment
+		if err := kubeClient.Get(ctx, key, &deployment); err != nil {
+			t.Fatal(err)
+		}
+		owner := metav1.GetControllerOf(&deployment)
+		if owner == nil || owner.Kind != "ClusterObjectSet" || !revisionUIDs[owner.UID] || deployment.Annotations[revisionAnnotation] == "" {
+			t.Fatalf("Deployment %s is not managed by a migration ClusterObjectSet with a revision annotation", key)
+		}
+		owned = append(owned, ownedDeployment{key: key, uid: deployment.UID})
+	}
+	return owned
+}
+
+func assertRollbackDeploymentsReleased(t *testing.T, kubeClient client.Client, owned []ownedDeployment) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	for _, original := range owned {
+		var deployment appsv1.Deployment
+		if err := kubeClient.Get(ctx, original.key, &deployment); err != nil {
+			t.Fatal(err)
+		}
+		if deployment.UID != original.uid || deployment.DeletionTimestamp != nil {
+			t.Fatalf("Deployment %s was replaced or deleted during rollback", original.key)
+		}
+		if owner := metav1.GetControllerOf(&deployment); owner != nil && owner.Kind == "ClusterObjectSet" {
+			t.Fatalf("Deployment %s retains ClusterObjectSet owner %s after rollback", original.key, owner.Name)
+		}
+		if deployment.Annotations[revisionAnnotation] != "" || deployment.Labels[managedLabel] != "" || deployment.Labels[managedByLabel] == "olm.operatorframework.io" {
+			t.Fatalf("Deployment %s retains OLMv1 ownership metadata after rollback", original.key)
+		}
+	}
+}
+
+func assertRemigrationAdoptedDeployments(t *testing.T, kubeClient client.Client, owned []ownedDeployment, before, after rollbackManagement) {
+	t.Helper()
+	if after.extension.UID == before.extension.UID {
+		t.Fatal("remigration reused the old ClusterExtension")
+	}
+	oldRevisionUIDs := make(map[types.UID]bool, len(before.revisions))
+	for i := range before.revisions {
+		oldRevisionUIDs[before.revisions[i].UID] = true
+	}
+	newRevisionUIDs := make(map[types.UID]bool, len(after.revisions))
+	for i := range after.revisions {
+		if oldRevisionUIDs[after.revisions[i].UID] {
+			t.Fatalf("remigration reused old ClusterObjectSet %s", after.revisions[i].Name)
+		}
+		newRevisionUIDs[after.revisions[i].UID] = true
+	}
+	var pending string
+	err := wait.PollUntilContextTimeout(t.Context(), 2*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
+		for _, original := range owned {
+			var deployment appsv1.Deployment
+			if err := kubeClient.Get(ctx, original.key, &deployment); err != nil {
+				return false, err
+			}
+			if deployment.UID != original.uid || deployment.DeletionTimestamp != nil {
+				return false, fmt.Errorf("Deployment %s was replaced or deleted during remigration", original.key)
+			}
+			owner := metav1.GetControllerOf(&deployment)
+			if owner == nil || owner.Kind != "ClusterObjectSet" || !newRevisionUIDs[owner.UID] || deployment.Annotations[revisionAnnotation] == "" {
+				pending = fmt.Sprintf("Deployment %s adoption (owner=%v, revision=%q)", original.key, owner, deployment.Annotations[revisionAnnotation])
+				return false, nil
+			}
+		}
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("remigration did not adopt preserved Deployments (%s): %v", pending, err)
+	}
 }
 
 func captureRollbackManagement(t *testing.T, kubeClient client.Client, extension string) rollbackManagement {

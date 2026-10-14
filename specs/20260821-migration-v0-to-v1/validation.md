@@ -87,7 +87,7 @@ flag flips it to `Eligible`:
 - **V5.5** `convert <operator> -n <ns> --dry-run` → lists resources incl. CRDs (`IfNoController`).
 - **V5.6** `convert <operator> -n <ns>` → CE `Installed=True`; Subscription/CSV deleted; CRDs adopted (demonstrates close-to-zero downtime with namespace unchanged).
 - **V5.7** Upgrade via OLMv1 → CRDs updated through the normal bundle lifecycle.
-- **V5.8** `rollback <ce-name> --acknowledge-installed` → Subscription restored, CE deleted.
+- **V5.8** `rollback <ce-name> --acknowledge-installed` → Subscription restored, CE and COS revisions deleted, preserved Deployments released from OLMv1 ownership; a second `convert` creates new CE/COS UIDs, installs successfully, and adopts the same Deployment UIDs.
 - **V5.9** Fresh cluster with operators in all four states → `check --all` → correct four-section output; `convert --all` warns on Conflicts and migrates only Eligible.
 
 ## V6. Non-functional (Jira deployment considerations)
