@@ -1246,7 +1246,16 @@ func stripResource(obj unstructured.Unstructured) unstructured.Unstructured {
 	}
 
 	if lbls := obj.GetLabels(); len(lbls) > 0 {
-		stripped.SetLabels(lbls)
+		filtered := make(map[string]string, len(lbls))
+		for key, value := range lbls {
+			if key == boxcutterManagedLabel || key == boxcutterManagedByLabel && value == "olm.operatorframework.io" {
+				continue
+			}
+			filtered[key] = value
+		}
+		if len(filtered) > 0 {
+			stripped.SetLabels(filtered)
+		}
 	}
 
 	if annotations := obj.GetAnnotations(); len(annotations) > 0 {
@@ -1290,7 +1299,7 @@ func stripResource(obj unstructured.Unstructured) unstructured.Unstructured {
 func filterAnnotations(annotations map[string]string) map[string]string {
 	filtered := make(map[string]string)
 	for k, v := range annotations {
-		shouldStrip := false
+		shouldStrip := k == boxcutterRevisionAnnotation
 		for _, prefix := range annotationPrefixesToStrip {
 			if strings.HasPrefix(k, prefix) {
 				shouldStrip = true

@@ -108,9 +108,10 @@ flag is set; CE carries the matching annotation.
   `--dry-run` previews via `Gather`. `--all` prints the four-section summary, then converts
   each Eligible operator; `--continue-on-error` to keep going. Batch classification uses
   the requested acknowledgment overrides; `-n` and `--ce-name` are rejected with `--all`.
-- `rollback <ce-name> | --all`: require `--acknowledge-installed` when CE is `Installed=True`; delete CE
-  then COS with orphan cascade (fallback: new COS revision → `Succeeded=True` → orphan delete);
-  restore Subscription from the backup annotation (`startingCSV` → `installedCSV`).
+- `rollback <ce-name> | --all`: require `--acknowledge-installed` when CE is `Installed=True`;
+  snapshot COS-controlled resource identities on CE, orphan-delete COS revisions, wait for
+  orphan propagation, release OLMv1 revision metadata from the verified preserved
+  resources, orphan-delete CE, then restore Subscription from its backup annotation.
 - `cleanup <ce-name> | --all`: for `Conflict`; delete Subscription (orphan) + `CleanupOLMv0Resources`.
 - Fail operator commands on text or JSONL progress-write errors before reporting a
   successful check, scan, or conversion result.

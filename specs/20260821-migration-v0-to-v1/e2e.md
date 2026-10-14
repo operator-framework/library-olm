@@ -147,7 +147,7 @@ manual approval to prevent an automatic install from racing cleanup. Its unappro
 InstallPlan is removed before rollback; the original source InstallPlan is retained.
 An unacknowledged rollback
 preserves CE backup annotations and COS revisions; an acknowledged rollback must remove all
-CE/COS management and restore the original Subscription spec, an `AtLatestKnown` Subscription,
+CE/COS management, including revision annotations on preserved workloads, and restore the original Subscription spec, an `AtLatestKnown` Subscription,
 a `Succeeded` CSV, and available Deployments within ten minutes. Unit tests additionally verify
 orphan deletion policies, preservation of unrelated revisions, revision-list preflight failures,
 and recovery creation/reconciliation failures without changing the backup. Conflict-cleanup

@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
@@ -424,6 +427,29 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 		}
 		revisions.Items = append(revisions.Items, cos)
 	}
+	var ownedObjects []rollbackObject
+	if saved := ce.Annotations[rollbackReleaseSnapshotAnnotation]; saved != "" {
+		if err := json.Unmarshal([]byte(saved), &ownedObjects); err != nil {
+			return fmt.Errorf("invalid rollback resource snapshot on ClusterExtension %s: %w", ceName, err)
+		}
+	} else {
+		ownedObjects, err = m.snapshotRevisionObjects(ctx, revisions.Items)
+		if err != nil {
+			return fmt.Errorf("failed to inspect ClusterObjectSet resources before rollback: %w", err)
+		}
+		encoded, err := json.Marshal(ownedObjects)
+		if err != nil {
+			return fmt.Errorf("failed to encode rollback resource snapshot: %w", err)
+		}
+		before := ce.DeepCopy()
+		if ce.Annotations == nil {
+			ce.Annotations = map[string]string{}
+		}
+		ce.Annotations[rollbackReleaseSnapshotAnnotation] = string(encoded)
+		if err := m.Client.Patch(ctx, &ce, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+			return fmt.Errorf("failed to save rollback resource snapshot: %w", err)
+		}
+	}
 
 	// Delete revisions before the CE so a failed revision deletion leaves the
 	// authoritative Subscription backup available for a later rollback attempt.
@@ -434,12 +460,22 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 			}
 		}
 	}
+	if err := m.releaseRevisionObjects(ctx, revisions.Items, ownedObjects); err != nil {
+		return fmt.Errorf("failed to release orphaned ClusterObjectSet resources: %w", err)
+	}
 
 	// Delete CE (orphan cascade — preserves operator workloads).
 	if err := m.Client.Delete(ctx, &ce, client.PropagationPolicy("Orphan")); err != nil {
 		if client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to delete ClusterExtension: %w", err)
 		}
+	}
+	if err := wait.PollUntilContextTimeout(ctx, time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
+		var current ocv1.ClusterExtension
+		err := m.Client.Get(ctx, client.ObjectKey{Name: ceName}, &current)
+		return apierrors.IsNotFound(err), client.IgnoreNotFound(err)
+	}); err != nil {
+		return fmt.Errorf("waiting for ClusterExtension %s deletion: %w", ceName, err)
 	}
 
 	// Restore Subscription from the validated backup.
