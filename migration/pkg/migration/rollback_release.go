@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	ocv1 "github.com/operator-framework/operator-controller/api/v1"
 )
@@ -25,7 +26,64 @@ const (
 	boxcutterManagedByLabel           = "app.kubernetes.io/managed-by"
 	boxcutterManagedLabel             = "boxcutter-managed"
 	rollbackReleaseSnapshotAnnotation = "olm.operatorframework.io/rollback-release-snapshot"
+	rollbackFinalizer                 = "olm.operatorframework.io/migration-rollback"
 )
+
+func (m *Migrator) saveRollbackSnapshot(ctx context.Context, ce *ocv1.ClusterExtension, revisions []ocv1.ClusterObjectSet) ([]rollbackObject, error) {
+	if saved := ce.Annotations[rollbackReleaseSnapshotAnnotation]; saved != "" {
+		var objects []rollbackObject
+		if err := json.Unmarshal([]byte(saved), &objects); err != nil {
+			return nil, fmt.Errorf("invalid rollback resource snapshot on ClusterExtension %s: %w", ce.Name, err)
+		}
+		return objects, nil
+	}
+	objects, err := m.snapshotRevisionObjects(ctx, revisions)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect ClusterObjectSet resources before rollback: %w", err)
+	}
+	encoded, err := json.Marshal(objects)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode rollback resource snapshot: %w", err)
+	}
+	before := ce.DeepCopy()
+	if ce.Annotations == nil {
+		ce.Annotations = map[string]string{}
+	}
+	ce.Annotations[rollbackReleaseSnapshotAnnotation] = string(encoded)
+	if err := m.Client.Patch(ctx, ce, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+		return nil, fmt.Errorf("failed to save rollback resource snapshot: %w", err)
+	}
+	return objects, nil
+}
+
+func (m *Migrator) beginRollbackDeletion(ctx context.Context, ce *ocv1.ClusterExtension) error {
+	if !controllerutil.ContainsFinalizer(ce, rollbackFinalizer) {
+		before := ce.DeepCopy()
+		controllerutil.AddFinalizer(ce, rollbackFinalizer)
+		if err := m.Client.Patch(ctx, ce, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+			return fmt.Errorf("failed to protect ClusterExtension backup during rollback: %w", err)
+		}
+	}
+	if ce.DeletionTimestamp == nil {
+		if err := m.Client.Delete(ctx, ce, client.PropagationPolicy("Orphan")); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to start ClusterExtension deletion: %w", err)
+		}
+	}
+	return nil
+}
+
+func (m *Migrator) finishRollbackDeletion(ctx context.Context, name string) error {
+	var ce ocv1.ClusterExtension
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: name}, &ce); err != nil {
+		return fmt.Errorf("failed to get deleting ClusterExtension %s: %w", name, err)
+	}
+	before := ce.DeepCopy()
+	controllerutil.RemoveFinalizer(&ce, rollbackFinalizer)
+	if err := m.Client.Patch(ctx, &ce, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+		return fmt.Errorf("failed to finish ClusterExtension %s deletion: %w", name, err)
+	}
+	return nil
+}
 
 type rollbackObject struct {
 	Identity  unstructured.Unstructured `json:"identity"`
@@ -33,6 +91,7 @@ type rollbackObject struct {
 	OwnerUID  types.UID                 `json:"ownerUID"`
 	Revision  string                    `json:"revision"`
 	ManagedBy string                    `json:"managedBy"`
+	Managed   string                    `json:"managed"`
 }
 
 // snapshotRevisionObjects records only resources currently controlled by a
@@ -83,6 +142,7 @@ func (m *Migrator) snapshotRevisionObjects(ctx context.Context, revisions []ocv1
 					Identity: identity, UID: live.GetUID(), OwnerUID: owner.UID,
 					Revision:  live.GetAnnotations()[boxcutterRevisionAnnotation],
 					ManagedBy: live.GetLabels()[boxcutterManagedByLabel],
+					Managed:   live.GetLabels()[boxcutterManagedLabel],
 				})
 			}
 		}
@@ -156,11 +216,13 @@ func (m *Migrator) releaseRevisionObjects(ctx context.Context, revisions []ocv1.
 			}
 			currentRevision := current.GetAnnotations()[boxcutterRevisionAnnotation]
 			currentManagedBy := current.GetLabels()[boxcutterManagedByLabel]
+			currentManaged := current.GetLabels()[boxcutterManagedLabel]
 			if currentRevision != "" && currentRevision != original.Revision ||
-				currentManagedBy != "" && currentManagedBy != original.ManagedBy {
+				currentManagedBy != "" && currentManagedBy != original.ManagedBy ||
+				currentManaged != "" && currentManaged != original.Managed {
 				return false, fmt.Errorf("ownership metadata on %s changed during rollback", key)
 			}
-			if currentRevision == "" && currentManagedBy == "" && current.GetLabels()[boxcutterManagedLabel] == "" {
+			if currentRevision == "" && currentManagedBy == "" && currentManaged == "" {
 				return true, nil
 			}
 			updated := current.DeepCopy()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	operatorsv1 "github.com/operator-framework/api/pkg/operators/v1"
@@ -24,9 +27,10 @@ import (
 type orphanRecordingClient struct {
 	client.Client
 	policies map[string]metav1.DeletionPropagation
+	deletes  []string
 }
 
-func (c orphanRecordingClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+func (c *orphanRecordingClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
 	options := &client.DeleteOptions{}
 	for _, option := range opts {
 		option.ApplyToDelete(options)
@@ -34,6 +38,7 @@ func (c orphanRecordingClient) Delete(ctx context.Context, obj client.Object, op
 	if options.PropagationPolicy != nil {
 		c.policies[obj.GetName()] = *options.PropagationPolicy
 	}
+	c.deletes = append(c.deletes, obj.GetName())
 	return c.Client.Delete(ctx, obj, opts...)
 }
 
@@ -50,9 +55,13 @@ func TestRollbackRestoresSubscriptionAndOrphansAllOwnedRevisions(t *testing.T) {
 	og := &operatorsv1.OperatorGroup{ObjectMeta: metav1.ObjectMeta{Name: "shared", Namespace: "source"}}
 	m := migrationTestClient(t, ce, first, second, unrelated, deployment, og, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "source"}})
 	policies := map[string]metav1.DeletionPropagation{}
-	m.Client = orphanRecordingClient{Client: m.Client, policies: policies}
+	recorder := &orphanRecordingClient{Client: m.Client, policies: policies}
+	m.Client = recorder
 	if err := m.Rollback(ctx, Options{ClusterExtensionName: ce.Name, AcknowledgeInstalled: true}); err != nil {
 		t.Fatalf("Rollback(): %v", err)
+	}
+	if len(recorder.deletes) == 0 || recorder.deletes[0] != ce.Name {
+		t.Fatalf("deletion order = %v, want ClusterExtension first", recorder.deletes)
 	}
 	for _, object := range []client.Object{ce, first, second} {
 		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(object), object); !apierrors.IsNotFound(err) {
@@ -174,12 +183,43 @@ func TestRollbackRevisionDeleteFailureKeepsBackupForRetry(t *testing.T) {
 	if retained.Annotations[MigrationSubscriptionBackupAnnotation] != ce.Annotations[MigrationSubscriptionBackupAnnotation] {
 		t.Fatal("failed rollback changed the Subscription backup")
 	}
+	if retained.DeletionTimestamp == nil || !slices.Contains(retained.Finalizers, rollbackFinalizer) {
+		t.Fatal("failed rollback did not retain the deleting ClusterExtension and its backup finalizer")
+	}
 	if err := m.Rollback(ctx, Options{ClusterExtensionName: ce.Name, AcknowledgeInstalled: true}); err != nil {
 		t.Fatalf("retry Rollback(): %v", err)
 	}
 	var restored operatorsv1alpha1.Subscription
 	if err := m.Client.Get(ctx, client.ObjectKey{Namespace: "source", Name: "sub"}, &restored); err != nil {
 		t.Fatalf("retry did not restore Subscription: %v", err)
+	}
+}
+
+func TestReleaseRevisionObjectsRejectsChangedManagedLabel(t *testing.T) {
+	ctx := context.Background()
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Name: "operator", Namespace: "source", UID: types.UID("deployment-uid"),
+		Annotations: map[string]string{boxcutterRevisionAnnotation: "1"},
+		Labels:      map[string]string{boxcutterManagedByLabel: "olm.operatorframework.io", boxcutterManagedLabel: "changed"},
+	}}
+	m := migrationTestClient(t, deployment)
+	identity := unstructured.Unstructured{}
+	identity.SetAPIVersion("apps/v1")
+	identity.SetKind("Deployment")
+	identity.SetNamespace(deployment.Namespace)
+	identity.SetName(deployment.Name)
+	err := m.releaseRevisionObjects(ctx, nil, []rollbackObject{{
+		Identity: identity, UID: deployment.UID, Revision: "1", ManagedBy: "olm.operatorframework.io", Managed: "true",
+	}})
+	if err == nil || !strings.Contains(err.Error(), "ownership metadata") {
+		t.Fatalf("releaseRevisionObjects() error = %v, want changed ownership metadata", err)
+	}
+	var retained appsv1.Deployment
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(deployment), &retained); err != nil {
+		t.Fatal(err)
+	}
+	if retained.Labels[boxcutterManagedLabel] != "changed" || retained.Annotations[boxcutterRevisionAnnotation] != "1" {
+		t.Fatal("release changed ownership metadata after detecting a conflicting label")
 	}
 }
 
@@ -274,7 +314,7 @@ func TestCleanupConflictPreservesSharedOperatorGroupAndOLMv1Management(t *testin
 	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "operator", Namespace: "source"}}
 	m := migrationTestClient(t, ce, cos, sub, otherSub, group, deployment, csv, condition, copied, unrelatedCopy, foreignCopy)
 	policies := make(map[string]metav1.DeletionPropagation)
-	m.Client = orphanRecordingClient{Client: m.Client, policies: policies}
+	m.Client = &orphanRecordingClient{Client: m.Client, policies: policies}
 	if err := m.CleanupConflict(ctx, ce.Name); err != nil {
 		t.Fatal(err)
 	}

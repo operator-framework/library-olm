@@ -146,7 +146,7 @@ the conflicting primary CSV and removing its OLMv0 artifacts. The injected confl
 manual approval to prevent an automatic install from racing cleanup. Its unapproved test-only
 InstallPlan is removed before rollback; the original source InstallPlan is retained.
 An unacknowledged rollback
-preserves CE backup annotations and COS revisions; an acknowledged rollback must remove all
+preserves CE backup annotations and COS revisions; an acknowledged rollback starts CE orphan deletion while retaining its backup with a rollback finalizer, then must remove all
 CE/COS management, including revision annotations on preserved workloads, and restore the original Subscription spec, an `AtLatestKnown` Subscription,
 a `Succeeded` CSV, and available Deployments within ten minutes. The test then runs `convert` again, waits for the new CE to install, and checks that the same Deployment UIDs have revision annotations and controller references to new COS revisions. Unit tests additionally verify
 orphan deletion policies, preservation of unrelated revisions, revision-list preflight failures,
