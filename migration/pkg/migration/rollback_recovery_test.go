@@ -155,6 +155,46 @@ type revisionDeleteFailureClient struct {
 	failOnce bool
 }
 
+type recreatingRevisionClient struct {
+	client.Client
+	deletes int
+}
+
+func (c *recreatingRevisionClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	if _, ok := obj.(*ocv1.ClusterObjectSet); !ok {
+		return c.Client.Delete(ctx, obj, opts...)
+	}
+	c.deletes++
+	if err := c.Client.Delete(ctx, obj, opts...); err != nil {
+		return err
+	}
+	if c.deletes == 1 {
+		return c.Create(ctx, &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{
+			Name: obj.GetName(), UID: types.UID("replacement"), Labels: map[string]string{LabelOwnerName: "widgets"},
+		}})
+	}
+	return nil
+}
+
+func TestRollbackDeletesRevisionRecreatedDuringDeletion(t *testing.T) {
+	ctx := context.Background()
+	revision := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{
+		Name: "widgets-2", UID: types.UID("original"), Labels: map[string]string{LabelOwnerName: "widgets"},
+	}}
+	m := migrationTestClient(t, revision)
+	recreator := &recreatingRevisionClient{Client: m.Client}
+	m.Client = recreator
+	if err := m.waitForRollbackRevisionsRemoved(ctx, "widgets"); err != nil {
+		t.Fatalf("waitForRollbackRevisionsRemoved(): %v", err)
+	}
+	if recreator.deletes != 2 {
+		t.Fatalf("revision deletion count = %d, want original and replacement", recreator.deletes)
+	}
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: revision.Name}, &ocv1.ClusterObjectSet{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("replacement revision remains: %v", err)
+	}
+}
+
 func (c *revisionDeleteFailureClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
 	if _, ok := obj.(*ocv1.ClusterObjectSet); ok && obj.GetName() == c.failName && c.failOnce {
 		c.failOnce = false
@@ -208,7 +248,7 @@ func TestReleaseRevisionObjectsRejectsChangedManagedLabel(t *testing.T) {
 	identity.SetKind("Deployment")
 	identity.SetNamespace(deployment.Namespace)
 	identity.SetName(deployment.Name)
-	err := m.releaseRevisionObjects(ctx, nil, []rollbackObject{{
+	err := m.releaseRevisionObjects(ctx, []rollbackObject{{
 		Identity: identity, UID: deployment.UID, Revision: "1", ManagedBy: "olm.operatorframework.io", Managed: "true",
 	}})
 	if err == nil || !strings.Contains(err.Error(), "ownership metadata") {

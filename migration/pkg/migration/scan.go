@@ -432,15 +432,15 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 		return err
 	}
 
-	// Stop operator-controller from creating another revision with the same name
-	// while the old revisions are being removed. The finalizer keeps the backup
+	// Stop further operator-controller reconciliation while the old revisions
+	// are being removed. The finalizer keeps the backup
 	// available if deletion or resource release fails and rollback is retried.
 	if err := m.beginRollbackDeletion(ctx, &ce); err != nil {
 		return err
 	}
 
-	// Delete revisions before the CE so a failed revision deletion leaves the
-	// authoritative Subscription backup available for a later rollback attempt.
+	// Delete the revisions seen before CE deletion. A reconciliation already in
+	// flight can still create a replacement, which the wait below also removes.
 	for i := range revisions.Items {
 		if err := m.Client.Delete(ctx, &revisions.Items[i], client.PropagationPolicy("Orphan")); err != nil {
 			if client.IgnoreNotFound(err) != nil {
@@ -448,7 +448,10 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 			}
 		}
 	}
-	if err := m.releaseRevisionObjects(ctx, revisions.Items, ownedObjects); err != nil {
+	if err := m.waitForRollbackRevisionsRemoved(ctx, ceName); err != nil {
+		return err
+	}
+	if err := m.releaseRevisionObjects(ctx, ownedObjects); err != nil {
 		return fmt.Errorf("failed to release orphaned ClusterObjectSet resources: %w", err)
 	}
 

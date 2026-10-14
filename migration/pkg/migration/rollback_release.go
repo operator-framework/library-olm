@@ -183,20 +183,63 @@ func (m *Migrator) rollbackReferencedObject(ctx context.Context, ref ocv1.Object
 	return object, nil
 }
 
+// waitForRollbackRevisionsRemoved also deletes revisions created by a CE
+// reconciliation that was already in flight when rollback started deletion.
+func (m *Migrator) waitForRollbackRevisionsRemoved(ctx context.Context, extension string) error {
+	emptyObservations := 0
+	var pending string
+	err := wait.PollUntilContextTimeout(ctx, time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
+		var revisions ocv1.ClusterObjectSetList
+		if err := m.Client.List(ctx, &revisions, client.MatchingLabels{LabelOwnerName: extension}); err != nil {
+			return false, err
+		}
+		migrationName := extension + "-1"
+		foundMigrationRevision := false
+		for i := range revisions.Items {
+			if revisions.Items[i].Name == migrationName {
+				foundMigrationRevision = true
+				break
+			}
+		}
+		if !foundMigrationRevision {
+			var migrationRevision ocv1.ClusterObjectSet
+			err := m.Client.Get(ctx, client.ObjectKey{Name: migrationName}, &migrationRevision)
+			if client.IgnoreNotFound(err) != nil {
+				return false, err
+			}
+			if err == nil {
+				if owner := migrationRevision.Labels[LabelOwnerName]; owner != "" && owner != extension {
+					return false, fmt.Errorf("migration ClusterObjectSet %s belongs to another extension %q", migrationName, owner)
+				}
+				revisions.Items = append(revisions.Items, migrationRevision)
+			}
+		}
+		if len(revisions.Items) == 0 {
+			emptyObservations++
+			return emptyObservations >= 3, nil
+		}
+		emptyObservations = 0
+		for i := range revisions.Items {
+			pending = revisions.Items[i].Name
+			if revisions.Items[i].DeletionTimestamp != nil {
+				continue
+			}
+			if err := m.Client.Delete(ctx, &revisions.Items[i], client.PropagationPolicy("Orphan")); client.IgnoreNotFound(err) != nil {
+				return false, fmt.Errorf("deleting ClusterObjectSet %s: %w", pending, err)
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
+		return fmt.Errorf("waiting for ClusterObjectSet %s deletion: %w", pending, err)
+	}
+	return nil
+}
+
 // releaseRevisionObjects waits for orphan propagation, then removes metadata
 // written by the old object controller. The UID and recorded metadata guard
 // against modifying an object replaced or adopted during rollback.
-func (m *Migrator) releaseRevisionObjects(ctx context.Context, revisions []ocv1.ClusterObjectSet, objects []rollbackObject) error {
-	for i := range revisions {
-		name := revisions[i].Name
-		if err := wait.PollUntilContextTimeout(ctx, time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
-			var current ocv1.ClusterObjectSet
-			err := m.Client.Get(ctx, client.ObjectKey{Name: name}, &current)
-			return apierrors.IsNotFound(err), client.IgnoreNotFound(err)
-		}); err != nil {
-			return fmt.Errorf("waiting for ClusterObjectSet %s deletion: %w", name, err)
-		}
-	}
+func (m *Migrator) releaseRevisionObjects(ctx context.Context, objects []rollbackObject) error {
 	for _, original := range objects {
 		key := client.ObjectKeyFromObject(&original.Identity)
 		if err := wait.PollUntilContextTimeout(ctx, time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
