@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -45,15 +46,33 @@ func (m *Migrator) saveRollbackSnapshot(ctx context.Context, ce *ocv1.ClusterExt
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode rollback resource snapshot: %w", err)
 	}
-	before := ce.DeepCopy()
-	if ce.Annotations == nil {
-		ce.Annotations = map[string]string{}
-	}
-	ce.Annotations[rollbackReleaseSnapshotAnnotation] = string(encoded)
-	if err := m.Client.Patch(ctx, ce, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+	var savedObjects []rollbackObject
+	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var current ocv1.ClusterExtension
+		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(ce), &current); err != nil {
+			return err
+		}
+		if saved := current.Annotations[rollbackReleaseSnapshotAnnotation]; saved != "" {
+			if err := json.Unmarshal([]byte(saved), &savedObjects); err != nil {
+				return fmt.Errorf("invalid rollback resource snapshot on ClusterExtension %s: %w", ce.Name, err)
+			}
+			return nil
+		}
+		before := current.DeepCopy()
+		if current.Annotations == nil {
+			current.Annotations = map[string]string{}
+		}
+		current.Annotations[rollbackReleaseSnapshotAnnotation] = string(encoded)
+		if err := m.Client.Patch(ctx, &current, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+			return err
+		}
+		savedObjects = objects
+		return nil
+	})
+	if err != nil {
 		return nil, fmt.Errorf("failed to save rollback resource snapshot: %w", err)
 	}
-	return objects, nil
+	return savedObjects, nil
 }
 
 func (m *Migrator) beginRollbackDeletion(ctx context.Context, ce *ocv1.ClusterExtension) error {
