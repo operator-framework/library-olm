@@ -99,8 +99,8 @@ downtime is unavoidable but must be minimized.
 cascading to preserve operator workloads. The `Subscription` and `OperatorGroup` specs are
 backed up as CE annotations (R2.5) so `rollback` is self-contained. A `--backup <directory>`
 flag (R2.6) saves all OLM-related objects to disk for auditing and manual recovery.
-Rollback records verified resource identities on the ClusterExtension, then starts
-orphan deletion with a rollback finalizer before deleting revisions. This stops
+Rollback starts orphan deletion with a rollback finalizer, then records verified
+resource identities on the ClusterExtension before deleting revisions. This stops
 new revision creation and keeps the backup available if a partial rollback must
 resume. It removes any revision created by an in-flight reconciliation and
 waits for the revision set to remain empty and for orphan propagation, then releases

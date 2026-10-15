@@ -400,8 +400,15 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 		return fmt.Errorf("source namespace %q must exist before rollback can restore Subscription: %w", ns, err)
 	}
 
-	// Snapshot every revision before deleting the extension. The controller
-	// creates catalog revisions after the initial migration revision, and orphan
+	// Stop further operator-controller reconciliation before collecting the
+	// authoritative revision list. The finalizer keeps the backup available
+	// if resource release fails and rollback is retried.
+	if err := m.beginRollbackDeletion(ctx, &ce); err != nil {
+		return err
+	}
+
+	// Snapshot every revision after CE deletion starts. The controller creates
+	// catalog revisions after the initial migration revision, and orphan
 	// propagation leaves those revisions alive unless rollback removes them too.
 	var revisions ocv1.ClusterObjectSetList
 	if err := m.Client.List(ctx, &revisions, client.MatchingLabels{LabelOwnerName: ceName}); err != nil {
@@ -432,14 +439,7 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 		return err
 	}
 
-	// Stop further operator-controller reconciliation while the old revisions
-	// are being removed. The finalizer keeps the backup
-	// available if deletion or resource release fails and rollback is retried.
-	if err := m.beginRollbackDeletion(ctx, &ce); err != nil {
-		return err
-	}
-
-	// Delete the revisions seen before CE deletion. A reconciliation already in
+	// Delete the snapshotted revisions. A reconciliation already in
 	// flight can still create a replacement, which the wait below also removes.
 	for i := range revisions.Items {
 		if err := m.Client.Delete(ctx, &revisions.Items[i], client.PropagationPolicy("Orphan")); err != nil {
