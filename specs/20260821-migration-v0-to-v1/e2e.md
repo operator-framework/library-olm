@@ -30,17 +30,20 @@ setup, so it does not rely on a retained Quay digest or a mutable external catal
 
 ## Bootstrap
 
-1. Run `make migration/e2e-setup` to create (or reuse) an isolated kind cluster named `library-olm-e2e` using
+1. For the live suite, run `make migration/e2e-setup` to create (or reuse) an isolated kind cluster named `library-olm-e2e` using
    [`test/e2e/migration/kind-config.yaml`](../../test/e2e/migration/kind-config.yaml), exporting an explicit
    Kind-generated kubeconfig at `.kubeconfig/library-olm-e2e`. `E2E_KUBECONFIG` is only
    an optional override for that generated output path.
-2. Apply the pinned OLMv0 quickstart manifest and wait for both `olm-operator` and
+2. Live only: apply the pinned OLMv0 quickstart manifest and wait for both `olm-operator` and
    `catalog-operator` deployments to be Available.
-3. Install the pinned operator-controller release manifest and wait for its deployment,
+3. Live only: install the pinned experimental operator-controller release and wait for its deployment,
    catalogd, cert provider, and required CRDs to be established.
-4. For a fixture cluster, build bundle and FBC images from the committed snapshots, publish them
-   over TLS to the in-cluster fixture registry, then apply the fixture `CatalogSource`. The
-   registry certificate is issued by OLMv1's `olmv1-ca`; publishing uses the CA and an HTTPS
+4. For the fixture suite, run `make migration/e2e-fixture-setup` to create (or reuse) the separate
+   `library-olm-fixture-e2e` cluster and generate `.kubeconfig/library-olm-fixture-e2e`. This
+   path applies OLMv0 CRDs without installing OLMv0 controllers, installs the pinned experimental
+   operator-controller release, builds bundle and FBC images from committed snapshots, publishes
+   them over TLS to the in-cluster fixture registry, and applies the fixture `CatalogSource`.
+   The registry certificate is issued by OLMv1's `olmv1-ca`; publishing uses the CA and an HTTPS
    port-forward, not an insecure HTTP registry connection.
 5. The fixture test migrates the `CatalogSource` with `migrate-catalogs-v0-to-v1` and waits for
    the resulting `ClusterCatalog` to become `Serving=True`.

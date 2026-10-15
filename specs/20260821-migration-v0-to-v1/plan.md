@@ -186,10 +186,12 @@ unfinished migration-library feature.
   Subscription or an InstallPlan bundle lookup before conversion, regardless of package
   availability in another ClusterCatalog.
 - Combined unit and coverage-producing E2E runs must cover ≥80% of the statements in
-  `migration/pkg/...`; neither suite has a separate percentage minimum.
+  `migration/pkg/...`; neither suite has a separate percentage minimum. The combined threshold
+  is a Phase 8 target and is not currently enforced by the Make target or CI.
 
 **Depends on:** Phases 1–5 (via Phase 4; Phase 6 tests gated on that phase). **Exit:** combined
-coverage target met; E2E scenarios in VALIDATION pass in CI.
+coverage target met and enforced in CI; E2E scenarios in VALIDATION pass in CI. The coverage
+gate remains open work.
 
 ---
 
