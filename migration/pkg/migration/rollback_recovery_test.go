@@ -178,13 +178,15 @@ func (c *recreatingRevisionClient) Delete(ctx context.Context, obj client.Object
 
 func TestRollbackDeletesRevisionRecreatedDuringDeletion(t *testing.T) {
 	ctx := context.Background()
+	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "widgets"}}
 	revision := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{
 		Name: "widgets-2", UID: types.UID("original"), Labels: map[string]string{LabelOwnerName: "widgets"},
 	}}
-	m := migrationTestClient(t, revision)
+	m := migrationTestClient(t, ce, revision)
 	recreator := &recreatingRevisionClient{Client: m.Client}
 	m.Client = recreator
-	if err := m.waitForRollbackRevisionsRemoved(ctx, "widgets"); err != nil {
+	var objects []rollbackObject
+	if err := m.waitForRollbackRevisionsRemoved(ctx, ce, &objects); err != nil {
 		t.Fatalf("waitForRollbackRevisionsRemoved(): %v", err)
 	}
 	if recreator.deletes != 2 {

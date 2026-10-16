@@ -102,11 +102,12 @@ flag (R2.6) saves all OLM-related objects to disk for auditing and manual recove
 Rollback starts orphan deletion with a rollback finalizer, then records verified
 resource identities on the ClusterExtension before deleting revisions. This stops
 new revision creation and keeps the backup available if a partial rollback must
-resume. It removes any revision created by an in-flight reconciliation and
-waits for the revision set to remain empty and for orphan propagation, then releases
-OLMv1 revision metadata from preserved resources whose prior ClusterObjectSet
-ownership was verified before deletion. The finalizer is removed only after
-this release completes, so a failed release does not report rollback success.
+resume. If an in-flight reconciliation creates another revision, rollback merges
+its verified ownership of the same resource UID into the saved snapshot before
+deleting it. After the revision set remains empty and orphan propagation completes,
+rollback releases OLMv1 metadata from those preserved resources. It restores the
+Subscription before removing the finalizer, so creation failures retain the backup.
+On retry, an existing Subscription is accepted only if its spec matches the backup.
 
 ---
 

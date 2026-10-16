@@ -110,10 +110,10 @@ flag is set; CE carries the matching annotation.
   the requested acknowledgment overrides; `-n` and `--ce-name` are rejected with `--all`.
 - `rollback <ce-name> | --all`: require `--acknowledge-installed` when CE is `Installed=True`;
   add a rollback finalizer and start CE orphan deletion to stop new revisions,
-  snapshot COS-controlled resource identities on CE, orphan-delete COS revisions (including a revision
-  created by an in-flight reconciliation), wait for orphan
-  propagation, release OLMv1 revision metadata from the verified preserved
-  resources, remove the CE finalizer, then restore Subscription from its backup annotation.
+  snapshot COS-controlled resource identities on CE, merge verified ownership from any revision
+  created by an in-flight reconciliation before orphan-deleting it, wait for orphan propagation,
+  release OLMv1 revision metadata from preserved resources, restore the Subscription from its
+  backup annotation, then remove the CE finalizer.
 - `cleanup <ce-name> | --all`: for `Conflict`; delete Subscription (orphan) + `CleanupOLMv0Resources`.
 - Fail operator commands on text or JSONL progress-write errors before reporting a
   successful check, scan, or conversion result.

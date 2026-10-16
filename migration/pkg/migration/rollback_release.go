@@ -31,20 +31,9 @@ const (
 )
 
 func (m *Migrator) saveRollbackSnapshot(ctx context.Context, ce *ocv1.ClusterExtension, revisions []ocv1.ClusterObjectSet) ([]rollbackObject, error) {
-	if saved := ce.Annotations[rollbackReleaseSnapshotAnnotation]; saved != "" {
-		var objects []rollbackObject
-		if err := json.Unmarshal([]byte(saved), &objects); err != nil {
-			return nil, fmt.Errorf("invalid rollback resource snapshot on ClusterExtension %s: %w", ce.Name, err)
-		}
-		return objects, nil
-	}
-	objects, err := m.snapshotRevisionObjects(ctx, revisions)
+	observed, err := m.snapshotRevisionObjects(ctx, revisions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to inspect ClusterObjectSet resources before rollback: %w", err)
-	}
-	encoded, err := json.Marshal(objects)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode rollback resource snapshot: %w", err)
 	}
 	var savedObjects []rollbackObject
 	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -52,11 +41,23 @@ func (m *Migrator) saveRollbackSnapshot(ctx context.Context, ce *ocv1.ClusterExt
 		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(ce), &current); err != nil {
 			return err
 		}
+		var existing []rollbackObject
 		if saved := current.Annotations[rollbackReleaseSnapshotAnnotation]; saved != "" {
-			if err := json.Unmarshal([]byte(saved), &savedObjects); err != nil {
+			if err := json.Unmarshal([]byte(saved), &existing); err != nil {
 				return fmt.Errorf("invalid rollback resource snapshot on ClusterExtension %s: %w", ce.Name, err)
 			}
+		}
+		merged, changed, err := mergeRollbackObjects(existing, observed)
+		if err != nil {
+			return err
+		}
+		savedObjects = merged
+		if !changed && current.Annotations[rollbackReleaseSnapshotAnnotation] != "" {
 			return nil
+		}
+		encoded, err := json.Marshal(savedObjects)
+		if err != nil {
+			return fmt.Errorf("failed to encode rollback resource snapshot: %w", err)
 		}
 		before := current.DeepCopy()
 		if current.Annotations == nil {
@@ -66,7 +67,6 @@ func (m *Migrator) saveRollbackSnapshot(ctx context.Context, ce *ocv1.ClusterExt
 		if err := m.Client.Patch(ctx, &current, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
 			return err
 		}
-		savedObjects = objects
 		return nil
 	})
 	if err != nil {
@@ -105,12 +105,66 @@ func (m *Migrator) finishRollbackDeletion(ctx context.Context, name string) erro
 }
 
 type rollbackObject struct {
-	Identity  unstructured.Unstructured `json:"identity"`
-	UID       types.UID                 `json:"uid"`
-	OwnerUID  types.UID                 `json:"ownerUID"`
-	Revision  string                    `json:"revision"`
-	ManagedBy string                    `json:"managedBy"`
-	Managed   string                    `json:"managed"`
+	Identity         unstructured.Unstructured `json:"identity"`
+	UID              types.UID                 `json:"uid"`
+	OwnerUID         types.UID                 `json:"ownerUID"`
+	Revision         string                    `json:"revision"`
+	ManagedBy        string                    `json:"managedBy"`
+	Managed          string                    `json:"managed"`
+	AdditionalOwners []rollbackOwnership       `json:"additionalOwners,omitempty"`
+}
+
+type rollbackOwnership struct {
+	OwnerUID  types.UID `json:"ownerUID"`
+	Revision  string    `json:"revision"`
+	ManagedBy string    `json:"managedBy"`
+	Managed   string    `json:"managed"`
+}
+
+func (object rollbackObject) ownerships() []rollbackOwnership {
+	owners := []rollbackOwnership{{OwnerUID: object.OwnerUID, Revision: object.Revision, ManagedBy: object.ManagedBy, Managed: object.Managed}}
+	return append(owners, object.AdditionalOwners...)
+}
+
+// mergeRollbackObjects retains the original resource UID and accepts another
+// owner only when a listed revision was observed controlling that same object.
+func mergeRollbackObjects(saved, observed []rollbackObject) ([]rollbackObject, bool, error) {
+	merged := append([]rollbackObject(nil), saved...)
+	index := make(map[string]int, len(merged))
+	for i := range merged {
+		index[resourceKey(merged[i].Identity)] = i
+	}
+	changed := false
+	for _, candidate := range observed {
+		key := resourceKey(candidate.Identity)
+		i, exists := index[key]
+		if !exists {
+			index[key] = len(merged)
+			merged = append(merged, candidate)
+			changed = true
+			continue
+		}
+		if merged[i].UID != candidate.UID {
+			return nil, false, fmt.Errorf("resource %s was replaced during rollback", key)
+		}
+		ownership := candidate.ownerships()[0]
+		found := false
+		for _, prior := range merged[i].ownerships() {
+			if prior.OwnerUID != ownership.OwnerUID {
+				continue
+			}
+			if prior != ownership {
+				return nil, false, fmt.Errorf("ownership metadata on %s changed during rollback", key)
+			}
+			found = true
+			break
+		}
+		if !found {
+			merged[i].AdditionalOwners = append(merged[i].AdditionalOwners, ownership)
+			changed = true
+		}
+	}
+	return merged, changed, nil
 }
 
 // snapshotRevisionObjects records only resources currently controlled by a
@@ -202,17 +256,17 @@ func (m *Migrator) rollbackReferencedObject(ctx context.Context, ref ocv1.Object
 	return object, nil
 }
 
-// waitForRollbackRevisionsRemoved also deletes revisions created by a CE
-// reconciliation that was already in flight when rollback started deletion.
-func (m *Migrator) waitForRollbackRevisionsRemoved(ctx context.Context, extension string) error {
+// waitForRollbackRevisionsRemoved saves ownership from revisions created by a
+// CE reconciliation already in flight, then deletes those revisions by UID.
+func (m *Migrator) waitForRollbackRevisionsRemoved(ctx context.Context, ce *ocv1.ClusterExtension, objects *[]rollbackObject) error {
 	emptyObservations := 0
 	var pending string
 	err := wait.PollUntilContextTimeout(ctx, time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
 		var revisions ocv1.ClusterObjectSetList
-		if err := m.Client.List(ctx, &revisions, client.MatchingLabels{LabelOwnerName: extension}); err != nil {
+		if err := m.Client.List(ctx, &revisions, client.MatchingLabels{LabelOwnerName: ce.Name}); err != nil {
 			return false, err
 		}
-		migrationName := extension + "-1"
+		migrationName := ce.Name + "-1"
 		foundMigrationRevision := false
 		for i := range revisions.Items {
 			if revisions.Items[i].Name == migrationName {
@@ -227,7 +281,7 @@ func (m *Migrator) waitForRollbackRevisionsRemoved(ctx context.Context, extensio
 				return false, err
 			}
 			if err == nil {
-				if owner := migrationRevision.Labels[LabelOwnerName]; owner != "" && owner != extension {
+				if owner := migrationRevision.Labels[LabelOwnerName]; owner != "" && owner != ce.Name {
 					return false, fmt.Errorf("migration ClusterObjectSet %s belongs to another extension %q", migrationName, owner)
 				}
 				revisions.Items = append(revisions.Items, migrationRevision)
@@ -238,12 +292,18 @@ func (m *Migrator) waitForRollbackRevisionsRemoved(ctx context.Context, extensio
 			return emptyObservations >= 3, nil
 		}
 		emptyObservations = 0
+		refreshed, err := m.saveRollbackSnapshot(ctx, ce, revisions.Items)
+		if err != nil {
+			return false, err
+		}
+		*objects = refreshed
 		for i := range revisions.Items {
 			pending = revisions.Items[i].Name
 			if revisions.Items[i].DeletionTimestamp != nil {
 				continue
 			}
-			if err := m.Client.Delete(ctx, &revisions.Items[i], client.PropagationPolicy("Orphan")); client.IgnoreNotFound(err) != nil {
+			if err := m.deleteTrackedResource(ctx, &revisions.Items[i], client.PropagationPolicy("Orphan")); err != nil &&
+				!apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
 				return false, fmt.Errorf("deleting ClusterObjectSet %s: %w", pending, err)
 			}
 		}
@@ -271,7 +331,14 @@ func (m *Migrator) releaseRevisionObjects(ctx context.Context, objects []rollbac
 				return false, fmt.Errorf("resource %s was replaced during rollback", key)
 			}
 			if owner := metav1.GetControllerOf(current); owner != nil {
-				if owner.UID != original.OwnerUID {
+				knownOwner := false
+				for _, prior := range original.ownerships() {
+					if prior.OwnerUID == owner.UID {
+						knownOwner = true
+						break
+					}
+				}
+				if !knownOwner {
 					return false, fmt.Errorf("resource %s acquired another controller during rollback", key)
 				}
 				return false, nil
@@ -279,9 +346,16 @@ func (m *Migrator) releaseRevisionObjects(ctx context.Context, objects []rollbac
 			currentRevision := current.GetAnnotations()[boxcutterRevisionAnnotation]
 			currentManagedBy := current.GetLabels()[boxcutterManagedByLabel]
 			currentManaged := current.GetLabels()[boxcutterManagedLabel]
-			if currentRevision != "" && currentRevision != original.Revision ||
-				currentManagedBy != "" && currentManagedBy != original.ManagedBy ||
-				currentManaged != "" && currentManaged != original.Managed {
+			knownMetadata := false
+			for _, prior := range original.ownerships() {
+				if (currentRevision == "" || currentRevision == prior.Revision) &&
+					(currentManagedBy == "" || currentManagedBy == prior.ManagedBy) &&
+					(currentManaged == "" || currentManaged == prior.Managed) {
+					knownMetadata = true
+					break
+				}
+			}
+			if !knownMetadata {
 				return false, fmt.Errorf("ownership metadata on %s changed during rollback", key)
 			}
 			if currentRevision == "" && currentManagedBy == "" && currentManaged == "" {
@@ -292,7 +366,7 @@ func (m *Migrator) releaseRevisionObjects(ctx context.Context, objects []rollbac
 			delete(annotations, boxcutterRevisionAnnotation)
 			updated.SetAnnotations(annotations)
 			labels := updated.GetLabels()
-			if original.ManagedBy == "olm.operatorframework.io" {
+			if currentManagedBy == "olm.operatorframework.io" {
 				delete(labels, boxcutterManagedByLabel)
 			}
 			delete(labels, boxcutterManagedLabel)
