@@ -5,13 +5,14 @@ Verifiable acceptance criteria drawn from the RFC,
 [requirements.md](requirements.md). Each item is phrased so it can be asserted in a unit or
 E2E test. IDs (`V*`) are referenced by the traceability table at the end.
 
-Unit tests use `sigs.k8s.io/controller-runtime/pkg/client/fake`; E2E runs on a kind cluster
-with both OLMv0 and OLMv1 installed.
+Unit tests use `sigs.k8s.io/controller-runtime/pkg/client/fake`. Fixture E2E runs on a kind
+cluster with OLMv1 and OLMv0 CRDs, but no OLMv0 controllers; live E2E runs on a separate
+kind cluster with both OLMv0 and OLMv1 installed.
 
 ## V1. Per-command behavior
 
 - **V1.1** `check <operator> -n <ns>` on a healthy AllNamespaces operator with an available catalog reports all checks green and exits 0; makes no cluster changes.
-- **V1.2** `convert <operator> -n <ns> --dry-run` lists every resource that would be migrated (grouped by kind), including CRDs, and reports them as COS objects with `CollisionProtection: IfNoController`; makes no cluster changes.
+- **V1.2** `convert <operator> -n <ns> --dry-run` lists every resource that would be migrated (grouped by kind), including CRDs, and reports them as COS objects with `CollisionProtection: None`; makes no cluster changes.
 - **V1.3** `convert <operator> -n <ns>` results in a `ClusterExtension` reaching `Installed=True`; the `Subscription` and `CSV` are deleted; CRDs remain and are adopted by OLMv1; the COS reached `Succeeded=True` **before** the CE was created.
 - **V1.4** `rollback <ce-name> --acknowledge-installed` starts CE orphan deletion with a rollback finalizer to stop new revisions, records verified ownership from in-flight replacement revisions before deleting them, waits for orphaned resources to lose COS controller references, removes their OLMv1 revision metadata, restores the `Subscription` from the backup annotation, then removes the CE finalizer. A matching Subscription from a prior attempt permits retry; a conflicting Subscription or failed restoration retains the CE backup. The operator returns to OLMv0 management (`AtLatestKnown`/`UpgradePending`), and a subsequent migration can adopt preserved resources. Without `--acknowledge-installed` on an `Installed=True` CE, rollback refuses and exits non-zero.
 - **V1.5** `cleanup <ce-name>` on a Conflict state deletes the `Subscription` and OLMv0 artifacts (Operator CR, OperatorCondition, copied CSVs, OperatorGroup if last) and leaves the CE intact.
@@ -28,7 +29,7 @@ flag flips it to `Eligible`:
 - **V2.1a (C1a)** CSV with `AllNamespaces` install mode absent or `supported: false` → Ineligible even with `--acknowledge-watch-scope-change`; a scoped OperatorGroup with an AllNamespaces-capable CSV becomes eligible when the scope change is acknowledged.
 - **V2.2 (C2, hard)** CSV with `olm.package.required` → Ineligible "dependencies"; no override.
 - **V2.3 (C2, hard)** CSV with `olm.gvk.required` → Ineligible "dependencies"; no override.
-- **V2.4 (C3, hard, temporary)** CSV with owned APIServices → Ineligible "apiservices"; no override. Removed entirely when OPRUN-4723 merges.
+- **V2.4 (C3, permanent hard block)** CSV with owned APIServices → Ineligible "apiservices"; no override. OLMv1 does not support APIService-owning operators, so this refusal must remain covered by regression tests.
 - **V2.5 (C4)** OperatorCondition with `status.conditions` entries → Ineligible "operator-condition"; `--acknowledge-operator-condition` → Eligible.
 - **V2.6 (C5)** CSV `.clusterPermissions` granting `operators.coreos.com/subscriptions` → Ineligible "olmv0-api-access"; `--acknowledge-olmv0-api-access` → Eligible.
 - **V2.7 (C6)** OperatorGroup with `serviceAccountName` → Ineligible "scoped serviceaccount"; `--acknowledge-scoped-serviceaccount` → Eligible.
@@ -64,7 +65,7 @@ flag flips it to `Eligible`:
 ## V4. Edge-case tests (R9)
 
 - **V4.1** Two operators in one namespace: migrating one leaves the OperatorGroup intact.
-- **V4.2** Two operators sharing a CRD: `IfNoController` lets the second adopt without a collision error.
+- **V4.2** Two operators sharing a CRD: migration and controller revisions handle the shared resource without a collision error.
 - **V4.3** Operator not at steady state → Ineligible (C8) with a clear reason.
 - **V4.4** Dependency operator (`olm.generated-by` present / declares requirements) → flagged; an operator others depend on migrates but emits a dependents warning.
 - **V4.5** OperatorCondition disambiguation: an operator with OLMv0-stamped OperatorCondition RBAC but **empty** `status.conditions` is **Eligible** (RBAC is not treated as usage).
@@ -84,7 +85,7 @@ flag flips it to `Eligible`:
 - **V5.2** Install an AllNamespaces operator via an OLMv0 Subscription; confirm healthy.
 - **V5.3** `migrate-catalogs-v0-to-v1` → CatalogSource becomes a serving ClusterCatalog.
 - **V5.4** `check <operator> -n <ns>` → all green (catalog now found).
-- **V5.5** `convert <operator> -n <ns> --dry-run` → lists resources incl. CRDs (`IfNoController`).
+- **V5.5** `convert <operator> -n <ns> --dry-run` → lists resources incl. CRDs (`None`).
 - **V5.6** `convert <operator> -n <ns>` → CE `Installed=True`; Subscription/CSV deleted; CRDs adopted (demonstrates close-to-zero downtime with namespace unchanged).
 - **V5.7** Upgrade via OLMv1 → CRDs updated through the normal bundle lifecycle.
 - **V5.8** `rollback <ce-name> --acknowledge-installed` → Subscription restored, CE and COS revisions deleted, preserved Deployments released from OLMv1 ownership; a second `convert` creates new CE/COS UIDs, installs successfully, and adopts the same Deployment UIDs.
@@ -122,7 +123,7 @@ flag flips it to `Eligible`:
 | R2.1 v0 module + CI | V7.1, V7.3 |
 | R2.2 ClusterObjectSet rename | V1.3 (COS created), V4.6 |
 | R2.3 Wait for COS Succeeded; no status writes | V1.3 |
-| R2.4 SecretPacker + IfNoController | V1.2, V4.2, V4.6 |
+| R2.4 SecretPacker + collision handling | V1.2, V4.2, V4.6 |
 | R2.5 CE annotations | V3.6 |
 | R2.6 `--backup <directory>` flag | V3.18 |
 | R2.7 Boxcutter phase 2 | Prerequisite note (PLAN) |

@@ -35,13 +35,11 @@ directly and build their own CLI surface.
 
 ## Prerequisite (cross-repo, runs in parallel) — [OPRUN-4716](https://redhat.atlassian.net/browse/OPRUN-4716)
 
-**Verify COS adoption end-to-end in `operator-controller`.** No controller changes are
-expected: the COS controller reconciles any COS regardless of origin, and the CE controller
-discovers a pre-created COS via `olm.operatorframework.io/owner-name` and adopts it (SSA
-patch) on first reconcile. Confirm a manually pre-created COS (owner labels, `revision: 1`,
-correct bundle annotations) reaches `Succeeded=True` and is adopted by a subsequently created
-CE **without** producing a duplicate COS. Track boxcutter phase 2 / `ClusterObjectDeployment`
-(R2.7). *Exit:* documented confirmation the flow works with no operator-controller changes.
+**Verify COS handoff end-to-end in `operator-controller`.** The released v1.12.0 behavior is
+supersession rather than adoption: a migration-created revision 1 with collision protection
+`None` reaches `Succeeded=True`; creating the CE produces a controller-owned, catalog-derived
+revision 2 with `Prevent`, which also reaches `Succeeded=True`. Track boxcutter phase 2 /
+`ClusterObjectDeployment` (R2.7). *Exit:* documented, automated confirmation of this handoff.
 Verified during Phase 8 E2E.
 
 ---
@@ -53,10 +51,10 @@ Verified during Phase 8 E2E.
 - Port to `migration/pkg/migration/` and `migration/examples/cmd/migrate-operators-v0-to-v1/`.
 - Rename `ClusterExtensionRevision*` → `ClusterObjectSet*` (`clusterobjectset.go` apply-config,
   `ClusterObjectSetTypeSucceeded`) (R2.2).
-- Replace inline COS objects with boxcutter **SecretPacker**; set `CollisionProtection: IfNoController` (R2.4).
+- Replace inline COS objects with boxcutter **SecretPacker**; set migration COS collision protection to `None` (R2.4).
 - `go.mod` deps: `operator-framework/operator-controller` (`ocv1`), `operator-framework/api` (OLMv0).
 
-**Depends on:** prerequisite (for the adoption contract). **Exit:** `go build ./...` and
+**Depends on:** prerequisite (for the COS handoff contract). **Exit:** `go build ./...` and
 `go test ./...` pass; CI green on the skeleton.
 
 ## Phase 2 — Scan & classification — [OPRUN-4718](https://redhat.atlassian.net/browse/OPRUN-4718)
@@ -85,12 +83,13 @@ Verified during Phase 8 E2E.
   `AcknowledgeNotSteadyState`, `AcknowledgeNamespaceDelete`, `AcknowledgeInstalled` — plus
   `ContinueOnError`.
 - On use, record `olm.operatorframework.io/acknowledged-<flag>: "true"` on the CE.
-- Collector places all objects (incl. CRDs) into the COS with `IfNoController`.
+- Collector places all objects (incl. CRDs) into the migration COS with `None` collision protection.
 
-**Note:** C3 remains a hard block until OLMv1 supports APIService-based operators end-to-end.
-The rendering infrastructure was added in operator-controller ([OPRUN-4723](https://redhat.atlassian.net/browse/OPRUN-4723))
-but is not yet wired into the Boxcutter path. C3 will be removed in a future phase once
-end-to-end support is confirmed.
+**Note:** C3 is a permanent hard block. OLMv1 does not support APIService-owning operators;
+the migration tool must reject them before making any changes. The renderer work recorded in
+[OPRUN-4723](https://redhat.atlassian.net/browse/OPRUN-4723) does not change that supported
+behavior. C2/C9 dependency refusals are likewise intentional because OLMv1 does not resolve
+OLMv0 operator dependencies; neither class of refusal is a remaining migration gap.
 
 **Depends on:** Phases 1, 2. **Exit:** each soft check flips Ineligible→Eligible when its
 flag is set; CE carries the matching annotation.
@@ -98,14 +97,14 @@ flag is set; CE carries the matching annotation.
 ## Phase 4 — Migration & recovery commands — [OPRUN-4720](https://redhat.atlassian.net/browse/OPRUN-4720)
 **Goal:** The operator CLI surface (R1.1, R1.2, R1.4, R1.5, R1.8) — verb-plus-target
 (kubectl/`oc`-style); each verb takes an operator name or `--all`.
-- `check <op> | --all`: readiness + compatibility + four-state classification; `--all` scans the cluster (calls `Check`/`ScanAll`).
+- `check <op> | --all`: readiness + compatibility + four-state classification; `--all` scans the cluster.
 - `convert <op> | --all`: profile → resolve catalog → back up Subscription and OperatorGroup
   specs to CE annotations (R2.5) → optional `--backup <directory>` of the profiled and
   CSV-associated InstallPlans (R2.6; deduplicate by namespace/name) → collect
   (primary: `Operator` CR `status.components.refs`; supplementary: `olm.owner` label query,
   ownerRef query, InstallPlan steps; dedup by GVK+ns+name — see R5) → create COS (wait
   `Succeeded=True`) → create CE → cleanup.
-  `--dry-run` previews via `Gather`. `--all` prints the four-section summary, then converts
+  `--dry-run` previews without mutation. `--all` prints the four-section summary, then converts
   each Eligible operator; `--continue-on-error` to keep going. Batch classification uses
   the requested acknowledgment overrides; `-n` and `--ce-name` are rejected with `--all`.
 - `rollback <ce-name> | --all`: require `--acknowledge-installed` when CE is `Installed=True`;
@@ -118,6 +117,8 @@ flag is set; CE carries the matching annotation.
 - Fail operator commands on text or JSONL progress-write errors before reporting a
   successful check, scan, or conversion result.
 - CLI files under `migration/examples/cmd/migrate-operators-v0-to-v1/` (one file per verb).
+- PR #59 routes single-operator verbs through the public `Migrator` APIs and adds
+  `--output=jsonl`; dry-runs emit a preview and a completion result record.
 
 **Depends on:** Phases 1–3. **Exit:** `check`, `convert` (single + `--all`), `rollback`, and
 `cleanup` each pass their VALIDATION per-command checks on kind.
@@ -135,12 +136,12 @@ flag is set; CE carries the matching annotation.
 - Before optional CatalogSource deletion, recheck current Subscription references and retain
   the source on lookup failure or image/name conflict.
 
-**Depends on:** Phase 1. **Exit:** N CatalogSources → N serving ClusterCatalogs; operator scan
-then reports catalog-available.
+**Depends on:** Phase 1. **Exit:** migratable CatalogSources map to serving ClusterCatalogs
+(with shared images deduplicated); operator scan then reports catalog-available.
 
-## Phase 6 — Install-namespace change 🚧 in progress — [OPRUN-4721](https://redhat.atlassian.net/browse/OPRUN-4721)
-**Goal:** Support `--install-namespace` differing from the Subscription namespace (R6, R9), then
-an explicitly selected OLMv1 system-managed namespace mode when its controller API is released.
+## Phase 6 — Install-namespace change ✅ implemented — [OPRUN-4721](https://redhat.atlassian.net/browse/OPRUN-4721)
+**Goal:** Support `--install-namespace` differing from the Subscription namespace (R6, R9), plus
+an explicitly selected OLMv1 system-managed namespace mode.
 - Create or update the target namespace before removing OLMv0 management, copying PSA
   (`pod-security.kubernetes.io/*`) and `security.openshift.io/scc.podSecurityLabelSync` labels.
 - Move collected namespace-scoped resources to the target namespace in the migration COS and,
@@ -156,39 +157,41 @@ an explicitly selected OLMv1 system-managed namespace mode when its controller A
 **Depends on:** Phases 1 and 3. **Exit:** resources land in the new namespace with PSA/SCC
 labels copied; old namespace deleted only when acknowledged. The system-managed mode requires
 the experimental optional-namespace controller profile, capability rejection, and its dedicated
-E2E scenario.
+E2E scenario. This is not a separate availability gap: the migration COS itself requires the
+experimental operator-controller installation.
 
-## Phase 7 — OLMv1 APIService renderer support *(cross-repo, operator-controller)* — [OPRUN-4723](https://redhat.atlassian.net/browse/OPRUN-4723)
-**Goal:** Add `apiregistration.k8s.io` support to the OLMv1 registry+v1 bundle renderer as
-infrastructure for future end-to-end APIService support.
+## Phase 7 — OLMv1 APIService support decision *(cross-repo, operator-controller)* — [OPRUN-4723](https://redhat.atlassian.net/browse/OPRUN-4723)
+**Decision:** OLMv1 does not support operators that own `apiregistration.k8s.io` APIService
+objects. APIService-based migration is out of scope and C3 remains a permanent,
+non-overridable migration rejection.
 
-The rendering code (`BundleCSVAPIServiceGenerator`, `CheckAPIServiceDeploymentReferentialIntegrity`,
-cert provider updates) was added to operator-controller as infrastructure but is **not yet
-registered** in `ResourceGenerators` or `BundleValidator` because end-to-end Boxcutter support
-is not yet confirmed. C3 remains a hard block until this is fully wired and validated.
+Some renderer code was merged in operator-controller, including
+`BundleCSVAPIServiceGenerator`, `CheckAPIServiceDeploymentReferentialIntegrity`, and
+certificate-provider updates. The controller's manifest provider continues to reject bundles
+with owned APIService definitions, so that code must not be treated as supported end-to-end
+functionality.
 
-**Scope (in `operator-controller`):**
-- Added `BundleCSVAPIServiceGenerator`, `CheckAPIServiceDeploymentReferentialIntegrity`, and
-  cert provider support for `APIService` objects (implemented but not yet registered in
-  `ResourceGenerators` / `BundleValidator` pending Boxcutter end-to-end validation).
-- C3 remains a hard block in the migration tool until the Boxcutter path is fully wired.
-
-**Depends on:** nothing (ran in parallel). **Status:** rendering infrastructure merged; C3
-removal deferred until end-to-end Boxcutter support is confirmed.
+**Status:** no controller or migration E2E is planned. Retain C3's refusal tests as a
+regression guard. APIService migration is outside the supported OLMv1 feature set, not an
+unfinished migration-library feature.
 
 ## Phase 8 — Testing — [OPRUN-4762](https://redhat.atlassian.net/browse/OPRUN-4762)
 **Goal:** Confidence across unit and E2E (R-wide).
-- Unit: ≥80% of `migration/pkg/...` with `controller-runtime/pkg/client/fake` — readiness,
-  compatibility (each ack flag), scan (4 states), catalog parsing, collector (CRD/IfNoController,
-  namespace rewrite, dedup), rollback/cleanup.
+- Unit tests with `controller-runtime/pkg/client/fake` cover readiness, compatibility (each ack
+  flag), scan (4 states), catalog parsing, collector (CRD/collision handling, namespace rewrite,
+  dedup), and rollback/cleanup.
 - E2E on kind (OLMv0 + OLMv1): all four states, each acknowledgment override, rollback, cleanup,
-  catalog migration, and the COS-adoption prerequisite.
+  catalog migration, and the COS-supersession prerequisite.
 - C10 safety check: reject missing or non-image CatalogSources referenced by either the
   Subscription or an InstallPlan bundle lookup before conversion, regardless of package
   availability in another ClusterCatalog.
+- Combined unit and coverage-producing E2E runs must cover ≥80% of the statements in
+  `migration/pkg/...`; neither suite has a separate percentage minimum. The combined threshold
+  is a Phase 8 target and is not currently enforced by the Make target or CI.
 
-**Depends on:** Phases 1–5 (via Phase 4; Phase 6 tests gated on that phase). **Exit:** unit coverage target met;
-E2E scenarios in VALIDATION pass in CI.
+**Depends on:** Phases 1–5 (via Phase 4; Phase 6 tests gated on that phase). **Exit:** combined
+coverage target met and enforced in CI; E2E scenarios in VALIDATION pass in CI. The coverage
+gate remains open work.
 
 ---
 
@@ -201,5 +204,5 @@ Phase 1 (4717) ──► Phase 2 (4718) ──► Phase 3 (4719) ──► Phase
    │                  └─────────────────────────────────► Phase 6 (4721)
    └──► Phase 5 (4722, parallel) ──────────────────────────────────────────► Phase 8
 
-Phase 7 (4723, operator-controller, parallel) ──► removes C3 from Phase 3 (operators with APIService definitions become Eligible)
+Phase 7 (4723, operator-controller): APIService-owning operators remain unsupported; C3 is permanent
 ```

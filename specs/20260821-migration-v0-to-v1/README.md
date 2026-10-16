@@ -2,13 +2,18 @@
 
 A `v0` Go library plus two CLIs that migrate operators from **OLMv0** (`Subscription` /
 `ClusterServiceVersion` / `CatalogSource`) to **OLMv1** (`ClusterExtension` /
-`ClusterObjectSet` / `ClusterCatalog`) management — with minimal downtime and full
-rollback at every step.
+`ClusterObjectSet` / `ClusterCatalog`) management — with minimal downtime and defined
+recovery paths for partial migrations.
 
 > Status: upstream **prototype** for
 > [OCPSTRAT-2693](https://redhat.atlassian.net/browse/OCPSTRAT-2693). The library is
 > versioned `v0` — breaking API changes are expected. Binary packaging, Console UI, and
 > Hosted Control Planes are out of scope (see [requirements.md](requirements.md) §R10).
+
+The prototype requires the experimental OLMv1 installation for `ClusterObjectSet` (COS).
+Its optional system-managed namespace mode uses that same profile. Dependency resolution
+and APIService-owning operators are unsupported by OLMv1 and are deliberately rejected;
+they are not outstanding migration features.
 
 ## Why
 
@@ -60,7 +65,7 @@ mechanism, and every risk override is an explicit `--acknowledge-*` flag (see
 | State | Meaning | Action |
 |---|---|---|
 | **Eligible** | Passes all readiness & compatibility checks; package available in a `ClusterCatalog`; no `ClusterExtension` yet | Migrate |
-| **Ineligible** | Fails one or more checks | Report the specific reason; skip (override with the matching `--acknowledge-*` flag) |
+| **Ineligible** | Fails one or more checks | Report the specific reason; skip (only soft checks have a matching `--acknowledge-*` override) |
 | **AlreadyMigrated** | No `Subscription`, but a `ClusterExtension` annotated `migrated-from-subscription` exists | Report as done; skip |
 | **Conflict** | Both a `Subscription` **and** an annotated `ClusterExtension` exist — indicates a failed cleanup | Warn prominently; block; resolve with `cleanup` or `rollback` |
 
@@ -74,14 +79,15 @@ check ──────────────► convert ──────�
  (classify / compat;   │  (--dry-run to preview)                        (delete Sub/CSV,
   --all to scan)       │                                                 OperatorGroup if last)
                                ├─ profile Subscription/CSV/InstallPlan
-                               ├─ resolve target ClusterCatalog (by image)
+                               ├─ resolve target ClusterCatalog (by package/version/channel)
                                ├─ back up Subscription and OperatorGroup specs (CE annotations)
                                ├─ collect owned resources (5 sources, dedup)
-                               ├─ create ClusterObjectSet (SecretPacker, IfNoController)
+                               ├─ create migration ClusterObjectSet (SecretPacker, None)
                                │     └─ wait for COS controller: Succeeded=True
-                               └─ create ClusterExtension (adopts the COS)
+                               └─ create ClusterExtension (controller creates catalog revision)
                                ▲
-                               └── rollback: delete CE+COS (orphan cascade), restore Subscription
+                               └── rollback: start CE orphan deletion with finalizer; delete COS revisions;
+                                   release preserved workloads; restore Subscription
 ```
 
 Workloads keep running throughout when the install namespace is unchanged — only the
@@ -96,10 +102,10 @@ minimized.
   (formerly `ClusterExtensionRevision`).
 - The migration tool **creates** the COS and **waits** for the COS controller to set
   `Succeeded=True`; it never writes status on OLMv1 APIs. It then creates the
-  `ClusterExtension`, which adopts the COS via owner labels.
+  `ClusterExtension`; the controller creates the subsequent catalog-derived COS revision.
 - Collected objects are stored via boxcutter's **SecretPacker** (not inline) to support
-  large bundles, with `CollisionProtection: IfNoController` so OLMv1 can adopt existing
-  resources (including CRDs) without conflict.
+  large bundles, with migration collision protection `None`. The controller's catalog-derived
+  revision uses `Prevent`.
 
 ## Prototype lineage
 
