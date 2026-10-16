@@ -5,7 +5,7 @@
 **Identifier:** `OPRUN-4715-TP-001`  
 **Feature:** [OPRUN-4715 — OLMv0 → OLMv1 Migration library & CLIs (prototype)](https://redhat.atlassian.net/browse/OPRUN-4715)  
 **Version:** 1.0  
-**Date:** 2026-09-23
+**Date:** 2026-10-16
 **Status:** Active; the Phase 8 test foundation is implemented, with validation expansion in progress.
 
 This plan follows the IEEE 829 test-plan structure. It is the executable-test companion to
@@ -136,9 +136,9 @@ from OLMv1's `olmv1-ca`; fixture tests therefore do not depend on a mutable Quay
 the live OperatorHub catalog.
 
 Use fixture tests for reproducible conversion, field-mapping, refusal-before-mutation, catalog
-edge cases, rollback/cleanup, and command-output assertions. Each scenario receives an isolated
-namespace, bounded waits, and failure collection of relevant objects, events, and controller
-logs.
+edge cases, rollback/cleanup, and command-output assertions. The Make targets reset migration
+resources and replay snapshots into their named namespaces between scenarios. Tests use bounded
+waits and collect relevant objects, events, and controller logs on failure.
 
 ### 6.3 Live-operator E2E tests
 

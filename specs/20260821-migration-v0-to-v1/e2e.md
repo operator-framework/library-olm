@@ -47,9 +47,10 @@ setup, so it does not rely on a retained Quay digest or a mutable external catal
    port-forward, not an insecure HTTP registry connection.
 5. The fixture test migrates the `CatalogSource` with `migrate-catalogs-v0-to-v1` and waits for
    the resulting `ClusterCatalog` to become `Serving=True`.
-6. Before each scenario, create a new namespace and apply exactly one fixture set. After
-   each scenario, collect all migration objects, CSV/Subscription/InstallPlan events, pod
-   logs, and `kubectl get --all-namespaces -o yaml` for the test namespace on failure.
+6. Before each fixture scenario, reset the relevant migration resources and replay the
+   selected snapshot into its named namespace. On failure, collect namespaced resources and
+   events, cluster-scoped migration objects, and available controller logs under
+   `artifacts/e2e`.
 
 The upstream projects currently provide a checked-in OLMv0 quickstart manifest and an
 operator-controller kind/E2E installation flow. This repository owns version pinning and

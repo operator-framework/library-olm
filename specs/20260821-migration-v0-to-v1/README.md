@@ -2,8 +2,8 @@
 
 A `v0` Go library plus two CLIs that migrate operators from **OLMv0** (`Subscription` /
 `ClusterServiceVersion` / `CatalogSource`) to **OLMv1** (`ClusterExtension` /
-`ClusterObjectSet` / `ClusterCatalog`) management — with minimal downtime and full
-rollback at every step.
+`ClusterObjectSet` / `ClusterCatalog`) management — with minimal downtime and defined
+recovery paths for partial migrations.
 
 > Status: upstream **prototype** for
 > [OCPSTRAT-2693](https://redhat.atlassian.net/browse/OCPSTRAT-2693). The library is

@@ -5,8 +5,9 @@ Verifiable acceptance criteria drawn from the RFC,
 [requirements.md](requirements.md). Each item is phrased so it can be asserted in a unit or
 E2E test. IDs (`V*`) are referenced by the traceability table at the end.
 
-Unit tests use `sigs.k8s.io/controller-runtime/pkg/client/fake`; E2E runs on a kind cluster
-with both OLMv0 and OLMv1 installed.
+Unit tests use `sigs.k8s.io/controller-runtime/pkg/client/fake`. Fixture E2E runs on a kind
+cluster with OLMv1 and OLMv0 CRDs, but no OLMv0 controllers; live E2E runs on a separate
+kind cluster with both OLMv0 and OLMv1 installed.
 
 ## V1. Per-command behavior
 

@@ -1,6 +1,6 @@
 # Implementation Status — OLMv0 → OLMv1 Migration
 
-Last updated: 2026-10-15
+Last updated: 2026-10-16
 
 ---
 
