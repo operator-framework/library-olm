@@ -2,7 +2,7 @@
 
 Synthesized from the "OLMv0 to OLMv1 Migration" RFC,
 [OCPSTRAT-2693](https://redhat.atlassian.net/browse/OCPSTRAT-2693), and design review.
-Requirements are labeled `R1`–`R10`; [VALIDATION.md](VALIDATION.md) traces each to a
+Requirements are labeled `R1`–`R10`; [validation.md](validation.md) traces each to a
 verifiable check.
 
 API groups referenced:
@@ -126,7 +126,7 @@ to set `Succeeded=True`, then creates the `ClusterExtension`. With operator-cont
 the controller creates a subsequent catalog-derived COS revision rather than adopting the
 migration COS. The tool **must not** write
 status on any OLMv1 API. No operator-controller changes are required (verified — see
-[PLAN.md](PLAN.md) prerequisite).
+[plan.md](plan.md) prerequisite).
 
 **R2.4** — Collected objects are stored via boxcutter's **SecretPacker** (Secret-backed,
 not inline in the COS spec) to support large bundles, with

@@ -70,7 +70,7 @@ from Quay.
 
 This is deliberately a snapshot test, not a synthetic operator catalog. Unit tests cover many
 individual compatibility and recovery boundaries. Fixture E2E now also runs a four-state batch,
-twelve acknowledgment/refusal cases, and explicit cross-namespace migration alongside the
+thirteen acknowledgment/refusal cases, and explicit cross-namespace migration alongside the
 three baseline snapshot conversions. Catalog edge cases and large-payload/shared-resource E2E
 scenarios remain in the target matrix below; PRs #64 and #70 added catalog-edge and large-bundle
 unit coverage, respectively.

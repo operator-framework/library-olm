@@ -162,7 +162,8 @@ PR #54 strengthened live rollback and conflict cleanup: it checks refusal withou
 `--acknowledge-installed`, removes all owned COS revisions, restores the original Subscription
 spec, and waits for healthy OLMv0 reconciliation. PR #55 added a four-state fixture batch,
 Eligible-only selection, non-mutating batch preview, and stop/continue failure tests. PR #56
-added twelve fixture acknowledgment cases covering the soft flags and hard blocks, and made
+added twelve fixture acknowledgment cases covering the soft flags and hard blocks (now thirteen
+with the `unsupported-all-namespaces` case from PR #67), and made
 dry-run enforce eligibility before previewing resources. These tests run in CI with coverage.
 
 PR #76 closes the rollback followed by remigration regression. Rollback now starts CE deletion
@@ -227,7 +228,7 @@ merged PRs #14 and #16:
 | #32 | Add live migration test suite                      | migration-live-tests      | MERGED |
 | #33 | Add fixture migration E2E suite                    | migration-fixture-tests   | MERGED |
 | #35 | Build fixture catalog locally                      | migration-fixture-catalog | MERGED |
-| #37 | Add migration negative tests and recovery fixes    | migration-negative-tests  | MERGED |
+| #37 | Add migration negative tests and recovery fixes    | migration-negative-tests-only | MERGED |
 | #38 | Collect coverage from unit test target             | migration-unit-coverage   | MERGED |
 | #39 | Add migration test plan                            | migration-test-plan       | MERGED |
 | #40 | Harden migration catalog and target preflight      | migration-catalogd-ca-discovery | MERGED |
