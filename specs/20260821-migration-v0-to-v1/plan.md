@@ -42,6 +42,20 @@ revision 2 with `Prevent`, which also reaches `Succeeded=True`. Track boxcutter 
 `ClusterObjectDeployment` (R2.7). *Exit:* documented, automated confirmation of this handoff.
 Verified during Phase 8 E2E.
 
+**COD transition (R2.7), in progress:** the library selects COD creation when its CRD exists,
+current-generation rollout checks, and COD-aware rollback. API types are pinned to
+operator-controller commit `75d8c16e922e`, including template metadata propagation and
+`InvalidSpecification` rollout reporting. The COD-backed CE applier merged in upstream
+PR #3058. On 2026-10-29, a disposable kind cluster running operator-controller main
+`255a4026` passed the fixture handoff test: one COD retained its UID across CE creation,
+and its revisions 1 and 2 used `None` and `Prevent` collision protection. A separate
+full CLI fixture conversion and acknowledged rollback restored the Subscription,
+removed COD/COS resources, and preserved the operator Deployment UID and availability.
+The default E2E setup remains pinned to v1.12.0 for the legacy path. A separate CI job
+builds pinned COD-capable commit `255a40262ba4d525fd70d4e211bddfcd47a9fcab` and
+runs covered handoff and workload-preserving rollback E2E targets. The rollback target
+passed locally on 2026-10-29.
+
 ---
 
 ## Phase 1 — Repo bootstrap & prototype port — [OPRUN-4717](https://redhat.atlassian.net/browse/OPRUN-4717)

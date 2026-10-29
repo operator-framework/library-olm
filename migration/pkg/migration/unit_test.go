@@ -92,8 +92,8 @@ func (c failingMigrationClient) Create(ctx context.Context, obj client.Object, o
 	if c.succeedCOS {
 		if cos, ok := obj.(*ocv1.ClusterObjectSet); ok {
 			cos.Status.Conditions = []metav1.Condition{
-				{Type: ocv1.ClusterObjectSetTypeSucceeded, Status: metav1.ConditionTrue},
-				{Type: ocv1.ClusterObjectSetTypeAvailable, Status: metav1.ConditionTrue},
+				{Type: "Succeeded", Status: metav1.ConditionTrue},
+				{Type: "Available", Status: metav1.ConditionTrue},
 			}
 		}
 	}
@@ -103,7 +103,7 @@ func (c failingMigrationClient) Create(ctx context.Context, obj client.Object, o
 func (c failingMigrationClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 	if c.blockCOS {
 		if cos, ok := obj.(*ocv1.ClusterObjectSet); ok {
-			cos.Status.Conditions = []metav1.Condition{{Type: ocv1.ClusterObjectSetTypeSucceeded, Status: metav1.ConditionFalse, Reason: ocv1.ClusterObjectSetReasonBlocked}}
+			cos.Status.Conditions = []metav1.Condition{{Type: "Succeeded", Status: metav1.ConditionFalse, Reason: "Blocked"}}
 			return nil
 		}
 	}
@@ -1775,7 +1775,7 @@ func TestRecoverCreatedMigrationResourcesPreservesActiveTargetResources(t *testi
 func TestWaitForClusterObjectSetAvailable(t *testing.T) {
 	ctx := context.Background()
 	cos := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "sub-1"}, Status: ocv1.ClusterObjectSetStatus{Conditions: []metav1.Condition{{
-		Type: ocv1.ClusterObjectSetTypeAvailable, Status: metav1.ConditionTrue,
+		Type: "Available", Status: metav1.ConditionTrue,
 	}}}}
 	m := migrationTestClient(t, cos)
 	if err := m.WaitForClusterObjectSetAvailable(ctx, cos.Name); err != nil {

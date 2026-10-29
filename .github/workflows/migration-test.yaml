@@ -96,6 +96,46 @@ jobs:
           path: artifacts/e2e
           if-no-files-found: ignore
 
+  cod-handoff-rollback:
+    name: migration COD handoff and rollback E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      E2E_FIXTURE_CLUSTER_NAME: library-olm-cod-e2e
+      E2E_FIXTURE_KUBECONFIG: ${{ github.workspace }}/operator-controller/.kubeconfig/library-olm-cod-e2e.kubeconfig
+      E2E_COVERAGE_DIR: ${{ github.workspace }}/artifacts/e2e/coverage/cod
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: operator-framework/operator-controller
+          ref: 255a40262ba4d525fd70d4e211bddfcd47a9fcab
+          path: operator-controller
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build and deploy pinned COD-capable controller
+        run: make -C operator-controller run-experimental KIND_CLUSTER_NAME=library-olm-cod-e2e K8S_VERSION=1.36
+      - name: Install committed OLMv0 fixtures and catalog
+        run: make migration/e2e-fixture-setup
+      - name: Verify COD handoff and catalog revision
+        run: make migration/test-e2e-cos-supersession
+      - name: Verify COD rollback preserves the workload
+        run: make migration/test-e2e-cod-rollback
+      - name: Tear down COD cluster
+        if: always()
+        run: E2E_CLUSTER_NAME=library-olm-cod-e2e make migration/e2e-teardown
+      - name: Upload COD diagnostics and coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: migration-cod-e2e-artifacts
+          path: artifacts/e2e
+          if-no-files-found: ignore
+
   in-cluster-job:
     name: migration in-cluster Job E2E
     runs-on: ubuntu-latest
@@ -115,7 +155,7 @@ jobs:
 
   coverage:
     name: migration total coverage
-    needs: [unit-coverage, fixture, cos-supersession, live]
+    needs: [unit-coverage, fixture, cos-supersession, cod-handoff-rollback, live]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -138,6 +178,11 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: migration-cos-supersession-e2e-artifacts
+          path: artifacts/e2e
+      - name: Download COD E2E coverage
+        uses: actions/download-artifact@v8
+        with:
+          name: migration-cod-e2e-artifacts
           path: artifacts/e2e
       - name: Download live E2E coverage
         uses: actions/download-artifact@v8
