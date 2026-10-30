@@ -273,6 +273,16 @@ migration/test-e2e-cos-supersession: migration/e2e-fixture-setup migration/build
 		echo "Retaining migration resources for inspection"; \
 	fi
 
+.PHONY: migration/test-e2e-cod-rollback
+migration/test-e2e-cod-rollback: migration/build ## Convert and roll back a COD-managed fixture, preserving its workload
+	@set -euo pipefail; \
+	package=ecr-secret-operator; \
+	coverage_dir="$(E2E_COVERAGE_DIR)/cod-rollback"; \
+	mkdir -p "$$coverage_dir"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" GOCOVERDIR="$$coverage_dir" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/cod-rollback" E2E_SUITE=fixture E2E_COD_ROLLBACK_TEST=true E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e ./test/e2e/migration -run '^TestMigration$$' -timeout "$(E2E_TIMEOUT)"
+
 .PHONY: migration/e2e-delete-v1
 migration/e2e-delete-v1: ## Delete one migration E2E operator as OLMv1, or all
 	@if [[ "$(E2E_OPERATOR)" != all ]]; then \

@@ -150,9 +150,24 @@ The CE also carries:
 
 The directory is created if it does not exist. Failure to list associated plans warns and retains the profiled current plan. Backup does not gate migration — it is informational and aids manual recovery if the CE annotation backup is insufficient. If the directory write fails, `convert` warns and continues (the CE annotation backup is the authoritative recovery path).
 
-**R2.7 — Boxcutter phase 2.** Upcoming boxcutter changes may introduce a
-`ClusterObjectDeployment` resource. The implementation must track this and be prepared to
-adapt which OLMv1 objects it creates.
+**R2.7 — Boxcutter phase 2.** Support one `ClusterObjectDeployment` (COD) per
+ClusterExtension, with controller-managed COS revisions. The initial implementation is
+selected automatically when the COD CRD exists; when absent, the released v1.12.0 COS
+workflow is retained. Discovery errors must fail rather than silently fall back. COD migration requires an established
+COD CRD and operator-controller's COD-backed ClusterExtension applier (upstream PR #3058).
+Create the deployment with collision protection `None`, wait for current-generation rollout
+completion and availability, then create the CE to hand management to operator-controller.
+Reject existing deployments/revision groups before destructive work. Rollback must stop the
+deployment with orphan deletion before removing revisions and restoring OLMv0 management.
+Persist verified deployment UIDs on the CE before deletion so late revisions with
+dangling references can be safely orphan-deleted, including on rollback retries.
+Reject unverified controller identities. Definitively rejected COS/COD creates
+(forbidden, unauthorized, invalid, or bad request) permit automatic recovery;
+ambiguous creation outcomes continue to require explicit recovery.
+Carry bundle and migration annotations and extension identity labels through
+`spec.template.metadata` onto generated COS revisions. Report current-generation
+terminal `Progressing=False` conditions other than successful rollout completion immediately, preserving the
+controller's diagnostic message; ignore stale-generation failure conditions.
 
 ---
 

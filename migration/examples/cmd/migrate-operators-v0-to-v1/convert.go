@@ -248,11 +248,15 @@ func dryRunRecord(opts, resourceOpts migration.Options, info *migration.Migratio
 	for _, obj := range info.CollectedObjects {
 		kindCounts[obj.GetKind()]++
 	}
+	cosName, codName := opts.ClusterExtensionName+"-1", ""
+	if info.UseClusterObjectDeployment {
+		cosName, codName = "", opts.ClusterExtensionName
+	}
 	return outputRecord{
 		Type: "dry-run", Command: "convert", Target: opts.SubscriptionNamespace + "/" + opts.SubscriptionName,
 		Data: dryRunData{
 			Package: info.PackageName, Version: info.Version, Channel: info.Channel,
-			ClusterObjectSet: opts.ClusterExtensionName + "-1", ClusterExtension: opts.ClusterExtensionName,
+			ClusterObjectSet: cosName, ClusterObjectDeployment: codName, ClusterExtension: opts.ClusterExtensionName,
 			InstallNamespace: resourceOpts.InstallNamespace, SystemNamespace: info.SystemNamespace,
 			ManualApproval: info.ManualApproval, KindCounts: kindCounts,
 			CleanupActions: dryRunCleanupPlan(opts, resourceOpts, info), BackupDirectory: opts.BackupDirectory,
@@ -265,8 +269,13 @@ func printDryRunPreview(opts, resourceOpts migration.Options, info *migration.Mi
 
 	success(fmt.Sprintf("Package: %s  Version: %s  Channel: %s", info.PackageName, info.Version, valueOrDefault(info.Channel, "(default)")))
 	fmt.Printf("\n  Resources that would be created:\n")
-	detail("ClusterObjectSet:", fmt.Sprintf("%s-1 (wait for Succeeded=True before creating the ClusterExtension)", opts.ClusterExtensionName))
-	fmt.Printf("\n  Resources that would be placed into ClusterObjectSet %s-1:\n", opts.ClusterExtensionName)
+	if info.UseClusterObjectDeployment {
+		detail("ClusterObjectDeployment:", fmt.Sprintf("%s (wait for rollout completion and availability before creating the ClusterExtension)", opts.ClusterExtensionName))
+		fmt.Printf("\n  Resources that would be placed into its template and controller-created COS revisions:\n")
+	} else {
+		detail("ClusterObjectSet:", fmt.Sprintf("%s-1 (wait for completion before creating the ClusterExtension)", opts.ClusterExtensionName))
+		fmt.Printf("\n  Resources that would be placed into ClusterObjectSet %s-1:\n", opts.ClusterExtensionName)
+	}
 
 	kindCounts := make(map[string]int)
 	for _, obj := range info.CollectedObjects {
@@ -310,17 +319,18 @@ func printDryRunPreview(opts, resourceOpts migration.Options, info *migration.Mi
 
 // dryRunData intentionally excludes collected objects, which may contain Secrets.
 type dryRunData struct {
-	Package          string         `json:"package"`
-	Version          string         `json:"version"`
-	Channel          string         `json:"channel,omitempty"`
-	ClusterObjectSet string         `json:"cluster_object_set"`
-	ClusterExtension string         `json:"cluster_extension"`
-	InstallNamespace string         `json:"install_namespace"`
-	SystemNamespace  string         `json:"system_namespace"`
-	ManualApproval   bool           `json:"manual_approval"`
-	KindCounts       map[string]int `json:"kind_counts"`
-	CleanupActions   []string       `json:"cleanup_actions"`
-	BackupDirectory  string         `json:"backup_directory,omitempty"`
+	Package                 string         `json:"package"`
+	Version                 string         `json:"version"`
+	Channel                 string         `json:"channel,omitempty"`
+	ClusterObjectSet        string         `json:"cluster_object_set,omitempty"`
+	ClusterObjectDeployment string         `json:"cluster_object_deployment,omitempty"`
+	ClusterExtension        string         `json:"cluster_extension"`
+	InstallNamespace        string         `json:"install_namespace"`
+	SystemNamespace         string         `json:"system_namespace"`
+	ManualApproval          bool           `json:"manual_approval"`
+	KindCounts              map[string]int `json:"kind_counts"`
+	CleanupActions          []string       `json:"cleanup_actions"`
+	BackupDirectory         string         `json:"backup_directory,omitempty"`
 }
 
 // dryRunCleanupPlan describes all OLMv0 cleanup actions performed by a normal

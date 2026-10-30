@@ -16,6 +16,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -310,6 +311,10 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 		t.Fatalf("collect migration resources: %v", err)
 	}
 
+	opts, err = m.PrepareClusterObjectSet(ctx, opts)
+	if err != nil {
+		t.Fatalf("prepare revision manager: %v", err)
+	}
 	if err := m.PrepareForMigration(ctx, opts, csv); err != nil {
 		t.Fatalf("remove OLMv0 management before creating COS: %v", err)
 	}
@@ -328,6 +333,15 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 		t.Fatalf("pre-existing COS count = %d, want 1", len(before.Items))
 	}
 	precreatedUID := before.Items[0].UID
+	var originalCOD ocv1.ClusterObjectDeployment
+	if opts.UseClusterObjectDeployment {
+		if err := kubeClient.Get(ctx, client.ObjectKey{Name: subscription}, &originalCOD); err != nil {
+			t.Fatal(err)
+		}
+		if !metav1.IsControlledBy(&before.Items[0], &originalCOD) || before.Items[0].Spec.Group != subscription {
+			t.Fatal("migration revision is not controlled by its COD")
+		}
+	}
 	if precreatedUID == "" {
 		t.Fatal("pre-existing COS has no UID")
 	}
@@ -374,15 +388,35 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 	if catalogCOS.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
 		t.Fatalf("catalog COS collisionProtection = %q, want %q", catalogCOS.Spec.CollisionProtection, ocv1.CollisionProtectionPrevent)
 	}
-	if len(catalogCOS.OwnerReferences) != 1 || catalogCOS.OwnerReferences[0].Name != subscription {
+	if opts.UseClusterObjectDeployment {
+		var currentCOD ocv1.ClusterObjectDeployment
+		var ce ocv1.ClusterExtension
+		if err := kubeClient.Get(ctx, client.ObjectKey{Name: subscription}, &currentCOD); err != nil {
+			t.Fatal(err)
+		}
+		if err := kubeClient.Get(ctx, client.ObjectKey{Name: subscription}, &ce); err != nil {
+			t.Fatal(err)
+		}
+		if currentCOD.UID != originalCOD.UID || !metav1.IsControlledBy(&currentCOD, &ce) {
+			t.Fatal("CE did not take ownership of the original COD")
+		}
+		if !metav1.IsControlledBy(catalogCOS, &currentCOD) || catalogCOS.Spec.Group != subscription {
+			t.Fatal("catalog revision is not controlled by the original COD")
+		}
+	} else if len(catalogCOS.OwnerReferences) != 1 || catalogCOS.OwnerReferences[0].Name != subscription {
 		t.Fatalf("catalog COS ownerReferences = %#v, want ClusterExtension %q", catalogCOS.OwnerReferences, subscription)
 	}
-	run(t, "kubectl", "wait", "--for=jsonpath={.status.conditions[?(@.type=='Succeeded')].status}=True", "clusterobjectset/"+catalogCOS.Name, "--timeout=10m")
+	if err := m.WaitForCOSSucceeded(ctx, catalogCOS.Name); err != nil {
+		t.Fatalf("catalog revision did not complete: %v", err)
+	}
 }
 
 func cosSucceeded(cos ocv1.ClusterObjectSet) bool {
+	if !cos.Status.CompletedAt.IsZero() {
+		return true
+	}
 	for _, condition := range cos.Status.Conditions {
-		if condition.Type == ocv1.ClusterObjectSetTypeSucceeded && condition.Status == metav1.ConditionTrue {
+		if condition.Type == "Succeeded" && condition.Status == metav1.ConditionTrue {
 			return true
 		}
 	}
@@ -462,6 +496,17 @@ func TestMigration(t *testing.T) {
 	if _, err := output("kubectl", "get", "clusterextension", subscription); err == nil {
 		t.Fatal("convert --dry-run created a ClusterExtension")
 	}
+	var originalDeployment appsv1.Deployment
+	if os.Getenv("E2E_COD_ROLLBACK_TEST") == "true" {
+		run(t, "kubectl", "rollout", "status", "deployment/"+subscription+"-controller-manager", "-n", namespace, "--timeout=5m")
+		_, kubeClient, _ := newMigrator(t)
+		if err := kubeClient.Get(context.Background(), client.ObjectKey{Namespace: namespace, Name: subscription + "-controller-manager"}, &originalDeployment); err != nil {
+			t.Fatalf("get fixture operator Deployment before conversion: %v", err)
+		}
+		if originalDeployment.Status.AvailableReplicas == 0 {
+			t.Fatal("fixture operator Deployment was unavailable before conversion")
+		}
+	}
 	if os.Getenv("E2E_SUITE") == "fixture" {
 		assertStructuredConversion(t, namespace, subscription)
 	} else {
@@ -477,6 +522,10 @@ func TestMigration(t *testing.T) {
 	}
 	if _, err := output("kubectl", "get", "subscription", subscription, "-n", namespace); err == nil {
 		t.Fatal("Subscription still exists after successful conversion")
+	}
+	if os.Getenv("E2E_COD_ROLLBACK_TEST") == "true" {
+		assertCODFixtureRollback(t, namespace, subscription, &originalDeployment)
+		return
 	}
 	if os.Getenv("E2E_SUITE") == "real-operator" {
 		// Pause the injected conflict at manual approval: an automatic install
@@ -519,6 +568,64 @@ func TestMigration(t *testing.T) {
 	}
 }
 
+func assertCODFixtureRollback(t *testing.T, namespace, subscription string, original *appsv1.Deployment) {
+	t.Helper()
+	ctx := context.Background()
+	_, kubeClient, _ := newMigrator(t)
+	var cod ocv1.ClusterObjectDeployment
+	if err := kubeClient.Get(ctx, client.ObjectKey{Name: subscription}, &cod); err != nil {
+		t.Fatalf("COD required for this scenario: %v", err)
+	}
+	var ce ocv1.ClusterExtension
+	if err := kubeClient.Get(ctx, client.ObjectKey{Name: subscription}, &ce); err != nil {
+		t.Fatal(err)
+	}
+	if !metav1.IsControlledBy(&cod, &ce) {
+		t.Fatal("converted COD is not controlled by the ClusterExtension")
+	}
+	var revisions ocv1.ClusterObjectSetList
+	if err := kubeClient.List(ctx, &revisions); err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for i := range revisions.Items {
+		if revisions.Items[i].Spec.Group == cod.Name {
+			count++
+			if !metav1.IsControlledBy(&revisions.Items[i], &cod) {
+				t.Fatalf("revision %s is not controlled by COD", revisions.Items[i].Name)
+			}
+		}
+	}
+	if count < 2 {
+		t.Fatalf("COD has %d revisions, want migration and catalog revisions", count)
+	}
+	run(t, binary(t, "migrate-operators-v0-to-v1"), "rollback", subscription, "--acknowledge-installed", "--kubeconfig", os.Getenv("KUBECONFIG"))
+	var restored appsv1.Deployment
+	if err := kubeClient.Get(ctx, client.ObjectKeyFromObject(original), &restored); err != nil {
+		t.Fatalf("operator Deployment was removed by rollback: %v", err)
+	}
+	if restored.UID != original.UID || restored.Status.AvailableReplicas == 0 {
+		t.Fatalf("operator Deployment changed or became unavailable: before UID=%s, after UID=%s, available=%d", original.UID, restored.UID, restored.Status.AvailableReplicas)
+	}
+	var restoredSub operatorsv1alpha1.Subscription
+	if err := kubeClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: subscription}, &restoredSub); err != nil {
+		t.Fatalf("rollback did not restore Subscription: %v", err)
+	}
+	for _, object := range []client.Object{&ce, &cod} {
+		if err := kubeClient.Get(ctx, client.ObjectKey{Name: subscription}, object); !apierrors.IsNotFound(err) {
+			t.Fatalf("rollback retained %T: %v", object, err)
+		}
+	}
+	if err := kubeClient.List(ctx, &revisions); err != nil {
+		t.Fatal(err)
+	}
+	for _, revision := range revisions.Items {
+		if revision.Spec.Group == subscription {
+			t.Fatalf("rollback retained COD revision %s", revision.Name)
+		}
+	}
+}
+
 func assertStructuredCheckAndPreview(t *testing.T, namespace, subscription string) {
 	t.Helper()
 	structuredCheck, checkErr := output(binary(t, "migrate-operators-v0-to-v1"), "check", subscription, "-n", namespace, "--output=jsonl", "--kubeconfig", os.Getenv("KUBECONFIG"))
@@ -538,10 +645,14 @@ func assertStructuredCheckAndPreview(t *testing.T, namespace, subscription strin
 	}
 	previewRecord := requireJSONLRecord(t, structuredPreview, "dry-run")
 	var previewData struct {
-		ClusterObjectSet string `json:"cluster_object_set"`
+		ClusterObjectSet        string `json:"cluster_object_set"`
+		ClusterObjectDeployment string `json:"cluster_object_deployment"`
 	}
-	if err := json.Unmarshal(previewRecord["data"], &previewData); err != nil || previewData.ClusterObjectSet != subscription+"-1" {
-		t.Fatalf("structured dry-run omitted target ClusterObjectSet: %v\n%s", err, structuredPreview)
+	if err := json.Unmarshal(previewRecord["data"], &previewData); err != nil {
+		t.Fatalf("decode structured dry-run: %v\n%s", err, structuredPreview)
+	}
+	if previewData.ClusterObjectSet != subscription+"-1" && previewData.ClusterObjectDeployment != subscription {
+		t.Fatalf("structured dry-run omitted target revision manager:\n%s", structuredPreview)
 	}
 }
 
@@ -942,6 +1053,7 @@ func collectArtifacts(t *testing.T, namespace string) {
 		{"get", "subscriptions,clusterserviceversions,installplans,operatorgroups,operatorconditions", "-n", namespace, "-o", "yaml"},
 		{"get", "events", "-n", namespace, "-o", "yaml"},
 		{"get", "clusterextensions,clusterobjectsets,clustercatalogs", "-o", "yaml"},
+		{"get", "clusterobjectdeployments", "-o", "yaml"},
 		{"get", "events", "-n", "olmv1-system", "-o", "yaml"},
 		{"logs", "deployment/catalogd-controller-manager", "-n", "olmv1-system", "--all-containers", "--tail=-1"},
 		{"logs", "deployment/operator-controller-controller-manager", "-n", "olmv1-system", "--all-containers", "--tail=-1"},
