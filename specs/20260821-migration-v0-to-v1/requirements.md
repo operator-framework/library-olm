@@ -159,9 +159,14 @@ Create the deployment with collision protection `None`, wait for current-generat
 completion and availability, then create the CE to hand management to operator-controller.
 Reject existing deployments/revision groups before destructive work. Rollback must stop the
 deployment with orphan deletion before removing revisions and restoring OLMv0 management.
+Persist verified deployment UIDs on the CE before deletion so late revisions with
+dangling references can be safely orphan-deleted, including on rollback retries.
+Reject unverified controller identities. Definitively rejected COS/COD creates
+(forbidden, unauthorized, invalid, or bad request) permit automatic recovery;
+ambiguous creation outcomes continue to require explicit recovery.
 Carry bundle and migration annotations and extension identity labels through
 `spec.template.metadata` onto generated COS revisions. Report current-generation
-`InvalidSpecification` and progression-deadline failures immediately, preserving the
+terminal `Progressing=False` conditions other than successful rollout completion immediately, preserving the
 controller's diagnostic message; ignore stale-generation failure conditions.
 
 ---

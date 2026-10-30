@@ -14,6 +14,10 @@ refusals, not features this library is expected to implement.
 
 ### COD transition
 
+The library API dependency and COD CI controller both use commit `255a40262ba4`.
+Unit regressions cover definitive create rejection recovery, terminal rollout
+diagnostics, and rollback retries with dangling references to verified COD UIDs.
+
 Migration automatically creates a COD named after the CE when the COD CRD exists;
 otherwise it directly creates a COS, including against the default v1.12.0 installation.
 A present but unready COD CRD or a discovery error blocks migration rather than falling back.

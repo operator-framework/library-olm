@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	ocv1 "github.com/operator-framework/operator-controller/api/v1"
@@ -18,6 +21,8 @@ import (
 )
 
 const clusterObjectDeploymentCRDName = "clusterobjectdeployments.olm.operatorframework.io"
+
+const rollbackDeploymentUIDsAnnotation = "olm.operatorframework.io/rollback-deployment-uids"
 
 var deploymentNamePattern = regexp.MustCompile(`^[a-z]([a-z0-9-]*[a-z0-9])?$`)
 
@@ -99,6 +104,9 @@ func (m *Migrator) createClusterObjectDeployment(ctx context.Context, opts Optio
 	// Create rather than apply: an existing deployment may already manage
 	// workloads, and its mutable template must never be overwritten here.
 	if err := m.Client.Create(ctx, &cod); err != nil {
+		if createWasRejected(err) {
+			return fmt.Errorf("create ClusterObjectDeployment: %w", err)
+		}
 		if !apierrors.IsAlreadyExists(err) && m.resolveCreatedObject(context.WithoutCancel(ctx), &cod, marker) {
 			resources.cod = &cod
 		} else {
@@ -122,9 +130,8 @@ func (m *Migrator) waitForDeployment(ctx context.Context, created *ocv1.ClusterO
 		progress := apimeta.FindStatusCondition(cod.Status.Conditions, ocv1.ClusterObjectDeploymentTypeProgressing)
 		available := apimeta.FindStatusCondition(cod.Status.Conditions, ocv1.ClusterObjectDeploymentTypeAvailable)
 		if progress != nil && progress.ObservedGeneration == cod.Generation {
-			if progress.Status == metav1.ConditionFalse && (progress.Reason == ocv1.ClusterObjectDeploymentReasonProgressDeadlineExceeded ||
-				progress.Reason == ocv1.ClusterObjectDeploymentReasonInvalidSpecification) {
-				return false, fmt.Errorf("ClusterObjectDeployment %s rollout failed: %s", cod.Name, progress.Message)
+			if progress.Status == metav1.ConditionFalse && progress.Reason != ocv1.ClusterObjectDeploymentReasonNewClusterObjectSetProgressed {
+				return false, fmt.Errorf("ClusterObjectDeployment %s rollout failed (%s): %s", cod.Name, progress.Reason, progress.Message)
 			}
 			if progress.Status == metav1.ConditionFalse && progress.Reason == ocv1.ClusterObjectDeploymentReasonNewClusterObjectSetProgressed &&
 				available != nil && available.ObservedGeneration == cod.Generation && available.Status == metav1.ConditionTrue {
@@ -164,12 +171,70 @@ func (m *Migrator) stopRollbackDeployment(ctx context.Context, ce *ocv1.ClusterE
 	if err != nil || cod == nil {
 		return cod == nil && err == nil, err
 	}
+	// Retain verified identity across orphan deletion, late-created revisions,
+	// and retries. A dangling reference is safe only when its UID was verified.
+	if err := m.rememberRollbackDeployment(ctx, ce, cod); err != nil {
+		return false, err
+	}
 	if cod.DeletionTimestamp == nil {
 		if err := m.deleteTrackedResource(ctx, cod, client.PropagationPolicy("Orphan")); client.IgnoreNotFound(err) != nil {
 			return false, fmt.Errorf("stop rollback ClusterObjectDeployment: %w", err)
 		}
 	}
 	return false, nil
+}
+
+func rollbackDeploymentUIDs(ce *ocv1.ClusterExtension) ([]types.UID, error) {
+	var uids []types.UID
+	if saved := ce.Annotations[rollbackDeploymentUIDsAnnotation]; saved != "" {
+		if err := json.Unmarshal([]byte(saved), &uids); err != nil {
+			return nil, fmt.Errorf("decode verified rollback deployment UIDs: %w", err)
+		}
+	}
+	return uids, nil
+}
+
+// rememberRollbackDeployment must only receive a COD verified by rollbackDeployment.
+func (m *Migrator) rememberRollbackDeployment(ctx context.Context, ce *ocv1.ClusterExtension, cod *ocv1.ClusterObjectDeployment) error {
+	if cod == nil {
+		return nil
+	}
+	if cod.UID == "" {
+		return fmt.Errorf("cannot record rollback ClusterObjectDeployment %s without UID", cod.Name)
+	}
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var current ocv1.ClusterExtension
+		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(ce), &current); err != nil {
+			return err
+		}
+		if current.UID != ce.UID {
+			return fmt.Errorf("ClusterExtension %s changed during rollback", ce.Name)
+		}
+		uids, err := rollbackDeploymentUIDs(&current)
+		if err != nil {
+			return err
+		}
+		if !slices.Contains(uids, cod.UID) {
+			before := current.DeepCopy()
+			data, err := json.Marshal(append(uids, cod.UID))
+			if err != nil {
+				return err
+			}
+			if current.Annotations == nil {
+				current.Annotations = map[string]string{}
+			}
+			current.Annotations[rollbackDeploymentUIDsAnnotation] = string(data)
+			if err := m.Client.Patch(ctx, &current, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+				return err
+			}
+		}
+		*ce = current
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("save verified rollback deployment UID: %w", err)
+	}
+	return nil
 }
 
 func (m *Migrator) listMigrationRevisions(ctx context.Context, ce *ocv1.ClusterExtension, list *ocv1.ClusterObjectSetList) error {
@@ -206,21 +271,30 @@ func (m *Migrator) validateRollbackRevision(ctx context.Context, revision *ocv1.
 		}
 		return fmt.Errorf("migration ClusterObjectSet %s has no verified migration identity", revision.Name)
 	}
-	if owner.APIVersion == ocv1.GroupVersion.String() && owner.Name == name && owner.UID != "" {
-		switch owner.Kind {
-		case ocv1.ClusterExtensionKind:
-			if owner.UID == ce.UID {
-				return nil
-			}
-		case ocv1.ClusterObjectDeploymentKind:
-			cod, err := m.rollbackDeployment(ctx, ce)
-			if err != nil {
-				return err
-			}
-			if cod != nil && owner.UID == cod.UID {
-				return nil
-			}
+	unverified := fmt.Errorf("migration ClusterObjectSet %s is controlled by another or unverified owner", revision.Name)
+	if owner.APIVersion != ocv1.GroupVersion.String() || owner.Name != name || owner.UID == "" {
+		return unverified
+	}
+	switch owner.Kind {
+	case ocv1.ClusterExtensionKind:
+		if owner.UID == ce.UID {
+			return nil
+		}
+	case ocv1.ClusterObjectDeploymentKind:
+		uids, err := rollbackDeploymentUIDs(ce)
+		if err != nil {
+			return err
+		}
+		if slices.Contains(uids, owner.UID) {
+			return nil
+		}
+		cod, err := m.rollbackDeployment(ctx, ce)
+		if err != nil {
+			return err
+		}
+		if cod != nil && owner.UID == cod.UID {
+			return nil
 		}
 	}
-	return fmt.Errorf("migration ClusterObjectSet %s is controlled by another or unverified owner", revision.Name)
+	return unverified
 }

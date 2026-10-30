@@ -123,6 +123,34 @@ func TestDeploymentInvalidSpecification(t *testing.T) {
 	}
 }
 
+func TestDeploymentTerminalRevisionFailures(t *testing.T) {
+	for _, reason := range []string{
+		ocv1.ClusterObjectDeploymentReasonRevisionObjectCollision,
+		ocv1.ClusterObjectDeploymentReasonRevisionInvalidSpecification,
+		"FutureTerminalReason",
+	} {
+		t.Run(reason, func(t *testing.T) {
+			cod := readyDeployment()
+			cod.Status.Conditions[0].Reason = reason
+			cod.Status.Conditions[0].Message = "actionable controller diagnostic"
+			m := migrationTestClient(t, cod)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			err := m.waitForDeployment(ctx, cod)
+			if err == nil || !strings.Contains(err.Error(), reason) || !strings.Contains(err.Error(), cod.Status.Conditions[0].Message) || ctx.Err() != nil {
+				t.Fatalf("expected immediate diagnostic for %s, got %v (context: %v)", reason, err, ctx.Err())
+			}
+			cod.Status.Conditions[0].ObservedGeneration--
+			m = migrationTestClient(t, cod)
+			staleCtx, cancelStale := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancelStale()
+			if err := m.waitForDeployment(staleCtx, cod); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("stale terminal reason must not fail the current rollout: %v", err)
+			}
+		})
+	}
+}
+
 func TestAutomaticDeploymentSelection(t *testing.T) {
 	for _, tc := range []struct {
 		name                                string
@@ -339,6 +367,10 @@ func TestRollbackDeploymentAndUnlabelledRevisions(t *testing.T) {
 	cod.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(ce, ocv1.GroupVersion.WithKind(ocv1.ClusterExtensionKind))}
 	first := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "example-1", UID: "first"}, Spec: ocv1.ClusterObjectSetSpec{Group: ce.Name}}
 	second := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "example-2", UID: "second"}, Spec: ocv1.ClusterObjectSetSpec{Group: ce.Name}}
+	// The fake client deliberately leaves these references dangling when the
+	// COD is deleted, simulating revisions not yet observed by the GC graph.
+	first.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(cod, ocv1.GroupVersion.WithKind(ocv1.ClusterObjectDeploymentKind))}
+	second.OwnerReferences = first.OwnerReferences
 	unrelated := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "other-1"}, Spec: ocv1.ClusterObjectSetSpec{Group: "other"}}
 	m := migrationTestClient(t, ce, cod, first, second, unrelated, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "source"}})
 	recorder := &deploymentDeletionClient{Client: m.Client, t: t}
@@ -359,6 +391,54 @@ func TestRollbackDeploymentAndUnlabelledRevisions(t *testing.T) {
 	}
 	if err := m.Client.Get(ctx, client.ObjectKey{Namespace: "source", Name: "sub"}, &operatorsv1alpha1.Subscription{}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRollbackRemembersDeletedDeploymentAcrossRetries(t *testing.T) {
+	ctx := context.Background()
+	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "extension"}}
+	cod := readyDeployment()
+	cod.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(ce, ocv1.GroupVersion.WithKind(ocv1.ClusterExtensionKind))}
+	m := migrationTestClient(t, ce, cod)
+	if _, err := m.stopRollbackDeployment(ctx, ce); err != nil {
+		t.Fatal(err)
+	}
+	var retriedCE ocv1.ClusterExtension
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(ce), &retriedCE); err != nil {
+		t.Fatal(err)
+	}
+	revision := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "late-revision", OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(cod, ocv1.GroupVersion.WithKind(ocv1.ClusterObjectDeploymentKind))}}, Spec: ocv1.ClusterObjectSetSpec{Group: ce.Name}}
+	if err := m.validateRollbackRevision(ctx, revision, &retriedCE); err != nil {
+		t.Fatalf("verified dangling owner rejected on retry: %v", err)
+	}
+	revision.OwnerReferences[0].UID = "unverified"
+	if err := m.validateRollbackRevision(ctx, revision, &retriedCE); err == nil {
+		t.Fatal("accepted unknown dangling owner UID")
+	}
+	retriedCE.Annotations[rollbackDeploymentUIDsAnnotation] = "invalid JSON"
+	if err := m.validateRollbackRevision(ctx, revision, &retriedCE); err == nil {
+		t.Fatal("ignored corrupt saved ownership")
+	}
+}
+
+func TestRollbackPreservesDeploymentIfUIDCannotBeSaved(t *testing.T) {
+	ctx := context.Background()
+	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "extension"}}
+	cod := readyDeployment()
+	cod.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(ce, ocv1.GroupVersion.WithKind(ocv1.ClusterExtensionKind))}
+	m := migrationTestClient(t, ce, cod)
+	writeErr := errors.New("cannot save verified UID")
+	m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{
+		Patch: func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
+			return writeErr
+		},
+	})
+	if _, err := m.stopRollbackDeployment(ctx, ce); !errors.Is(err, writeErr) {
+		t.Fatalf("stop error = %v, want persistence failure", err)
+	}
+	var retained ocv1.ClusterObjectDeployment
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(cod), &retained); err != nil || retained.DeletionTimestamp != nil {
+		t.Fatalf("COD deletion started without persisting verified UID: %v", err)
 	}
 }
 

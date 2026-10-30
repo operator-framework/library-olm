@@ -22,6 +22,8 @@ kind cluster with both OLMv0 and OLMv1 installed.
 - **V1.8** No command ever blocks on interactive input. An operator whose name collides with a verb (e.g. `check`) is migratable as a positional argument (`convert check -n <ns>`).
 - **V1.9** Manager detection selects legacy COS when the COD CRD is absent and COD when it is present and established. Discovery errors and unmet prerequisites fail before deleting OLMv0 resources. Validate COD name/group constraints and reject an existing COD rather than overwriting it. CRD presence is the supported capability signal; controller-version detection is not required.
 - **V1.10** The COD template preserves migration labels, annotations, packed Secret references, and `CollisionProtection: None`. Readiness requires completion and availability for the current generation; stale status cannot satisfy the wait. Invalid-specification and deadline failures report actionable errors. Once a COD may have reconciled, failure preserves migration resources and refuses automatic OLMv0 recovery.
+  Assert prompt failures for all current-generation terminal `Progressing=False` reasons except successful completion, including revision collisions and invalid revisions; preserve the controller's reason and message. Definitive COS/COD create rejections restore OLMv0 and report that the target cannot be active; timeouts and transport failures refuse automatic recovery.
+  Rollback persists verified COD UIDs before deletion and accepts matching dangling references even after restarting rollback. Unknown UIDs remain rejected, and failure to persist verified identity prevents COD deletion.
 
 ## V2. Eligibility matrix (one case per check, R3)
 

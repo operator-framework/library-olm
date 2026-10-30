@@ -580,6 +580,12 @@ func createdByInvocation(obj client.Object, marker string) bool {
 	return obj.GetAnnotations()[migrationInvocationAnnotation] == marker
 }
 
+// createWasRejected identifies API responses that guarantee this request did
+// not persist an object. Timeouts and transport errors remain ambiguous.
+func createWasRejected(err error) bool {
+	return apierrors.IsForbidden(err) || apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) || apierrors.IsUnauthorized(err)
+}
+
 func (m *Migrator) resolveCreatedObject(ctx context.Context, obj client.Object, marker string) bool {
 	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
 		return false
@@ -792,6 +798,9 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 	// can overwrite its ownership or fail on immutable phases, making recovery
 	// and Secret cleanup unsafe.
 	if err := m.Client.Create(ctx, cosObj); err != nil {
+		if createWasRejected(err) {
+			return resources, failWithSecretCleanup(fmt.Errorf("failed to create ClusterObjectSet: %w", err))
+		}
 		if apierrors.IsAlreadyExists(err) {
 			resources.ownershipUnknown = true
 			return resources, failWithSecretCleanup(fmt.Errorf("failed to create ClusterObjectSet: %w", err))

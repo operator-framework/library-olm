@@ -44,8 +44,11 @@ Verified during Phase 8 E2E.
 
 **COD transition (R2.7), in progress:** the library selects COD creation when its CRD exists,
 current-generation rollout checks, and COD-aware rollback. API types are pinned to
-operator-controller commit `75d8c16e922e`, including template metadata propagation and
-`InvalidSpecification` rollout reporting. The COD-backed CE applier merged in upstream
+operator-controller commit `255a40262ba4`, matching the COD CI controller and including
+template metadata propagation and terminal revision failure reporting. Rollback persists
+verified COD UIDs before deletion to support dangling revision references on retries.
+Definitive API create rejections permit recovery; ambiguous failures remain conservative.
+The COD-backed CE applier merged in upstream
 PR #3058. On 2026-10-29, a disposable kind cluster running operator-controller main
 `255a4026` passed the fixture handoff test: one COD retained its UID across CE creation,
 and its revisions 1 and 2 used `None` and `Prevent` collision protection. A separate

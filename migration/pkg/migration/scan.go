@@ -410,7 +410,8 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 		return fmt.Errorf("checking existing Subscription %s/%s before rollback: %w", ns, name, err)
 	}
 
-	if _, err := m.rollbackDeployment(ctx, &ce); err != nil {
+	cod, err := m.rollbackDeployment(ctx, &ce)
+	if err != nil {
 		return err
 	}
 	// Reject revision conflicts before stopping either controller. Repeat these
@@ -426,6 +427,9 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 		}
 	} else if client.IgnoreNotFound(err) != nil {
 		return fmt.Errorf("failed to get migration ClusterObjectSet: %w", err)
+	}
+	if err := m.rememberRollbackDeployment(ctx, &ce, cod); err != nil {
+		return err
 	}
 	m.progress(ProgressEvent{Step: ProgressStepRollback, Status: ProgressStarted, Message: fmt.Sprintf("Rolling back ClusterExtension %s", ceName)})
 
