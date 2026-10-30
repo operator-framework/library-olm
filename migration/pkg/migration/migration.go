@@ -29,6 +29,12 @@ const (
 	clusterObjectSetCRDName      = "clusterobjectsets.olm.operatorframework.io"
 	clusterExtensionCRDName      = "clusterextensions.olm.operatorframework.io"
 	operatorControllerDeployName = "operator-controller-controller-manager"
+
+	// operator-controller v1.12 uses these COS conditions. The COD-capable API
+	// replaced them with status.completedAt and ClusterObjectSetTypeReady and
+	// removed their constants; retain the values for legacy COS-only clusters.
+	legacyCOSConditionSucceeded = "Succeeded"
+	legacyCOSConditionAvailable = "Available"
 )
 
 // annotationPrefixesToStrip are annotation prefixes that should be removed from migrated resources.
@@ -828,7 +834,7 @@ func (m *Migrator) cleanupCreatedClusterObjectSet(ctx context.Context, resources
 	return m.cleanupCreatedSecrets(cleanupCtx, resources.secrets)
 }
 
-// WaitForCOSSucceeded waits for the COS to reach Succeeded=True.
+// WaitForCOSSucceeded waits for status.completedAt or legacy Succeeded=True.
 func (m *Migrator) WaitForCOSSucceeded(ctx context.Context, cosName string) error {
 	return wait.PollUntilContextTimeout(ctx, cosWaitPollInterval, cosWaitTimeout, true, func(ctx context.Context) (bool, error) {
 		var cos ocv1.ClusterObjectSet
@@ -841,10 +847,10 @@ func (m *Migrator) WaitForCOSSucceeded(ctx context.Context, cosName string) erro
 			return true, nil
 		}
 		for _, c := range cos.Status.Conditions {
-			if c.Type == "Succeeded" && c.Status == metav1.ConditionTrue {
+			if c.Type == legacyCOSConditionSucceeded && c.Status == metav1.ConditionTrue {
 				return true, nil
 			}
-			if c.Type == "Succeeded" && c.Reason == "Blocked" {
+			if c.Type == legacyCOSConditionSucceeded && c.Reason == ocv1.ReasonBlocked {
 				return false, fmt.Errorf("ClusterObjectSet %s is blocked: %s", cosName, c.Message)
 			}
 		}
@@ -1016,7 +1022,7 @@ func (m *Migrator) WaitForClusterObjectSetAvailable(ctx context.Context, cosName
 			return false, err
 		}
 		for _, condition := range cos.Status.Conditions {
-			if (condition.Type == "Available" || condition.Type == ocv1.ClusterObjectSetTypeReady) && condition.Status == metav1.ConditionTrue {
+			if (condition.Type == legacyCOSConditionAvailable || condition.Type == ocv1.ClusterObjectSetTypeReady) && condition.Status == metav1.ConditionTrue {
 				return true, nil
 			}
 		}

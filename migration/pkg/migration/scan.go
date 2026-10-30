@@ -413,6 +413,20 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 	if _, err := m.rollbackDeployment(ctx, &ce); err != nil {
 		return err
 	}
+	// Reject revision conflicts before stopping either controller. Repeat these
+	// checks after stopping the COD because in-flight reconciliation can add revisions.
+	var preflightRevisions ocv1.ClusterObjectSetList
+	if err := m.listMigrationRevisions(ctx, &ce, &preflightRevisions); err != nil {
+		return fmt.Errorf("failed to list ClusterObjectSets for rollback: %w", err)
+	}
+	var preflightCOS ocv1.ClusterObjectSet
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: fmt.Sprintf("%s-1", ceName)}, &preflightCOS); err == nil {
+		if err := m.validateRollbackRevision(ctx, &preflightCOS, &ce); err != nil {
+			return err
+		}
+	} else if client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("failed to get migration ClusterObjectSet: %w", err)
+	}
 	m.progress(ProgressEvent{Step: ProgressStepRollback, Status: ProgressStarted, Message: fmt.Sprintf("Rolling back ClusterExtension %s", ceName)})
 
 	// Stop further operator-controller reconciliation before collecting the
@@ -431,7 +445,7 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 	// catalog revisions after the initial migration revision, and orphan
 	// propagation leaves those revisions alive unless rollback removes them too.
 	var revisions ocv1.ClusterObjectSetList
-	if err := m.listMigrationRevisions(ctx, ceName, &revisions); err != nil {
+	if err := m.listMigrationRevisions(ctx, &ce, &revisions); err != nil {
 		return fmt.Errorf("failed to list ClusterObjectSets for rollback: %w", err)
 	}
 	// Preserve support for old migration revisions without the owner label.
@@ -449,7 +463,7 @@ func (m *Migrator) RollbackClusterExtension(ctx context.Context, ceName string, 
 		return fmt.Errorf("failed to get migration ClusterObjectSet: %w", getErr)
 	}
 	if getErr == nil && !foundMigrationRevision {
-		if err := validateRollbackRevisionGroup(&cos, ceName); err != nil {
+		if err := m.validateRollbackRevision(ctx, &cos, &ce); err != nil {
 			return err
 		}
 		revisions.Items = append(revisions.Items, cos)

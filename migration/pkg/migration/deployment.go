@@ -172,14 +172,14 @@ func (m *Migrator) stopRollbackDeployment(ctx context.Context, ce *ocv1.ClusterE
 	return false, nil
 }
 
-func (m *Migrator) listMigrationRevisions(ctx context.Context, name string, list *ocv1.ClusterObjectSetList) error {
+func (m *Migrator) listMigrationRevisions(ctx context.Context, ce *ocv1.ClusterExtension, list *ocv1.ClusterObjectSetList) error {
 	if err := m.Client.List(ctx, list); err != nil {
 		return err
 	}
 	selected := list.Items[:0]
 	for _, revision := range list.Items {
-		if revision.Spec.Group == name || revision.Spec.Group == "" && revision.Labels[LabelOwnerName] == name {
-			if err := validateRollbackRevisionGroup(&revision, name); err != nil {
+		if revision.Spec.Group == ce.Name || revision.Spec.Group == "" && revision.Labels[LabelOwnerName] == ce.Name {
+			if err := m.validateRollbackRevision(ctx, &revision, ce); err != nil {
 				return err
 			}
 			selected = append(selected, revision)
@@ -189,12 +189,38 @@ func (m *Migrator) listMigrationRevisions(ctx context.Context, name string, list
 	return nil
 }
 
-func validateRollbackRevisionGroup(revision *ocv1.ClusterObjectSet, name string) error {
+func (m *Migrator) validateRollbackRevision(ctx context.Context, revision *ocv1.ClusterObjectSet, ce *ocv1.ClusterExtension) error {
+	name := ce.Name
 	if revision.Spec.Group != "" && revision.Spec.Group != name {
 		return fmt.Errorf("migration ClusterObjectSet %s belongs to another group %q", revision.Name, revision.Spec.Group)
 	}
 	if owner := revision.Labels[LabelOwnerName]; owner != "" && owner != name {
 		return fmt.Errorf("migration ClusterObjectSet %s belongs to another extension %q", revision.Name, owner)
 	}
-	return nil
+	owner := metav1.GetControllerOf(revision)
+	if owner == nil {
+		// Legacy staging revisions and revisions orphaned during rollback have
+		// no controller. Require a matching group, label, or legacy initial name.
+		if revision.Spec.Group == name || revision.Labels[LabelOwnerName] == name || revision.Name == name+"-1" {
+			return nil
+		}
+		return fmt.Errorf("migration ClusterObjectSet %s has no verified migration identity", revision.Name)
+	}
+	if owner.APIVersion == ocv1.GroupVersion.String() && owner.Name == name && owner.UID != "" {
+		switch owner.Kind {
+		case ocv1.ClusterExtensionKind:
+			if owner.UID == ce.UID {
+				return nil
+			}
+		case ocv1.ClusterObjectDeploymentKind:
+			cod, err := m.rollbackDeployment(ctx, ce)
+			if err != nil {
+				return err
+			}
+			if cod != nil && owner.UID == cod.UID {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("migration ClusterObjectSet %s is controlled by another or unverified owner", revision.Name)
 }

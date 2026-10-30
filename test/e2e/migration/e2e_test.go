@@ -1053,6 +1053,7 @@ func collectArtifacts(t *testing.T, namespace string) {
 		{"get", "subscriptions,clusterserviceversions,installplans,operatorgroups,operatorconditions", "-n", namespace, "-o", "yaml"},
 		{"get", "events", "-n", namespace, "-o", "yaml"},
 		{"get", "clusterextensions,clusterobjectsets,clustercatalogs", "-o", "yaml"},
+		{"get", "clusterobjectdeployments", "-o", "yaml"},
 		{"get", "events", "-n", "olmv1-system", "-o", "yaml"},
 		{"logs", "deployment/catalogd-controller-manager", "-n", "olmv1-system", "--all-containers", "--tail=-1"},
 		{"logs", "deployment/operator-controller-controller-manager", "-n", "olmv1-system", "--all-containers", "--tail=-1"},

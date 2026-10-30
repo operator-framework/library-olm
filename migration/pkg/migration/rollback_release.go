@@ -271,7 +271,7 @@ func (m *Migrator) waitForRollbackRevisionsRemoved(ctx context.Context, ce *ocv1
 			return false, nil
 		}
 		var revisions ocv1.ClusterObjectSetList
-		if err := m.listMigrationRevisions(ctx, ce.Name, &revisions); err != nil {
+		if err := m.listMigrationRevisions(ctx, ce, &revisions); err != nil {
 			return false, err
 		}
 		migrationName := ce.Name + "-1"
@@ -289,7 +289,7 @@ func (m *Migrator) waitForRollbackRevisionsRemoved(ctx context.Context, ce *ocv1
 				return false, err
 			}
 			if err == nil {
-				if err := validateRollbackRevisionGroup(&migrationRevision, ce.Name); err != nil {
+				if err := m.validateRollbackRevision(ctx, &migrationRevision, ce); err != nil {
 					return false, err
 				}
 				revisions.Items = append(revisions.Items, migrationRevision)
