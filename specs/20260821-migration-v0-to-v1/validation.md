@@ -12,13 +12,18 @@ kind cluster with both OLMv0 and OLMv1 installed.
 ## V1. Per-command behavior
 
 - **V1.1** `check <operator> -n <ns>` on a healthy AllNamespaces operator with an available catalog reports all checks green and exits 0; makes no cluster changes.
-- **V1.2** `convert <operator> -n <ns> --dry-run` lists every resource that would be migrated (grouped by kind), including CRDs, and reports them as COS objects with `CollisionProtection: None`; makes no cluster changes.
-- **V1.3** `convert <operator> -n <ns>` results in a `ClusterExtension` reaching `Installed=True`; the `Subscription` and `CSV` are deleted; CRDs remain and are adopted by OLMv1; the COS reached `Succeeded=True` **before** the CE was created.
+- **V1.2** `convert <operator> -n <ns> --dry-run` lists every resource that would be migrated (grouped by kind), including CRDs, and reports the detected COS or COD manager with `CollisionProtection: None` on the COS or COD template; makes no cluster changes.
+- **V1.3** `convert <operator> -n <ns>` results in a `ClusterExtension` reaching `Installed=True`; the `Subscription` and `CSV` are deleted; CRDs remain and are adopted by OLMv1. In legacy COS mode, the COS reaches `Succeeded=True` before the CE is created. In COD mode, the COD's current-generation rollout completes and becomes available before the CE is created; the CE then owns the same COD and its catalog revision uses `CollisionProtection: Prevent`.
 - **V1.4** `rollback <ce-name> --acknowledge-installed` starts CE orphan deletion with a rollback finalizer to stop new revisions, records verified ownership from in-flight replacement revisions before deleting them, waits for orphaned resources to lose COS controller references, removes their OLMv1 revision metadata, restores the `Subscription` from the backup annotation, then removes the CE finalizer. A matching Subscription from a prior attempt permits retry; a conflicting Subscription or failed restoration retains the CE backup. The operator returns to OLMv0 management (`AtLatestKnown`/`UpgradePending`), and a subsequent migration can adopt preserved resources. Without `--acknowledge-installed` on an `Installed=True` CE, rollback refuses and exits non-zero.
+  In COD mode, verify CE-to-COD and COD-to-COS ownership and stop the COD with orphan deletion before removing its COS revisions, preventing replacement revisions during rollback. Before deletion and during subsequent revision discovery, reject controlled COS revisions unless the controller's API version, kind, name, and UID match the CE or its verified COD. Retain support for unowned legacy or orphaned revisions with matching migration identity. Preserve workloads and retain the CE backup if cleanup or restoration fails.
 - **V1.5** `cleanup <ce-name>` on a Conflict state deletes the `Subscription` and OLMv0 artifacts (Operator CR, OperatorCondition, copied CSVs, OperatorGroup if last) and leaves the CE intact.
 - **V1.6** `check --all` and `convert --all` print sections in order Conflict → Ineligible → AlreadyMigrated → Eligible; Conflicts are never auto-migrated; `convert --all` migrates only the Eligible operators. Batch acknowledgment flags affect classification before selection; `convert --all` rejects `-n` and `--ce-name` rather than ignoring them.
 - **V1.7** `convert --all` stops on the first failure by default; with `--continue-on-error` it logs the failure and continues, exiting non-zero if any operator failed.
 - **V1.8** No command ever blocks on interactive input. An operator whose name collides with a verb (e.g. `check`) is migratable as a positional argument (`convert check -n <ns>`).
+- **V1.9** Manager detection selects legacy COS when the COD CRD is absent and COD when it is present and established. Discovery errors and unmet prerequisites fail before deleting OLMv0 resources. Validate COD name/group constraints and reject an existing COD rather than overwriting it. CRD presence is the supported capability signal; controller-version detection is not required.
+- **V1.10** The COD template preserves migration labels, annotations, packed Secret references, and `CollisionProtection: None`. Readiness requires completion and availability for the current generation; stale status cannot satisfy the wait. Invalid-specification and deadline failures report actionable errors. Once a COD may have reconciled, failure preserves migration resources and refuses automatic OLMv0 recovery.
+  Assert prompt failures for all current-generation terminal `Progressing=False` reasons except successful completion, including revision collisions and invalid revisions; preserve the controller's reason and message. Definitive COS/COD create rejections restore OLMv0 and report that the target cannot be active; timeouts and transport failures refuse automatic recovery.
+  Rollback persists verified COD UIDs before deletion and accepts matching dangling references even after restarting rollback. Unknown UIDs remain rejected, and failure to persist verified identity prevents COD deletion.
 
 ## V2. Eligibility matrix (one case per check, R3)
 
@@ -89,7 +94,9 @@ flag flips it to `Eligible`:
 - **V5.6** `convert <operator> -n <ns>` → CE `Installed=True`; Subscription/CSV deleted; CRDs adopted (demonstrates close-to-zero downtime with namespace unchanged).
 - **V5.7** Upgrade via OLMv1 → CRDs updated through the normal bundle lifecycle.
 - **V5.8** `rollback <ce-name> --acknowledge-installed` → Subscription restored, CE and COS revisions deleted, preserved Deployments released from OLMv1 ownership; a second `convert` creates new CE/COS UIDs, installs successfully, and adopts the same Deployment UIDs.
+  In COD mode, also verify the COD is deleted and no COS remains in its group, while the Deployment UID and availability are preserved. Fixture tests assert restored Subscription state; OLMv0 reconciliation requires the live environment.
 - **V5.9** Fresh cluster with operators in all four states → `check --all` → correct four-section output; `convert --all` warns on Conflicts and migrates only Eligible.
+- **V5.10** On a COD-capable controller, fixture migration creates one COD named for the CE. Catalog handoff retains that COD's UID, establishes CE ownership of the COD and COD ownership of successive COS revisions in the same group, and retains the migration revision (`None`) alongside a new catalog revision (`Prevent`). Verify the migration COS retains its UID and both revisions retain their respective collision-protection settings. Run handoff and fixture conversion/rollback (V5.8) in the dedicated COD CI job, collecting coverage separately from legacy COS tests.
 
 ## V6. Non-functional (Jira deployment considerations)
 
@@ -126,7 +133,7 @@ flag flips it to `Eligible`:
 | R2.4 SecretPacker + collision handling | V1.2, V4.2, V4.6 |
 | R2.5 CE annotations | V3.6 |
 | R2.6 `--backup <directory>` flag | V3.18 |
-| R2.7 Boxcutter phase 2 | Prerequisite note (PLAN) |
+| R2.7 Boxcutter phase 2 | V1.2–V1.4, V1.9–V1.10, V5.8, V5.10 |
 | R3 C1–C10 (including C1a) | V2.1–V2.11 (including V2.1a) |
 | R4 Subscription fields | V3.1–V3.3, V3.12, V4.4 |
 | R5 Resource collection strategy | V1.3, V4.2, V4.6 |

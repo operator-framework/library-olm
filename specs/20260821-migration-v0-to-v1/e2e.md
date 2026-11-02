@@ -12,6 +12,31 @@ refusals, not features this library is expected to implement.
 
 ## Test environments
 
+### COD transition
+
+The library API dependency and COD CI controller both use commit `255a40262ba4`.
+Unit regressions cover definitive create rejection recovery, terminal rollout
+diagnostics, and rollback retries with dangling references to verified COD UIDs.
+
+Migration automatically creates a COD named after the CE when the COD CRD exists;
+otherwise it directly creates a COS, including against the default v1.12.0 installation.
+A present but unready COD CRD or a discovery error blocks migration rather than falling back.
+COD migration requires the COD API/controller and the COD-backed CE applier merged in
+operator-controller PR #3058. The library's pinned API dependency alone does not
+install that controller. Unit tests exercise creation, preflight, readiness and
+rollback ownership and invalid-template diagnostics. The existing handoff scenario
+also checks COD identity preservation, CE ownership of the COD, and COD ownership of both
+revisions when a COD-capable controller is installed. On 2026-10-29 those assertions
+passed against operator-controller main `255a4026` in kind. A separate full CLI fixture
+conversion and acknowledged rollback preserved the operator Deployment UID and its one
+available replica, restored the Subscription, and removed the COD and both COS revisions.
+The `migration/test-e2e-cod-rollback` target now automates those rollback assertions and
+collects CLI coverage. A separate CI job builds and installs operator-controller from
+pinned commit `255a40262ba4d525fd70d4e211bddfcd47a9fcab`, then runs the handoff and
+rollback targets. Default suites continue to exercise the legacy COS path.
+
+### Existing suites
+
 | Suite | Cluster | Catalog content | Purpose |
 |---|---|---|---|
 | `fixture` | kind + OLMv1 + OLMv0 CRDs only (no OLMv0 controllers) | Committed OLMv0-install snapshots and a locally built FBC served by an in-cluster TLS registry | Deterministic migration and rejection coverage without a remote catalog. |
@@ -154,8 +179,8 @@ combined threshold is not yet enforced by the Make target or CI.
 ## CI status
 
 The `migration-test` workflow runs unit coverage, fixture E2E, live-operator E2E, the
-in-cluster Job E2E, and the focused COS-supersession E2E as independent jobs. Unit, fixture,
-live, and COS-supersession tests publish coverage inputs; a dependent coverage job displays
+in-cluster Job E2E, COS-supersession E2E, and pinned COD handoff/rollback E2E as independent jobs. Unit, fixture,
+live, COS-supersession, and COD tests publish coverage inputs; a dependent coverage job displays
 their combined report. The Job intentionally does not upload diagnostics or coverage artifacts.
 
 The supersession check is deliberately separate from the conversion matrix. With the released
@@ -236,11 +261,11 @@ same-name plans from different namespaces. Fixture CI collects
 CLI coverage under `coverage/fixture/backup`, included in combined reporting.
 
 1. The `migration-test` workflow runs unit coverage, fixture E2E, live-operator E2E, COS
-   supersession E2E, and the in-cluster Job E2E independently. Unit, fixture, and live tests
-   collect CLI coverage; COS supersession collects direct `migration/...` package coverage. A
+   supersession E2E, COD handoff/rollback E2E, and the in-cluster Job E2E independently. Unit, fixture, live,
+   and COD rollback tests collect CLI coverage; COS and COD handoff collect direct `migration/...` package coverage. A
    final job merges all of those profiles and displays the total report.
 2. Run all jobs for pull requests, merge queues, and pushes to `main`. The fixture,
-   live-operator, COS-supersession, and in-cluster Job suites are required merge gates.
+   live-operator, COS-supersession, COD handoff/rollback, and in-cluster Job suites are required merge gates.
    Preserve diagnostics and coverage artifacts for every coverage-producing suite; the focused
    in-cluster Job check uploads neither.
 3. Retry only provisioning/image-pull failures once; never retry a failed assertion automatically.

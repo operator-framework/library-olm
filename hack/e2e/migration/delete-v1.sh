@@ -6,6 +6,9 @@ operator_fields "${1:?usage: delete-v1.sh <operator>}"
 # Delete CE first, then any revisions it owned. This is the explicit OLMv1
 # cleanup path; it never deletes shared CRDs or the source CatalogSource.
 kubectl delete "clusterextension/$E2E_PACKAGE" --ignore-not-found --wait=true
+if kubectl get crd/clusterobjectdeployments.olm.operatorframework.io >/dev/null 2>&1; then
+	kubectl wait --for=delete "clusterobjectdeployment/$E2E_PACKAGE" --timeout=2m
+fi
 kubectl delete clusterobjectsets -l "olm.operatorframework.io/owner-name=$E2E_PACKAGE" --ignore-not-found --wait=true
 # Ref Secrets live in the OLMv1 system namespace rather than the operator's
 # installation namespace and are not garbage-collected by ClusterObjectSet.
