@@ -3,7 +3,7 @@ set -euo pipefail
 
 : "${E2E_CLUSTER_NAME:?E2E_CLUSTER_NAME is required}"
 : "${E2E_KUBECONFIG:?E2E_KUBECONFIG is required}"
-: "${KIND:?KIND is required}"
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 
 if [[ ! -f $E2E_KUBECONFIG ]]; then
 	echo "Refusing E2E cleanup: kubeconfig $E2E_KUBECONFIG does not exist" >&2
@@ -21,7 +21,7 @@ fi
 # user-editable context name in the supplied kubeconfig.
 kind_kubeconfig=$(mktemp)
 trap 'rm -f "$kind_kubeconfig"' EXIT
-if ! "$KIND" get kubeconfig --name "$E2E_CLUSTER_NAME" >"$kind_kubeconfig"; then
+if ! go -C "$root_dir" tool kind get kubeconfig --name "$E2E_CLUSTER_NAME" >"$kind_kubeconfig"; then
 	echo "Refusing E2E cleanup: Kind cluster $E2E_CLUSTER_NAME does not exist" >&2
 	exit 1
 fi
