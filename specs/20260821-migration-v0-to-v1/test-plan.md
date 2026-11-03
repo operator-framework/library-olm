@@ -230,7 +230,7 @@ system-managed namespace scenarios against the experimental controller profile.
 | Need | Requirement |
 |---|---|
 | Local / CI host | Go toolchain and Bingo-managed Kind; container runtime available to Kind. |
-| Kubernetes | Kind Kubernetes `v1.36.1` node image unless the test run explicitly validates another supported version. |
+| Kubernetes | Kind Kubernetes `v1.37.0` node image unless the test run explicitly validates another supported version. |
 | OLM components | Pinned OLMv0 `v0.46.0` and OLMv1 `v1.12.0` manifests, or CI-approved overrides of those pinned inputs. |
 | Kubeconfig | Kind-generated `.kubeconfig/library-olm-e2e` by default; `E2E_KUBECONFIG` only overrides that output path. |
 | Fixture environment | Separate `library-olm-fixture-e2e` cluster; OLMv0 CRDs only, OLMv1 controllers, local TLS registry/FBC, committed snapshots. |

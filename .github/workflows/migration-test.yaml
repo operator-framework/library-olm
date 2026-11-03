@@ -118,7 +118,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Build and deploy pinned COD-capable controller
-        run: make -C operator-controller run-experimental KIND_CLUSTER_NAME=library-olm-cod-e2e K8S_VERSION=1.36
+        run: make -C operator-controller run-experimental KIND_CLUSTER_NAME=library-olm-cod-e2e K8S_VERSION=1.37
       - name: Install committed OLMv0 fixtures and catalog
         run: make migration/e2e-fixture-setup
       - name: Verify COD handoff and catalog revision
