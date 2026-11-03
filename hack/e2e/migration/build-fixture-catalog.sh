@@ -5,9 +5,8 @@ set -euo pipefail
 # The registry is inside the fixture cluster, so catalogd never pulls fixture
 # catalog metadata or bundle content from Quay.
 : "${KUBECONFIG:?KUBECONFIG is required}"
-: "${CRANE:?CRANE is required}"
-
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+crane() { go -C "$root_dir" tool crane "$@"; }
 registry_namespace=migration-e2e-registry
 registry_service=fixture-registry
 registry_host="$registry_service.$registry_namespace.svc.cluster.local:5000"
@@ -87,7 +86,7 @@ EOF
 	image="$push_host/library-olm-fixture-$package:latest"
 	docker build -q -t "$image" "$bundle_dir"
 	docker save "$image" -o "$bundle_dir/image.tar"
-	SSL_CERT_FILE="$registry_ca" "$CRANE" push "$bundle_dir/image.tar" "$image"
+	SSL_CERT_FILE="$registry_ca" crane push "$bundle_dir/image.tar" "$image"
 	jq -n --arg package "$package" --arg channel "$channel" \
 		'{schema:"olm.package",name:$package,defaultChannel:$channel}' \
 		>"$catalog_dir/configs/$package-package.json"
@@ -106,4 +105,4 @@ EOF
 catalog_image="$push_host/library-olm-fixture-catalog:latest"
 docker build -q -t "$catalog_image" "$catalog_dir"
 docker save "$catalog_image" -o "$catalog_dir/image.tar"
-SSL_CERT_FILE="$registry_ca" "$CRANE" push "$catalog_dir/image.tar" "$catalog_image"
+SSL_CERT_FILE="$registry_ca" crane push "$catalog_dir/image.tar" "$catalog_image"
