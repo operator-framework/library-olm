@@ -3,7 +3,7 @@
 Run these scripts from the repository root. They use a dedicated
 `library-olm-demo` Kind cluster and only the Kind-generated kubeconfig at
 `.kubeconfig/library-olm-demo`; they do not use your current Kubernetes context.
-The setup reuses the E2E version pins (Kind v0.33.0, Kubernetes v1.36.1,
+The setup reuses the E2E version pins (Kind v0.33.0, Kubernetes v1.37.0,
 OLMv0 v0.46.0, and experimental operator-controller v1.12.0), builds both CLIs,
 and migrates the bootstrap CatalogSource so operator checks can resolve a
 serving ClusterCatalog. It is safe to rerun without recreating the cluster.

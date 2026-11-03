@@ -46,7 +46,7 @@ rollback targets. Default suites continue to exercise the legacy COS path.
 Do not use a mutable public `latest` image or an unpinned release installer in CI. The fixture
 registry's `latest` tag is private to the disposable cluster and rebuilt from committed inputs on
 every setup. The default bootstrap pins OLMv0 to `v0.46.0`, OLMv1 to `v1.12.0`, and kind to
-`v0.33.0` with the digest-pinned Kubernetes `v1.36.1` node image; CI should
+`v0.33.0` with the digest-pinned Kubernetes `v1.37.0` node image; CI should
 mirror those release artifacts and override the URLs when it cannot access GitHub. The job inputs
 are the kind node image, OLMv0 manifest URL and digest, operator-controller release
 manifest URL and digest, and (only for the smoke suite) the catalog image/package/channel/CSV
