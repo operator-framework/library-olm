@@ -252,7 +252,13 @@ func TestCreateDeploymentTemplate(t *testing.T) {
 	if !reflect.DeepEqual(resources.cod.Spec.Template.Metadata.Annotations, resources.cod.Annotations) {
 		t.Fatal("template must propagate bundle and migration annotations to revisions")
 	}
-	if !reflect.DeepEqual(resources.cod.Spec.Template.Metadata.Labels, resources.cod.Labels) {
+	if resources.cod.Labels["apps.kubernetes.io/managed-by"] != "operator-controller" {
+		t.Fatal("missing COD adoption label required by operator-controller")
+	}
+	if metav1.GetControllerOf(resources.cod) != nil {
+		t.Fatal("staging COD must remain ownerless until the CE adopts it")
+	}
+	if !reflect.DeepEqual(resources.cod.Spec.Template.Metadata.Labels, map[string]string{LabelOwnerKind: ocv1.ClusterExtensionKind, LabelOwnerName: "example"}) {
 		t.Fatal("template must propagate extension identity labels to revisions")
 	}
 	var revisions ocv1.ClusterObjectSetList

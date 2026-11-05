@@ -44,8 +44,10 @@ Verified during Phase 8 E2E.
 
 **COD transition (R2.7), in progress:** the library selects COD creation when its CRD exists,
 current-generation rollout checks, and COD-aware rollback. API types are pinned to
-operator-controller commit `255a40262ba4`, matching the COD CI controller and including
-template metadata propagation and terminal revision failure reporting. Rollback persists
+operator-controller commit `bbe43971eadd`, matching the COD CI controller and including
+the adoption label requirement. Migration stamps `apps.kubernetes.io/managed-by:
+operator-controller` on the ownerless COD before handoff; unit and E2E assertions
+check this label and preservation of the original COD identity. Rollback persists
 verified COD UIDs before deletion to support dangling revision references on retries.
 Definitive API create rejections permit recovery; ambiguous failures remain conservative.
 The COD-backed CE applier merged in upstream
@@ -55,9 +57,11 @@ and its revisions 1 and 2 used `None` and `Prevent` collision protection. A sepa
 full CLI fixture conversion and acknowledged rollback restored the Subscription,
 removed COD/COS resources, and preserved the operator Deployment UID and availability.
 The default E2E setup remains pinned to v1.12.0 for the legacy path. A separate CI job
-builds pinned COD-capable commit `255a40262ba4d525fd70d4e211bddfcd47a9fcab` and
+builds pinned COD-capable commit `bbe43971eadd63f0445b66e5b1a6d37ab0966775` and
 runs covered handoff and workload-preserving rollback E2E targets. The rollback target
 passed locally on 2026-10-29.
+Both covered targets passed again on 2026-11-05 against `bbe43971eadd` on kind
+Kubernetes 1.37, verifying labeled COD adoption and rollback.
 
 ---
 
