@@ -157,6 +157,11 @@ workflow is retained. Discovery errors must fail rather than silently fall back.
 COD CRD and operator-controller's COD-backed ClusterExtension applier (upstream PR #3058).
 Create the deployment with collision protection `None`, wait for current-generation rollout
 completion and availability, then create the CE to hand management to operator-controller.
+Set `apps.kubernetes.io/managed-by: operator-controller` on the COD itself so
+operator-controller retains its rollout data and can adopt it while ownerless.
+Preserve the same COD UID through adoption; owner-kind and
+owner-name metadata alone do not authorize adoption. The adoption label is not
+required on the COS template or operator workload objects.
 Reject existing deployments/revision groups before destructive work. Rollback must stop the
 deployment with orphan deletion before removing revisions and restoring OLMv0 management.
 Persist verified deployment UIDs on the CE before deletion so late revisions with

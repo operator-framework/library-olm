@@ -111,7 +111,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: operator-framework/operator-controller
-          ref: 255a40262ba4d525fd70d4e211bddfcd47a9fcab
+          ref: bbe43971eadd63f0445b66e5b1a6d37ab0966775
           path: operator-controller
           persist-credentials: false
       - uses: actions/setup-go@v7
