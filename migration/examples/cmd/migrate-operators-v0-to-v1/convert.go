@@ -266,6 +266,8 @@ func dryRunRecord(opts, resourceOpts migration.Options, info *migration.Migratio
 	}
 }
 
+// printDryRunPreview summarizes the planned migration without printing collected resource contents.
+// Resource kinds are sorted so repeated previews present the same order.
 func printDryRunPreview(opts, resourceOpts migration.Options, info *migration.MigrationInfo) error {
 	success(fmt.Sprintf("ClusterObjectSet API established; using operator-controller namespace %s", info.SystemNamespace))
 

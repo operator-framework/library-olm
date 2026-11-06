@@ -6,10 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/operator-framework/library-olm/migration/pkg/migration"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/operator-framework/library-olm/migration/pkg/migration"
 )
 
+// TestDryRunPreviewSortsResourceKinds verifies stable kind ordering across repeated previews.
 func TestDryRunPreviewSortsResourceKinds(t *testing.T) {
 	reader, writer, err := os.Pipe()
 	if err != nil {
@@ -17,6 +19,15 @@ func TestDryRunPreviewSortsResourceKinds(t *testing.T) {
 	}
 	originalStdout := os.Stdout
 	os.Stdout = writer
+	type readResult struct {
+		output []byte
+		err    error
+	}
+	readDone := make(chan readResult, 1)
+	go func() {
+		output, readErr := io.ReadAll(reader)
+		readDone <- readResult{output: output, err: readErr}
+	}()
 	t.Cleanup(func() {
 		os.Stdout = originalStdout
 		_ = reader.Close()
@@ -41,11 +52,11 @@ func TestDryRunPreviewSortsResourceKinds(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Stdout = originalStdout
-	output, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatal(err)
+	result := <-readDone
+	if result.err != nil {
+		t.Fatal(result.err)
 	}
-	sections := strings.Split(string(output), "Resources that would be placed into ClusterObjectSet widget-1:")
+	sections := strings.Split(string(result.output), "Resources that would be placed into ClusterObjectSet widget-1:")
 	if len(sections) != 6 {
 		t.Fatalf("got %d preview sections, want 5", len(sections)-1)
 	}
