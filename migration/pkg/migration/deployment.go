@@ -22,10 +22,6 @@ import (
 
 const clusterObjectDeploymentCRDName = "clusterobjectdeployments.olm.operatorframework.io"
 
-// operator-controller requires this label to retain COD rollout status in its
-// cache and adopt an ownerless deployment. The upstream constants are internal.
-const operatorControllerManagedByLabel = "apps.kubernetes.io/managed-by"
-
 const rollbackDeploymentUIDsAnnotation = "olm.operatorframework.io/rollback-deployment-uids"
 
 var deploymentNamePattern = regexp.MustCompile(`^[a-z]([a-z0-9-]*[a-z0-9])?$`)
@@ -90,7 +86,7 @@ func (m *Migrator) createClusterObjectDeployment(ctx context.Context, opts Optio
 	}
 	configuration := ocv1ac.ClusterObjectDeployment(opts.ClusterExtensionName).
 		WithAnnotations(annotations).
-		WithLabels(map[string]string{LabelOwnerKind: ocv1.ClusterExtensionKind, LabelOwnerName: opts.ClusterExtensionName, operatorControllerManagedByLabel: "operator-controller"}).
+		WithLabels(map[string]string{LabelOwnerKind: ocv1.ClusterExtensionKind, LabelOwnerName: opts.ClusterExtensionName, controllerManagedByLabel: "operator-controller"}).
 		WithSpec(ocv1ac.ClusterObjectDeploymentSpec().WithTemplate(
 			ocv1ac.ClusterObjectDeploymentTemplate().
 				WithMetadata(ocv1ac.ClusterObjectDeploymentTemplateMetadata().

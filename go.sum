@@ -263,8 +263,8 @@ github.com/opencontainers/runtime-spec v1.3.0 h1:YZupQUdctfhpZy3TM39nN9Ika5CBWT5
 github.com/opencontainers/runtime-spec v1.3.0/go.mod h1:jwyrGlmzljRJv/Fgzds9SsS/C5hL+LL3ko9hs6T5lQ0=
 github.com/operator-framework/api v0.46.0 h1:EitSlfRJZKYDewTK+ntH9L/p+NIKv/L1PgRoaIWH+to=
 github.com/operator-framework/api v0.46.0/go.mod h1:oFXzh7rHCnMwC6N0B92NEsfQyLGJ7FrceAYemjwoKPI=
-github.com/operator-framework/operator-controller v1.12.1-0.20261105202928-bbe43971eadd h1:RN3GZN9JCxcF7RjhGudiS3O42ls81D2ufdIXQLitKqA=
-github.com/operator-framework/operator-controller v1.12.1-0.20261105202928-bbe43971eadd/go.mod h1:9H3hReMjs2wU5XRaFj2GT1hJMNzKtNpgQFuAm6/sBgc=
+github.com/operator-framework/operator-controller v1.12.1-0.20261106151730-77754d81ea01 h1:WD3OW21Z7b1lz6I5CGgDkZ2ljZlmgQ/kt3bStqEGjno=
+github.com/operator-framework/operator-controller v1.12.1-0.20261106151730-77754d81ea01/go.mod h1:9H3hReMjs2wU5XRaFj2GT1hJMNzKtNpgQFuAm6/sBgc=
 github.com/peterbourgon/diskv v2.0.1+incompatible h1:UBdAOUP5p4RWqPBg048CAvpKN+vxiaj6gdUUzhl4XmI=
 github.com/peterbourgon/diskv v2.0.1+incompatible/go.mod h1:uqqh8zWWbv1HBMNONnaR/tNboyR3/BZd58JJSHlUSCU=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=

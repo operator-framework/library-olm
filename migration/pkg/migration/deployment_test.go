@@ -127,6 +127,7 @@ func TestDeploymentTerminalRevisionFailures(t *testing.T) {
 	for _, reason := range []string{
 		ocv1.ClusterObjectDeploymentReasonRevisionObjectCollision,
 		ocv1.ClusterObjectDeploymentReasonRevisionInvalidSpecification,
+		ocv1.ClusterObjectDeploymentReasonUnmanagedRevision,
 		"FutureTerminalReason",
 	} {
 		t.Run(reason, func(t *testing.T) {
@@ -233,6 +234,28 @@ func (c completingDeploymentClient) Create(ctx context.Context, obj client.Objec
 		cod.UID, cod.Generation, cod.Status = ready.UID, ready.Generation, ready.Status
 	}
 	return c.Client.Create(ctx, obj, opts...)
+}
+
+func TestCreateClusterObjectSetAdoptionLabel(t *testing.T) {
+	m := migrationTestClient(t)
+	m.Client = failingMigrationClient{Client: m.Client, succeedCOS: true}
+	resources, err := m.createClusterObjectSet(context.Background(), Options{ClusterExtensionName: "example", SubscriptionNamespace: "ns", SubscriptionName: "sub"}, &MigrationInfo{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resources.cos == nil || resources.cod != nil {
+		t.Fatal("expected a directly created COS when the COD CRD is absent")
+	}
+	var cos ocv1.ClusterObjectSet
+	if err := m.Client.Get(context.Background(), client.ObjectKeyFromObject(resources.cos), &cos); err != nil {
+		t.Fatal(err)
+	}
+	if cos.Labels["apps.kubernetes.io/managed-by"] != "object-controller" {
+		t.Fatal("migration COS lacks the object-controller adoption label")
+	}
+	if metav1.GetControllerOf(&cos) != nil || cos.Spec.Group != "example" || cos.Spec.CollisionProtection != ocv1.CollisionProtectionNone {
+		t.Fatalf("unexpected staging COS identity or collision protection: %#v", cos)
+	}
 }
 
 func TestCreateDeploymentTemplate(t *testing.T) {

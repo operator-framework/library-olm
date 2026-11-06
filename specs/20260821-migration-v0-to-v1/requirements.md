@@ -162,6 +162,10 @@ operator-controller retains its rollout data and can adopt it while ownerless.
 Preserve the same COD UID through adoption; owner-kind and
 owner-name metadata alone do not authorize adoption. The adoption label is not
 required on the COS template or operator workload objects.
+Directly created migration COS revisions carry `apps.kubernetes.io/managed-by:
+object-controller` so a COD can adopt an ownerless revision in its group.
+COD-generated COS revisions receive this label from object-controller. The two
+manager values apply to different resources and must not be interchanged.
 Reject existing deployments/revision groups before destructive work. Rollback must stop the
 deployment with orphan deletion before removing revisions and restoring OLMv0 management.
 Persist verified deployment UIDs on the CE before deletion so late revisions with
