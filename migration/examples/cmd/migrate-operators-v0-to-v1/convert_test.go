@@ -1,11 +1,66 @@
 package main
 
 import (
+	"io"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/operator-framework/library-olm/migration/pkg/migration"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
+
+func TestDryRunPreviewSortsResourceKinds(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalStdout := os.Stdout
+	os.Stdout = writer
+	t.Cleanup(func() {
+		os.Stdout = originalStdout
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+
+	kinds := []string{"Secret", "ConfigMap", "Service", "Deployment", "Role"}
+	objects := make([]unstructured.Unstructured, 0, len(kinds))
+	for _, kind := range kinds {
+		obj := unstructured.Unstructured{}
+		obj.SetKind(kind)
+		objects = append(objects, obj)
+	}
+	opts := migration.Options{SubscriptionName: "widget", SubscriptionNamespace: "operators", ClusterExtensionName: "widget"}
+	info := &migration.MigrationInfo{PackageName: "widget", Version: "1.0.0", CollectedObjects: objects}
+	for range 5 {
+		if err := printDryRunPreview(opts, opts, info); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = originalStdout
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sections := strings.Split(string(output), "Resources that would be placed into ClusterObjectSet widget-1:")
+	if len(sections) != 6 {
+		t.Fatalf("got %d preview sections, want 5", len(sections)-1)
+	}
+	for i, section := range sections[1:] {
+		section = strings.SplitN(section, "ClusterExtension that would be created:", 2)[0]
+		previous := -1
+		for _, kind := range []string{"ConfigMap", "Deployment", "Role", "Secret", "Service"} {
+			position := strings.Index(section, kind+":")
+			if position < 0 || position <= previous {
+				t.Fatalf("preview %d has unsorted resource kinds: %s", i+1, section)
+			}
+			previous = position
+		}
+	}
+}
 
 func TestDryRunCleanupPlan(t *testing.T) {
 	opts := migration.Options{

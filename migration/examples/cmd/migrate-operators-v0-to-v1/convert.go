@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/spf13/cobra"
 
@@ -281,8 +283,8 @@ func printDryRunPreview(opts, resourceOpts migration.Options, info *migration.Mi
 	for _, obj := range info.CollectedObjects {
 		kindCounts[obj.GetKind()]++
 	}
-	for kind, count := range kindCounts {
-		detail(fmt.Sprintf("%s:", kind), fmt.Sprintf("%d object(s)", count))
+	for _, kind := range slices.Sorted(maps.Keys(kindCounts)) {
+		detail(fmt.Sprintf("%s:", kind), fmt.Sprintf("%d object(s)", kindCounts[kind]))
 	}
 
 	fmt.Printf("\n  ClusterExtension that would be created:\n")
