@@ -14,10 +14,14 @@ refusals, not features this library is expected to implement.
 
 ### COD transition
 
-The library API dependency and COD CI controller both use commit `bbe43971eadd`.
+The library API dependency and COD CI controller both use commit `77754d81ea01`.
 The handoff test checks that the ownerless migration COD
 has `apps.kubernetes.io/managed-by: operator-controller` before CE creation and
 retains the label and COD UID after adoption.
+Migration COS revisions carry `apps.kubernetes.io/managed-by: object-controller`.
+The handoff test checks this value on the initial revision in both modes and on
+the COD-generated catalog revision. Unit tests cover direct COS creation, while
+the COD controller stamps its own generated revisions.
 Unit regressions cover definitive create rejection recovery, terminal rollout
 diagnostics, and rollback retries with dangling references to verified COD UIDs.
 
@@ -35,12 +39,12 @@ conversion and acknowledged rollback preserved the operator Deployment UID and i
 available replica, restored the Subscription, and removed the COD and both COS revisions.
 The `migration/test-e2e-cod-rollback` target now automates those rollback assertions and
 collects CLI coverage. A separate CI job builds and installs operator-controller from
-pinned commit `bbe43971eadd63f0445b66e5b1a6d37ab0966775`, then runs the handoff and
+pinned commit `77754d81ea0125d3a850e9fa57decf7a7255a409`, then runs the handoff and
 rollback targets. Default suites continue to exercise the legacy COS path.
 
-Both covered targets passed locally against `bbe43971eadd` on
+Both covered targets passed locally against `77754d81ea01` on
 kind Kubernetes 1.37: handoff in 25.7 seconds and fixture conversion/rollback in
-26.5 seconds. This verifies the adoption label requirement with the
+26.7 seconds. This verifies the revision labels and COD adoption requirement with the
 actual controller, as well as workload-preserving rollback after adoption.
 
 ### Existing suites

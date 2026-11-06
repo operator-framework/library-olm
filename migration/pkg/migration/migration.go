@@ -780,8 +780,9 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 	cos := ocv1ac.ClusterObjectSet(cosName).
 		WithSpec(cosSpec).
 		WithLabels(map[string]string{
-			LabelOwnerKind: ocv1.ClusterExtensionKind,
-			LabelOwnerName: opts.ClusterExtensionName,
+			LabelOwnerKind:           ocv1.ClusterExtensionKind,
+			LabelOwnerName:           opts.ClusterExtensionName,
+			controllerManagedByLabel: "object-controller",
 		}).
 		WithAnnotations(cosAnnotations)
 

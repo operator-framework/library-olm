@@ -44,10 +44,12 @@ Verified during Phase 8 E2E.
 
 **COD transition (R2.7), in progress:** the library selects COD creation when its CRD exists,
 current-generation rollout checks, and COD-aware rollback. API types are pinned to
-operator-controller commit `bbe43971eadd`, matching the COD CI controller and including
+operator-controller commit `77754d81ea01`, matching the COD CI controller and including
 the adoption label requirement. Migration stamps `apps.kubernetes.io/managed-by:
 operator-controller` on the ownerless COD before handoff; unit and E2E assertions
-check this label and preservation of the original COD identity. Rollback persists
+check this label and preservation of the original COD identity. Directly created
+COS revisions use the same key with value `object-controller` for COD adoption;
+the object-controller labels COD-generated revisions itself. Rollback persists
 verified COD UIDs before deletion to support dangling revision references on retries.
 Definitive API create rejections permit recovery; ambiguous failures remain conservative.
 The COD-backed CE applier merged in upstream
@@ -57,11 +59,14 @@ and its revisions 1 and 2 used `None` and `Prevent` collision protection. A sepa
 full CLI fixture conversion and acknowledged rollback restored the Subscription,
 removed COD/COS resources, and preserved the operator Deployment UID and availability.
 The default E2E setup remains pinned to v1.12.0 for the legacy path. A separate CI job
-builds pinned COD-capable commit `bbe43971eadd63f0445b66e5b1a6d37ab0966775` and
+builds pinned COD-capable commit `77754d81ea0125d3a850e9fa57decf7a7255a409` and
 runs covered handoff and workload-preserving rollback E2E targets. The rollback target
 passed locally on 2026-10-29.
 Both covered targets passed again on 2026-11-05 against `bbe43971eadd` on kind
 Kubernetes 1.37, verifying labeled COD adoption and rollback.
+The covered handoff and rollback targets also pass against `77754d81ea01`,
+including COS manager-label assertions. Direct COS creation and the
+`UnmanagedRevision` terminal condition are covered by unit regressions.
 
 ---
 

@@ -348,6 +348,9 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 	if precreatedUID == "" {
 		t.Fatal("pre-existing COS has no UID")
 	}
+	if before.Items[0].Labels["apps.kubernetes.io/managed-by"] != "object-controller" {
+		t.Fatal("migration COS lacks the object-controller adoption label")
+	}
 	if !cosSucceeded(before.Items[0]) {
 		t.Fatal("pre-existing COS did not reach Succeeded=True before CE creation")
 	}
@@ -408,6 +411,9 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 		}
 		if !metav1.IsControlledBy(catalogCOS, &currentCOD) || catalogCOS.Spec.Group != subscription {
 			t.Fatal("catalog revision is not controlled by the original COD")
+		}
+		if catalogCOS.Labels["apps.kubernetes.io/managed-by"] != "object-controller" {
+			t.Fatal("COD-generated catalog revision lacks the object-controller label")
 		}
 	} else if len(catalogCOS.OwnerReferences) != 1 || catalogCOS.OwnerReferences[0].Name != subscription {
 		t.Fatalf("catalog COS ownerReferences = %#v, want ClusterExtension %q", catalogCOS.OwnerReferences, subscription)

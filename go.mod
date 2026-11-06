@@ -8,7 +8,7 @@ require (
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/operator-framework/api v0.46.0
-	github.com/operator-framework/operator-controller v1.12.1-0.20261105202928-bbe43971eadd
+	github.com/operator-framework/operator-controller v1.12.1-0.20261106151730-77754d81ea01
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
 	go.podman.io/image/v5 v5.42.0

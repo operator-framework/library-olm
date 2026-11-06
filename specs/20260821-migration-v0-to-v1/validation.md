@@ -27,6 +27,10 @@ kind cluster with both OLMv0 and OLMv1 installed.
   staging, then gains the CE controller reference while retaining its UID.
   The template continues to carry extension identity metadata without copying
   this COD-specific adoption label onto operator workloads.
+  Directly created migration COS revisions carry `apps.kubernetes.io/managed-by:
+  object-controller` and remain ownerless during staging. COD-generated migration
+  and catalog revisions carry the same COS label, while the COD retains its
+  distinct `operator-controller` value.
   Assert prompt failures for all current-generation terminal `Progressing=False` reasons except successful completion, including revision collisions and invalid revisions; preserve the controller's reason and message. Definitive COS/COD create rejections restore OLMv0 and report that the target cannot be active; timeouts and transport failures refuse automatic recovery.
   Rollback persists verified COD UIDs before deletion and accepts matching dangling references even after restarting rollback. Unknown UIDs remain rejected, and failure to persist verified identity prevents COD deletion.
 
