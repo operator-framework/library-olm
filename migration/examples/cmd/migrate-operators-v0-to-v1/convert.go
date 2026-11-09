@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/spf13/cobra"
 
@@ -264,6 +266,8 @@ func dryRunRecord(opts, resourceOpts migration.Options, info *migration.Migratio
 	}
 }
 
+// printDryRunPreview summarizes the planned migration without printing collected resource contents.
+// Resource kinds are sorted so repeated previews present the same order.
 func printDryRunPreview(opts, resourceOpts migration.Options, info *migration.MigrationInfo) error {
 	success(fmt.Sprintf("ClusterObjectSet API established; using operator-controller namespace %s", info.SystemNamespace))
 
@@ -281,8 +285,8 @@ func printDryRunPreview(opts, resourceOpts migration.Options, info *migration.Mi
 	for _, obj := range info.CollectedObjects {
 		kindCounts[obj.GetKind()]++
 	}
-	for kind, count := range kindCounts {
-		detail(fmt.Sprintf("%s:", kind), fmt.Sprintf("%d object(s)", count))
+	for _, kind := range slices.Sorted(maps.Keys(kindCounts)) {
+		detail(fmt.Sprintf("%s:", kind), fmt.Sprintf("%d object(s)", kindCounts[kind]))
 	}
 
 	fmt.Printf("\n  ClusterExtension that would be created:\n")
