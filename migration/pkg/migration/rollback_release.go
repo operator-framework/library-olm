@@ -274,27 +274,6 @@ func (m *Migrator) waitForRollbackRevisionsRemoved(ctx context.Context, ce *ocv1
 		if err := m.listMigrationRevisions(ctx, ce, &revisions); err != nil {
 			return false, err
 		}
-		migrationName := ce.Name + "-1"
-		foundMigrationRevision := false
-		for i := range revisions.Items {
-			if revisions.Items[i].Name == migrationName {
-				foundMigrationRevision = true
-				break
-			}
-		}
-		if !foundMigrationRevision {
-			var migrationRevision ocv1.ClusterObjectSet
-			err := m.Client.Get(ctx, client.ObjectKey{Name: migrationName}, &migrationRevision)
-			if client.IgnoreNotFound(err) != nil {
-				return false, err
-			}
-			if err == nil {
-				if err := m.validateRollbackRevision(ctx, &migrationRevision, ce); err != nil {
-					return false, err
-				}
-				revisions.Items = append(revisions.Items, migrationRevision)
-			}
-		}
 		if len(revisions.Items) == 0 {
 			emptyObservations++
 			return emptyObservations >= 3, nil
@@ -324,7 +303,7 @@ func (m *Migrator) waitForRollbackRevisionsRemoved(ctx context.Context, ce *ocv1
 }
 
 // releaseRevisionObjects waits for orphan propagation, then removes metadata
-// written by the old object controller. The UID and recorded metadata guard
+// written by the revisions being removed. The UID and recorded metadata guard
 // against modifying an object replaced or adopted during rollback.
 func (m *Migrator) releaseRevisionObjects(ctx context.Context, objects []rollbackObject) error {
 	for _, original := range objects {

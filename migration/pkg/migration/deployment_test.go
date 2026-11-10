@@ -352,7 +352,7 @@ func TestRollbackRevisionControllerOwnership(t *testing.T) {
 		missingCOD bool
 		wantError  bool
 	}{
-		{name: "orphaned or legacy revision"},
+		{name: "orphaned revision"},
 		{name: "CE controller", owner: metav1.NewControllerRef(ce, ocv1.GroupVersion.WithKind(ocv1.ClusterExtensionKind))},
 		{name: "COD controller", owner: metav1.NewControllerRef(cod, ocv1.GroupVersion.WithKind(ocv1.ClusterObjectDeploymentKind))},
 		{name: "missing COD cannot verify UID", owner: metav1.NewControllerRef(cod, ocv1.GroupVersion.WithKind(ocv1.ClusterObjectDeploymentKind)), missingCOD: true, wantError: true},
@@ -375,12 +375,11 @@ func TestRollbackRevisionControllerOwnership(t *testing.T) {
 			}
 		})
 	}
-	// The old initial revision may lack both group and label; other unowned
-	// objects without any migration identity must not be admitted by name alone.
+	// A matching name cannot substitute for the required group.
 	m := migrationTestClient(t, ce)
 	for _, name := range []string{"example-1", "unrelated"} {
-		revision := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: name}}
-		if err := m.validateRollbackRevision(context.Background(), revision, ce); (err != nil) != (name == "unrelated") {
+		revision := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{LabelOwnerName: ce.Name}}}
+		if err := m.validateRollbackRevision(context.Background(), revision, ce); err == nil {
 			t.Fatalf("validation of %s = %v", name, err)
 		}
 	}
