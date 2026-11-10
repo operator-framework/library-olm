@@ -5,7 +5,7 @@ This document tracks the implemented portion of the Phase 8 E2E plan from
 rejection paths, real-operator smoke scenarios, COS supersession, and an in-cluster Job that
 verifies ServiceAccount authentication.
 
-The suites install experimental OLMv1 because migration requires its COS API. The
+The suites install experimental OLMv1 because migration requires its COD and COS APIs. The
 system-managed namespace scenario uses the same profile, so standard-profile availability is
 not a migration gap. Dependency and APIService fixtures verify intentional compatibility
 refusals, not features this library is expected to implement.
@@ -19,15 +19,13 @@ The handoff test checks that the ownerless migration COD
 has `apps.kubernetes.io/managed-by: operator-controller` before CE creation and
 retains the label and COD UID after adoption.
 Migration COS revisions carry `apps.kubernetes.io/managed-by: object-controller`.
-The handoff test checks this value on the initial revision in both modes and on
-the COD-generated catalog revision. Unit tests cover direct COS creation, while
-the COD controller stamps its own generated revisions.
+The handoff test checks this value on the initial revision and on
+the COD-generated catalog revision. Unit tests reject missing COD prerequisites; the COD controller stamps its own generated revisions.
 Unit regressions cover definitive create rejection recovery, terminal rollout
 diagnostics, and rollback retries with dangling references to verified COD UIDs.
 
-Migration automatically creates a COD named after the CE when the COD CRD exists;
-otherwise it directly creates a COS using the current API definitions.
-A present but unready COD CRD or a discovery error blocks migration rather than falling back.
+Migration always creates a COD named after the CE. Missing, deleting, unestablished,
+or unreadable COD CRDs block migration before OLMv0 mutations. No direct-COS fallback exists.
 COD migration requires the COD API/controller and the COD-backed CE applier merged in
 operator-controller PR #3058. The library's pinned API dependency alone does not
 install that controller. Unit tests exercise creation, preflight, readiness and
@@ -127,7 +125,7 @@ The currently implemented coverage is described in the Fixtures and CI sections.
 
 | Validation IDs | Scenario | Required assertions |
 |---|---|---|
-| V1.1, V1.2, V1.3, V3.1–V3.7 | Baseline fixture migration | `check`, dry-run, COS `status.completedAt` and `Ready=True` before CE creation, CE `Installed=True`, field mappings, CE backups/audit, Sub/CSV cleanup. |
+| V1.1, V1.2, V1.3, V3.1–V3.7 | Baseline fixture migration | `check`, dry-run, COD rollout completion and availability before CE creation, CE `Installed=True`, field mappings, CE backups/audit, Sub/CSV cleanup. |
 | V4.7 | Cross-namespace fixture migration | Target namespace is created with copied PSA/SCC labels; source Deployments are scaled to zero before target creation; CE and rendered Deployment use the target; collected source Deployment is removed while the source namespace remains. |
 | V4.7 | Acknowledged live namespace deletion | A real OLMv0 installation is converted with `--acknowledge-namespace-delete`; after CE installation in the target namespace, OLMv0 finalizes the CSV and the source namespace is deleted. |
 | V4.8 | System-managed namespace fixture migration | Against the experimental controller profile, verify the explicit opt-in omits `spec.namespace`, migration imports the prepared bundle-metadata namespace into its COS, the catalog COS takes ownership, OLMv1 manages the target Deployment there, and source copies are removed. Unit tests verify unsupported CRDs reject the mode before mutation. |

@@ -74,12 +74,12 @@ func TestPrepareClusterObjectSetSystemManagedNamespaceCapability(t *testing.T) {
 		SystemNamespace:               "operator-controller",
 	}
 
-	m := migrationTestClient(t, establishedClusterObjectSetCRD(), establishedClusterExtensionCRD(false))
+	m := migrationTestClient(t, establishedClusterObjectSetCRD(), establishedClusterObjectDeploymentCRD(), establishedClusterExtensionCRD(false))
 	if _, err := m.PrepareClusterObjectSet(ctx, opts); err != nil {
 		t.Fatalf("PrepareClusterObjectSet() optional namespace error = %v", err)
 	}
 
-	m = migrationTestClient(t, establishedClusterObjectSetCRD(), establishedClusterExtensionCRD(true))
+	m = migrationTestClient(t, establishedClusterObjectSetCRD(), establishedClusterObjectDeploymentCRD(), establishedClusterExtensionCRD(true))
 	if _, err := m.PrepareClusterObjectSet(ctx, opts); err == nil || !strings.Contains(err.Error(), "optional spec.namespace") {
 		t.Fatalf("PrepareClusterObjectSet() required namespace error = %v, want capability error", err)
 	}

@@ -42,7 +42,6 @@ var annotationPrefixesToStrip = []string{
 // Recovery must never infer ownership from predictable names or labels: another
 // migration may have created objects with the same values after this one started.
 type createdMigrationResources struct {
-	cos              *ocv1.ClusterObjectSet
 	cod              *ocv1.ClusterObjectDeployment
 	secrets          []corev1.Secret
 	ce               *ocv1.ClusterExtension
@@ -62,7 +61,7 @@ const migrationInvocationAnnotation = "olm.operatorframework.io/migration-invoca
 // readiness, compatibility, catalog availability, and target prerequisites
 // before removing OLMv0 management. It backs up the Subscription spec in the
 // ClusterExtension annotations, creates and waits for the migration
-// ClusterObjectSet, creates and waits for the ClusterExtension, then cleans up
+// ClusterObjectDeployment, creates and waits for the ClusterExtension, then cleans up
 // OLMv0 artifacts. An optional disk backup is best-effort; failure to write it
 // is reported through Progress when configured but does not stop migration.
 //
@@ -161,8 +160,8 @@ func (m *Migrator) migrate(ctx context.Context, opts Options, nextStep func(Prog
 		return err
 	}
 	info.CollectedObjects = objects
-	// The migration COS is applied before the CE. Bootstrap the metadata-derived
-	// namespace so its namespaced objects can succeed, then include it in the COS
+	// The migration COD rolls out before the CE. Bootstrap the metadata-derived
+	// namespace so its namespaced objects can succeed, then include it in the template
 	// so the controller's catalog-derived revision can take over its ownership.
 	if err := m.PrepareInstallNamespace(ctx, resourceOpts); err != nil {
 		return err
@@ -225,7 +224,7 @@ func (m *Migrator) migrate(ctx context.Context, opts Options, nextStep func(Prog
 	result, err := m.CreateMigrationResources(ctx, opts, info, backup)
 	if err != nil {
 		if result.TargetMayBeActive {
-			return fmt.Errorf("create migration resources: %w; target ClusterObjectSet may be active, so source Deployments remain scaled to zero", err)
+			return fmt.Errorf("create migration resources: %w; target ClusterObjectDeployment may be active, so source Deployments remain scaled to zero", err)
 		}
 		restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
@@ -249,8 +248,8 @@ func (m *Migrator) migrate(ctx context.Context, opts Options, nextStep func(Prog
 	return nil
 }
 
-// PrepareClusterObjectSet validates that this cluster can accept the OLMv1
-// objects migration creates and resolves where SecretPacker data belongs. It
+// PrepareClusterObjectSet validates the required COD and COS APIs and resolves
+// where SecretPacker data belongs. Despite the historical method name, it
 // must run before PrepareForMigration, which deletes OLMv0 management objects.
 func (m *Migrator) PrepareClusterObjectSet(ctx context.Context, opts Options) (Options, error) {
 	opts.ApplyDefaults()
@@ -260,15 +259,8 @@ func (m *Migrator) PrepareClusterObjectSet(ctx context.Context, opts Options) (O
 	if err := m.ensureClusterObjectSetCRD(ctx); err != nil {
 		return opts, err
 	}
-	useCOD, err := m.hasClusterObjectDeploymentCRD(ctx)
-	if err != nil {
+	if err := m.prepareClusterObjectDeployment(ctx, opts.ClusterExtensionName); err != nil {
 		return opts, err
-	}
-	opts.UseClusterObjectDeployment = useCOD
-	if useCOD {
-		if err := m.prepareClusterObjectDeployment(ctx, opts.ClusterExtensionName); err != nil {
-			return opts, err
-		}
 	}
 	if opts.SystemManagedInstallNamespace {
 		if opts.InstallNamespace != "" {
@@ -518,15 +510,15 @@ func (m *Migrator) RecoverFromBackup(ctx context.Context, opts Options, backup *
 }
 
 // RecoverBeforeCE restores the Subscription after a failure before a migration
-// resource was created. It deliberately does not delete a predictably named COS
+// resource was created. It deliberately does not delete a predictably named COD
 // or Secret because this invocation cannot establish ownership of such objects.
 func (m *Migrator) RecoverBeforeCE(ctx context.Context, opts Options, backup *Backup) error {
 	return m.RecoverFromBackup(ctx, opts, backup)
 }
 
 // recoverCreatedMigrationResources restores OLMv0 only while no target
-// ClusterObjectSet can be active. Once a COS may have reconciled, it preserves
-// the COS, its Secrets, and the ClusterExtension (including its backup
+// ClusterObjectDeployment can be active. Once a COD may have reconciled, it preserves
+// the COD, its revisions, Secrets, and the ClusterExtension (including its backup
 // annotations) for explicit operator recovery rather than deleting evidence
 // needed to roll the migration back safely.
 func (m *Migrator) recoverCreatedMigrationResources(ctx context.Context, opts Options, backup *Backup, resources *createdMigrationResources) error {
@@ -540,9 +532,6 @@ func (m *Migrator) recoverCreatedMigrationResources(ctx context.Context, opts Op
 	}
 	if resources.cod != nil {
 		return fmt.Errorf("target ClusterObjectDeployment may have reconciled; preserving migration resources and refusing automatic OLMv0 recovery")
-	}
-	if resources.cos != nil {
-		return fmt.Errorf("target ClusterObjectSet may have reconciled; preserving migration resources and refusing automatic OLMv0 recovery")
 	}
 	if resources.ce != nil {
 		if err := m.deleteTrackedResource(recoveryCtx, resources.ce); err != nil && client.IgnoreNotFound(err) != nil {
@@ -601,38 +590,35 @@ func (m *Migrator) ensureClusterExtensionAbsent(ctx context.Context, name string
 	return nil
 }
 
-// CreateClusterObjectSet builds and creates a COS from the collected resources.
-// It uses CollisionProtection=None; the controller creates the subsequent catalog-derived revision.
-// The COS is annotated with the source Subscription reference.
-//
-// With UseClusterObjectDeployment, it creates a COD and waits for the controller
-// to create and complete the migration revision instead.
+// CreateClusterObjectSet stages collected resources through a ClusterObjectDeployment
+// and waits for its rollout to complete. The COD controller creates the COS revisions.
+// The method retains its original name for callers; it never creates a COS directly.
 func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, info *MigrationInfo) error {
 	var err error
 	opts, err = m.PrepareClusterObjectSet(ctx, opts)
 	if err != nil {
 		return err
 	}
-	resources, err := m.createClusterObjectSet(ctx, opts, info)
+	resources, err := m.createMigrationDeployment(ctx, opts, info)
 	if err != nil {
-		if cleanupErr := m.cleanupCreatedClusterObjectSet(ctx, resources); cleanupErr != nil {
+		if cleanupErr := m.cleanupCreatedDeployment(ctx, resources); cleanupErr != nil {
 			return errors.Join(err, cleanupErr)
 		}
 	}
 	return err
 }
 
-// CreateMigrationResources creates the ClusterObjectSet and its ClusterExtension
-// as one recoverable operation. Its result reports whether a target COS may have
+// CreateMigrationResources creates the ClusterObjectDeployment and its ClusterExtension
+// as one recoverable operation. Its result reports whether a target COD may have
 // started reconciling, including when cleanup was requested after a failure.
 func (m *Migrator) CreateMigrationResources(ctx context.Context, opts Options, info *MigrationInfo, backup *Backup) (MigrationResourcesResult, error) {
-	resources, err := m.createClusterObjectSet(ctx, opts, info)
+	resources, err := m.createMigrationDeployment(ctx, opts, info)
 	if err != nil {
-		result := MigrationResourcesResult{TargetMayBeActive: resources.cos != nil || resources.cod != nil || resources.ownershipUnknown}
+		result := MigrationResourcesResult{TargetMayBeActive: resources.cod != nil || resources.ownershipUnknown}
 		if recoverErr := m.recoverCreatedMigrationResources(ctx, opts, backup, resources); recoverErr != nil {
-			return result, fmt.Errorf("COS creation failed: %w; recovery also failed: %v", err, recoverErr)
+			return result, fmt.Errorf("COD creation failed: %w; recovery also failed: %v", err, recoverErr)
 		}
-		return result, fmt.Errorf("COS creation failed (recovered): %w", err)
+		return result, fmt.Errorf("COD creation failed (recovered): %w", err)
 	}
 
 	ce, ownershipUnknown, err := m.createClusterExtension(ctx, opts, info)
@@ -641,7 +627,7 @@ func (m *Migrator) CreateMigrationResources(ctx context.Context, opts Options, i
 	}
 	resources.ownershipUnknown = resources.ownershipUnknown || ownershipUnknown
 	if err != nil {
-		result := MigrationResourcesResult{TargetMayBeActive: resources.cos != nil || resources.cod != nil || resources.ownershipUnknown}
+		result := MigrationResourcesResult{TargetMayBeActive: resources.cod != nil || resources.ownershipUnknown}
 		if recoverErr := m.recoverCreatedMigrationResources(ctx, opts, backup, resources); recoverErr != nil {
 			return result, fmt.Errorf("ClusterExtension creation failed: %w; recovery also failed: %v", err, recoverErr)
 		}
@@ -650,24 +636,13 @@ func (m *Migrator) CreateMigrationResources(ctx context.Context, opts Options, i
 	return MigrationResourcesResult{}, nil
 }
 
-func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, info *MigrationInfo) (*createdMigrationResources, error) {
+func (m *Migrator) createMigrationDeployment(ctx context.Context, opts Options, info *MigrationInfo) (*createdMigrationResources, error) {
 	resources := &createdMigrationResources{}
-	useCOD, err := m.hasClusterObjectDeploymentCRD(ctx)
-	if err != nil {
+	opts.ApplyDefaults()
+	if err := m.prepareClusterObjectDeployment(ctx, opts.ClusterExtensionName); err != nil {
 		return resources, err
 	}
-	opts.UseClusterObjectDeployment = useCOD
-	if useCOD {
-		if err := m.prepareClusterObjectDeployment(ctx, opts.ClusterExtensionName); err != nil {
-			return resources, err
-		}
-	}
 	invocationMarker := string(uuid.NewUUID())
-	cosName := fmt.Sprintf("%s-1", opts.ClusterExtensionName)
-	packingName := cosName
-	if opts.UseClusterObjectDeployment {
-		packingName = opts.ClusterExtensionName
-	}
 
 	cosObjects := make([]ocv1ac.ClusterObjectSetObjectApplyConfiguration, 0, len(info.CollectedObjects))
 	for _, obj := range info.CollectedObjects {
@@ -685,7 +660,7 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 	// TODO: consider exporting secretPacker so consumers can configure whether to use
 	// Secret-backed refs or inline objects (useful for small bundles or testing).
 	packer := &secretPacker{
-		RevisionName:    packingName,
+		RevisionName:    opts.ClusterExtensionName,
 		OwnerName:       opts.ClusterExtensionName,
 		SystemNamespace: opts.SystemNamespace,
 	}
@@ -708,12 +683,10 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 		return err
 	}
 
-	// Create ref Secrets before the COS so the COS controller can find them immediately.
+	// Create ref Secrets before the COD so its revisions can resolve them immediately.
 	for i := range packed.Secrets {
 		secret := &packed.Secrets[i]
-		if opts.UseClusterObjectDeployment {
-			delete(secret.Labels, LabelRevisionName)
-		}
+		delete(secret.Labels, LabelRevisionName)
 		if secret.Annotations == nil {
 			secret.Annotations = map[string]string{}
 		}
@@ -746,80 +719,14 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 		}
 	}
 
-	if opts.UseClusterObjectDeployment {
-		err := m.createClusterObjectDeployment(ctx, opts, info, phases, invocationMarker, resources)
-		if err != nil && resources.cod == nil {
-			return resources, failWithSecretCleanup(err)
-		}
-		return resources, err
+	err = m.createClusterObjectDeployment(ctx, opts, info, phases, invocationMarker, resources)
+	if err != nil && resources.cod == nil {
+		return resources, failWithSecretCleanup(err)
 	}
-
-	cosSpec := ocv1ac.ClusterObjectSetSpec().
-		WithGroup(opts.ClusterExtensionName).
-		WithRevision(1).
-		WithCollisionProtection(ocv1.CollisionProtectionNone).
-		WithLifecycleState(ocv1.ClusterObjectSetLifecycleStateActive).
-		WithPhases(phases...)
-
-	cosAnnotations := map[string]string{
-		MigratedFromSubscriptionAnnotation: fmt.Sprintf("%s/%s", opts.SubscriptionNamespace, opts.SubscriptionName),
-		LabelPackageName:                   info.PackageName,
-		LabelBundleName:                    info.BundleName,
-		LabelBundleVersion:                 info.Version,
-		migrationInvocationAnnotation:      invocationMarker,
-	}
-	if info.BundleImage != "" {
-		cosAnnotations[LabelBundleReference] = info.BundleImage
-	}
-
-	cos := ocv1ac.ClusterObjectSet(cosName).
-		WithSpec(cosSpec).
-		WithLabels(map[string]string{
-			LabelOwnerKind:           ocv1.ClusterExtensionKind,
-			LabelOwnerName:           opts.ClusterExtensionName,
-			controllerManagedByLabel: "object-controller",
-		}).
-		WithAnnotations(cosAnnotations)
-
-	cosData, err := json.Marshal(cos)
-	if err != nil {
-		return resources, failWithSecretCleanup(fmt.Errorf("failed to marshal COS: %w", err))
-	}
-	cosObj := &ocv1.ClusterObjectSet{}
-	if err := json.Unmarshal(cosData, cosObj); err != nil {
-		return resources, failWithSecretCleanup(fmt.Errorf("failed to decode COS: %w", err))
-	}
-
-	// A migration owns only a newly created revision. Applying an existing COS
-	// can overwrite its ownership or fail on immutable phases, making recovery
-	// and Secret cleanup unsafe.
-	if err := m.Client.Create(ctx, cosObj); err != nil {
-		if createWasRejected(err) {
-			return resources, failWithSecretCleanup(fmt.Errorf("failed to create ClusterObjectSet: %w", err))
-		}
-		if apierrors.IsAlreadyExists(err) {
-			resources.ownershipUnknown = true
-			return resources, failWithSecretCleanup(fmt.Errorf("failed to create ClusterObjectSet: %w", err))
-		}
-		if m.resolveCreatedObject(context.WithoutCancel(ctx), cosObj, invocationMarker) {
-			resources.cos = cosObj
-			return resources, fmt.Errorf("failed to create ClusterObjectSet: %w", err)
-		}
-		resources.ownershipUnknown = true
-		return resources, fmt.Errorf("failed to create ClusterObjectSet: %w", err)
-	}
-	resources.cos = cosObj
-
-	if err := m.WaitForCOSSucceeded(ctx, cosName); err != nil {
-		return resources, err
-	}
-	if err := m.WaitForClusterObjectSetAvailable(ctx, cosName); err != nil {
-		return resources, err
-	}
-	return resources, nil
+	return resources, err
 }
 
-func (m *Migrator) cleanupCreatedClusterObjectSet(ctx context.Context, resources *createdMigrationResources) error {
+func (m *Migrator) cleanupCreatedDeployment(ctx context.Context, resources *createdMigrationResources) error {
 	if resources == nil {
 		return nil
 	}
@@ -827,15 +734,10 @@ func (m *Migrator) cleanupCreatedClusterObjectSet(ctx context.Context, resources
 		return fmt.Errorf("ClusterObjectDeployment may have reconciled; preserving its revisions and Secrets for explicit recovery")
 	}
 	if resources.ownershipUnknown {
-		return fmt.Errorf("ClusterObjectSet creation outcome is unknown; refusing automatic cleanup")
+		return fmt.Errorf("ClusterObjectDeployment creation outcome is unknown; refusing automatic cleanup")
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	if resources.cos != nil {
-		if err := m.deleteTrackedResource(cleanupCtx, resources.cos, client.PropagationPolicy(metav1.DeletePropagationOrphan)); err != nil && client.IgnoreNotFound(err) != nil {
-			return fmt.Errorf("delete created ClusterObjectSet: %w", err)
-		}
-	}
 	return m.cleanupCreatedSecrets(cleanupCtx, resources.secrets)
 }
 
