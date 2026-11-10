@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Creates a disposable cluster for the migration E2E suites. Manifest locations are
-# required inputs: CI supplies immutable, mirrored copies when it cannot access
-# the public release URLs.
+# Creates a disposable cluster for the migration E2E suites using pinned OLMv0
+# manifests and the current experimental operator-controller source.
 : "${E2E_KUBECONFIG:?E2E_KUBECONFIG is required}"
 : "${OLM_V0_CRDS:?OLM_V0_CRDS is required}"
 : "${OLM_V0_MANIFEST:?OLM_V0_MANIFEST is required}"
-: "${OLM_V1_INSTALL:?OLM_V1_INSTALL is required}"
-: "${OLM_V1_INSTALL_SHA256:?OLM_V1_INSTALL_SHA256 is required}"
+: "${OLM_V1_COMMIT:?OLM_V1_COMMIT is required}"
 : "${KIND:?KIND is required}"
 
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
@@ -35,16 +33,9 @@ if [[ ${E2E_INSTALL_OLMV0:-true} == true ]]; then
 	kubectl --kubeconfig "$E2E_KUBECONFIG" -n olm wait --for=condition=Available deployment/catalog-operator --timeout=5m
 fi
 
-# ClusterObjectSet is an experimental OLMv1 API and is required by the migration
-# code, so use operator-controller's experimental installer rather than standard.
-# Download a pinned release installer before executing it, restricting redirects
-# to HTTPS and verifying its recorded SHA-256.
+# Install the controller matching the current experimental COS/COD definitions.
 if ! kubectl --kubeconfig "$E2E_KUBECONFIG" get crd/clusterextensions.olm.operatorframework.io >/dev/null 2>&1; then
-	installer=$(mktemp)
-	trap 'rm -f "$installer"' EXIT
-	curl --fail --location --proto '=https' --proto-redir '=https' --silent --show-error "$OLM_V1_INSTALL" --output "$installer"
-	printf '%s  %s\n' "$OLM_V1_INSTALL_SHA256" "$installer" | sha256sum --check --status
-	KUBECONFIG="$E2E_KUBECONFIG" bash "$installer"
+	E2E_CLUSTER_NAME="$cluster_name" "$root_dir/hack/e2e/migration/install-olmv1.sh"
 fi
 kubectl --kubeconfig "$E2E_KUBECONFIG" wait --for=condition=Established crd/clusterextensions.olm.operatorframework.io crd/clustercatalogs.olm.operatorframework.io --timeout=5m
 kubectl --kubeconfig "$E2E_KUBECONFIG" -n olmv1-system wait --for=condition=Available deployment/operator-controller-controller-manager deployment/catalogd-controller-manager --timeout=5m

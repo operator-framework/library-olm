@@ -14,7 +14,7 @@ refusals, not features this library is expected to implement.
 
 ### COD transition
 
-The library API dependency and COD CI controller both use commit `77754d81ea01`.
+The library API dependency and COD CI controller both use commit `c6e63b616662`.
 The handoff test checks that the ownerless migration COD
 has `apps.kubernetes.io/managed-by: operator-controller` before CE creation and
 retains the label and COD UID after adoption.
@@ -26,7 +26,7 @@ Unit regressions cover definitive create rejection recovery, terminal rollout
 diagnostics, and rollback retries with dangling references to verified COD UIDs.
 
 Migration automatically creates a COD named after the CE when the COD CRD exists;
-otherwise it directly creates a COS, including against the default v1.12.0 installation.
+otherwise it directly creates a COS using the current API definitions.
 A present but unready COD CRD or a discovery error blocks migration rather than falling back.
 COD migration requires the COD API/controller and the COD-backed CE applier merged in
 operator-controller PR #3058. The library's pinned API dependency alone does not
@@ -39,13 +39,22 @@ conversion and acknowledged rollback preserved the operator Deployment UID and i
 available replica, restored the Subscription, and removed the COD and both COS revisions.
 The `migration/test-e2e-cod-rollback` target now automates those rollback assertions and
 collects CLI coverage. A separate CI job builds and installs operator-controller from
-pinned commit `77754d81ea0125d3a850e9fa57decf7a7255a409`, then runs the handoff and
-rollback targets. Default suites continue to exercise the legacy COS path.
+pinned commit `c6e63b6166621b33a6de781c231bbcc97b5ca2c7`, then runs the handoff and
+rollback targets. Default suites also build this pinned controller from source,
+using upstream build targets and the experimental installer. Docker, Git, and
+`envsubst` must be available locally. Setup loads the built images into the
+existing kind cluster without recreating it.
 
-Both covered targets passed locally against `77754d81ea01` on
-kind Kubernetes 1.37: handoff in 25.7 seconds and fixture conversion/rollback in
-26.7 seconds. This verifies the revision labels and COD adoption requirement with the
-actual controller, as well as workload-preserving rollback after adoption.
+COS/COD are experimental: only the current typed `inlineManifest`/`objectRef`
+entries are supported. There is no conversion of older experimental resource
+schemas. Recreate clusters installed with older definitions before running these
+suites. Fixture rollback verifies restoration, not OLMv0 reconciliation, because
+fixture clusters have no OLMv0 controllers.
+
+Both covered targets passed locally against `c6e63b616662` on kind Kubernetes
+1.37: handoff in 25.9 seconds and fixture conversion/rollback in 26.8 seconds.
+The default source-build bootstrap also passed. These checks verify current
+revision encoding, COD adoption, and workload-preserving rollback.
 
 ### Existing suites
 
@@ -57,11 +66,10 @@ actual controller, as well as workload-preserving rollback after adoption.
 
 Do not use a mutable public `latest` image or an unpinned release installer in CI. The fixture
 registry's `latest` tag is private to the disposable cluster and rebuilt from committed inputs on
-every setup. The default bootstrap pins OLMv0 to `v0.46.0`, OLMv1 to `v1.12.0`, and kind to
+every setup. The default bootstrap pins OLMv0 to `v0.46.0`, OLMv1 to commit `c6e63b616662`, and kind to
 `v0.33.0` with the digest-pinned Kubernetes `v1.37.0` node image; CI should
 mirror those release artifacts and override the URLs when it cannot access GitHub. The job inputs
-are the kind node image, OLMv0 manifest URL and digest, operator-controller release
-manifest URL and digest, and (only for the smoke suite) the catalog image/package/channel/CSV
+are the kind node image, OLMv0 manifest URL and digest, operator-controller source commit, and (only for the smoke suite) the catalog image/package/channel/CSV
 version. The fixture catalog is constructed from committed snapshots on every fixture-cluster
 setup, so it does not rely on a retained Quay digest or a mutable external catalog tag.
 
@@ -73,7 +81,7 @@ setup, so it does not rely on a retained Quay digest or a mutable external catal
    an optional override for that generated output path.
 2. Live only: apply the pinned OLMv0 quickstart manifest and wait for both `olm-operator` and
    `catalog-operator` deployments to be Available.
-3. Live only: install the pinned experimental operator-controller release and wait for its deployment,
+3. Live only: build and install the pinned experimental operator-controller and wait for its deployment,
    catalogd, cert provider, and required CRDs to be established.
 4. For the fixture suite, run `make migration/e2e-fixture-setup` to create (or reuse) the separate
    `library-olm-fixture-e2e` cluster and generate `.kubeconfig/library-olm-fixture-e2e`. This
@@ -195,8 +203,8 @@ in-cluster Job E2E, COS-supersession E2E, and pinned COD handoff/rollback E2E as
 live, COS-supersession, and COD tests publish coverage inputs; a dependent coverage job displays
 their combined report. The Job intentionally does not upload diagnostics or coverage artifacts.
 
-The supersession check is deliberately separate from the conversion matrix. With the released
-operator-controller v1.12.0, migration creates revision 1 with collision protection `None`;
+The supersession check is deliberately separate from the conversion matrix. With the pinned
+experimental controller, migration creates revision 1 with collision protection `None`;
 creating the ClusterExtension results in a controller-owned, catalog-derived revision 2 with
 collision protection `Prevent`. The check requires both revisions to succeed.
 

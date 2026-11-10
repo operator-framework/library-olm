@@ -679,7 +679,7 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 	for _, obj := range info.CollectedObjects {
 		stripped := stripResource(obj)
 		cosObjects = append(cosObjects, *ocv1ac.ClusterObjectSetObject().
-			WithObject(stripped).
+			WithType(ocv1.ObjectTypeInlineManifest).WithInlineManifest(stripped).
 			WithCollisionProtection(ocv1.CollisionProtectionNone))
 	}
 
@@ -743,8 +743,9 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 	for pos, ref := range packed.Refs {
 		phaseIdx, objIdx := pos[0], pos[1]
 		localRef := ref
-		phases[phaseIdx].Objects[objIdx].Object = nil
-		phases[phaseIdx].Objects[objIdx].Ref = &ocv1ac.ObjectSourceRefApplyConfiguration{
+		phases[phaseIdx].Objects[objIdx].InlineManifest = nil
+		phases[phaseIdx].Objects[objIdx].WithType(ocv1.ObjectTypeObjectReference)
+		phases[phaseIdx].Objects[objIdx].ObjectRef = &ocv1ac.ObjectSourceRefApplyConfiguration{
 			Name:      &localRef.Name,
 			Namespace: &localRef.Namespace,
 			Key:       &localRef.Key,

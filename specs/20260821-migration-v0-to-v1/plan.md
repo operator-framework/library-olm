@@ -44,7 +44,7 @@ Verified during Phase 8 E2E.
 
 **COD transition (R2.7), in progress:** the library selects COD creation when its CRD exists,
 current-generation rollout checks, and COD-aware rollback. API types are pinned to
-operator-controller commit `77754d81ea01`, matching the COD CI controller and including
+operator-controller commit `c6e63b616662`, matching the COD CI controller and including
 the adoption label requirement. Migration stamps `apps.kubernetes.io/managed-by:
 operator-controller` on the ownerless COD before handoff; unit and E2E assertions
 check this label and preservation of the original COD identity. Directly created
@@ -58,8 +58,8 @@ PR #3058. On 2026-10-29, a disposable kind cluster running operator-controller m
 and its revisions 1 and 2 used `None` and `Prevent` collision protection. A separate
 full CLI fixture conversion and acknowledged rollback restored the Subscription,
 removed COD/COS resources, and preserved the operator Deployment UID and availability.
-The default E2E setup remains pinned to v1.12.0 for the legacy path. A separate CI job
-builds pinned COD-capable commit `77754d81ea0125d3a850e9fa57decf7a7255a409` and
+The default E2E setup builds the pinned current experimental controller. A separate CI job
+builds pinned COD-capable commit `c6e63b6166621b33a6de781c231bbcc97b5ca2c7` and
 runs covered handoff and workload-preserving rollback E2E targets. The rollback target
 passed locally on 2026-10-29.
 Both covered targets passed again on 2026-11-05 against `bbe43971eadd` on kind
@@ -67,6 +67,9 @@ Kubernetes 1.37, verifying labeled COD adoption and rollback.
 The covered handoff and rollback targets also pass against `77754d81ea01`,
 including COS manager-label assertions. Direct COS creation and the
 `UnmanagedRevision` terminal condition are covered by unit regressions.
+The current API uses typed `inlineManifest`/`objectRef` entries for creation and
+rollback. Older experimental COS/COD schemas are not supported; the controller
+and library must use matching definitions.
 
 ---
 

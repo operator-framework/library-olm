@@ -10,6 +10,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	ocv1 "github.com/operator-framework/operator-controller/api/v1"
 	ocv1ac "github.com/operator-framework/operator-controller/applyconfigurations/api/v1"
 )
 
@@ -19,7 +20,7 @@ func largeConfigMap(name, payload string) *ocv1ac.ClusterObjectSetObjectApplyCon
 		"metadata": map[string]interface{}{"name": name},
 		"data":     map[string]interface{}{"payload": payload},
 	}}
-	return ocv1ac.ClusterObjectSetObject().WithObject(object)
+	return ocv1ac.ClusterObjectSetObject().WithType(ocv1.ObjectTypeInlineManifest).WithInlineManifest(object)
 }
 
 func TestSecretPackerSplitsLargeBundleAcrossSecrets(t *testing.T) {

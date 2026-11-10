@@ -392,13 +392,13 @@ func TestPhaseSortAndResourceKeys(t *testing.T) {
 		u.SetGroupVersionKind(schema.GroupVersionKind{Group: group, Version: "v1", Kind: kind})
 		u.SetNamespace(namespace)
 		u.SetName(name)
-		return *ocv1ac.ClusterObjectSetObject().WithObject(u)
+		return *ocv1ac.ClusterObjectSetObject().WithType(ocv1.ObjectTypeInlineManifest).WithInlineManifest(u)
 	}
 	phases := PhaseSort([]ocv1ac.ClusterObjectSetObjectApplyConfiguration{object("apps", "Deployment", "z", "b"), object("", "Secret", "z", "a"), object("apiextensions.k8s.io", "CustomResourceDefinition", "", "widgets.example.io"), object("apps", "Deployment", "a", "a")})
 	if len(phases) != 3 || *phases[0].Name != string(PhaseConfiguration) || *phases[1].Name != string(PhaseCRDs) || *phases[2].Name != string(PhaseDeploy) {
 		t.Fatalf("unexpected phases %#v", phases)
 	}
-	if *phases[2].CollisionProtection != ocv1.CollisionProtectionNone || phases[2].Objects[0].Object.GetNamespace() != "a" {
+	if *phases[2].CollisionProtection != ocv1.CollisionProtectionNone || phases[2].Objects[0].InlineManifest.GetNamespace() != "a" {
 		t.Fatalf("deployment phase not sorted with migration collision protection: %#v", phases[2])
 	}
 	a := unstructured.Unstructured{}
@@ -414,7 +414,7 @@ func TestPhaseSortAndResourceKeys(t *testing.T) {
 
 func TestSecretPacker(t *testing.T) {
 	obj := unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "one"}, "data": map[string]interface{}{"x": "y"}}}
-	phases := []*ocv1ac.ClusterObjectSetPhaseApplyConfiguration{ocv1ac.ClusterObjectSetPhase().WithObjects(ocv1ac.ClusterObjectSetObject().WithObject(obj), ocv1ac.ClusterObjectSetObject().WithObject(obj))}
+	phases := []*ocv1ac.ClusterObjectSetPhaseApplyConfiguration{ocv1ac.ClusterObjectSetPhase().WithObjects(ocv1ac.ClusterObjectSetObject().WithType(ocv1.ObjectTypeInlineManifest).WithInlineManifest(obj), ocv1ac.ClusterObjectSetObject().WithType(ocv1.ObjectTypeInlineManifest).WithInlineManifest(obj))}
 	result, err := (&secretPacker{RevisionName: "rev", OwnerName: "ce", SystemNamespace: "system"}).pack(phases)
 	if err != nil || len(result.Secrets) != 1 || len(result.Secrets[0].Data) != 1 || len(result.Refs) != 2 {
 		t.Fatalf("pack result=%#v err=%v", result, err)

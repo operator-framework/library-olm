@@ -176,10 +176,10 @@ func (m *Migrator) snapshotRevisionObjects(ctx context.Context, revisions []ocv1
 		revision := &revisions[i]
 		for _, phase := range revision.Spec.Phases {
 			for _, entry := range phase.Objects {
-				manifest := entry.Object
-				if entry.Ref.Name != "" {
+				manifest := entry.InlineManifest
+				if entry.ObjectRef.Name != "" {
 					var err error
-					manifest, err = m.rollbackReferencedObject(ctx, entry.Ref)
+					manifest, err = m.rollbackReferencedObject(ctx, entry.ObjectRef)
 					if err != nil {
 						return nil, fmt.Errorf("ClusterObjectSet %s phase %s: %w", revision.Name, phase.Name, err)
 					}

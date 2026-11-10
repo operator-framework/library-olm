@@ -133,20 +133,20 @@ func determinePhase(gk schema.GroupKind) Phase {
 
 func compareObjects(a, b ocv1ac.ClusterObjectSetObjectApplyConfiguration) int {
 	var aGVK, bGVK schema.GroupVersionKind
-	if a.Object != nil {
-		aGVK = a.Object.GroupVersionKind()
+	if a.InlineManifest != nil {
+		aGVK = a.InlineManifest.GroupVersionKind()
 	}
-	if b.Object != nil {
-		bGVK = b.Object.GroupVersionKind()
+	if b.InlineManifest != nil {
+		bGVK = b.InlineManifest.GroupVersionKind()
 	}
 	var aNs, bNs, aName, bName string
-	if a.Object != nil {
-		aNs = a.Object.GetNamespace()
-		aName = a.Object.GetName()
+	if a.InlineManifest != nil {
+		aNs = a.InlineManifest.GetNamespace()
+		aName = a.InlineManifest.GetName()
 	}
-	if b.Object != nil {
-		bNs = b.Object.GetNamespace()
-		bName = b.Object.GetName()
+	if b.InlineManifest != nil {
+		bNs = b.InlineManifest.GetNamespace()
+		bName = b.InlineManifest.GetName()
 	}
 	return cmp.Or(
 		cmp.Compare(aGVK.Group, bGVK.Group),
@@ -164,8 +164,8 @@ func PhaseSort(unsortedObjs []ocv1ac.ClusterObjectSetObjectApplyConfiguration) [
 
 	for _, obj := range unsortedObjs {
 		var gk schema.GroupKind
-		if obj.Object != nil {
-			gk = obj.Object.GroupVersionKind().GroupKind()
+		if obj.InlineManifest != nil {
+			gk = obj.InlineManifest.GroupVersionKind().GroupKind()
 		}
 		phase := determinePhase(gk)
 		phaseMap[phase] = append(phaseMap[phase], obj)

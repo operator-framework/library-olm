@@ -119,10 +119,10 @@ breaking API changes permitted while `v0`. Two binaries. Prow + GitHub Actions C
 
 **R2.2** — Target OLMv1's `ClusterObjectSet` (COS). The `perdasilva` prototype uses the
 old `ClusterExtensionRevision` name throughout; all references must be updated to
-`ClusterObjectSet` / `ClusterObjectSetList` / `ClusterObjectSetTypeSucceeded`.
+`ClusterObjectSet` / `ClusterObjectSetList`.
 
 **R2.3** — The migration tool **creates** the COS, then **waits** for the COS controller
-to set `Succeeded=True`, then creates the `ClusterExtension`. With operator-controller v1.12.0,
+to set `status.completedAt`, then creates the `ClusterExtension`.
 the controller creates a subsequent catalog-derived COS revision rather than adopting the
 migration COS. The tool **must not** write
 status on any OLMv1 API. No operator-controller changes are required (verified — see
@@ -152,8 +152,8 @@ The directory is created if it does not exist. Failure to list associated plans 
 
 **R2.7 — Boxcutter phase 2.** Support one `ClusterObjectDeployment` (COD) per
 ClusterExtension, with controller-managed COS revisions. The initial implementation is
-selected automatically when the COD CRD exists; when absent, the released v1.12.0 COS
-workflow is retained. Discovery errors must fail rather than silently fall back. COD migration requires an established
+selected automatically when the COD CRD exists; when absent, the direct COS
+workflow uses the current COS definitions. Discovery errors must fail rather than silently fall back. COD migration requires an established
 COD CRD and operator-controller's COD-backed ClusterExtension applier (upstream PR #3058).
 Create the deployment with collision protection `None`, wait for current-generation rollout
 completion and availability, then create the CE to hand management to operator-controller.
@@ -166,6 +166,10 @@ Directly created migration COS revisions carry `apps.kubernetes.io/managed-by:
 object-controller` so a COD can adopt an ownerless revision in its group.
 COD-generated COS revisions receive this label from object-controller. The two
 manager values apply to different resources and must not be interchanged.
+Use the current revision object union (`type: InlineManifest` with `inlineManifest`,
+or `type: ObjectReference` with `objectRef`). COS and COD are experimental APIs;
+compatibility with older COS/COD schemas is not supported. Install a controller
+with matching API definitions before migration.
 Reject existing deployments/revision groups before destructive work. Rollback must stop the
 deployment with orphan deletion before removing revisions and restoring OLMv0 management.
 Persist verified deployment UIDs on the CE before deletion so late revisions with

@@ -91,11 +91,11 @@ func (p *secretPacker) pack(phases []*ocv1ac.ClusterObjectSetPhaseApplyConfigura
 
 	for phaseIdx, phase := range phases {
 		for objIdx, obj := range phase.Objects {
-			if obj.Object == nil {
+			if obj.InlineManifest == nil {
 				continue // already a ref
 			}
 
-			data, err := json.Marshal(obj.Object)
+			data, err := json.Marshal(obj.InlineManifest)
 			if err != nil {
 				return nil, fmt.Errorf("serializing object in phase %d index %d: %w", phaseIdx, objIdx, err)
 			}
