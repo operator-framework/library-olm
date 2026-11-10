@@ -7,9 +7,6 @@ BIN_DIR  := $(ROOT_DIR)/bin
 GOLANG_VERSION := $(shell sed -En 's/^go (.*)$$/\1/p' "go.mod")
 GO_BUILD_TAGS := containers_image_openpgp
 
-# bingo manages consistent tooling versions.
-include .bingo/Variables.mk
-
 # Migration-specific build and test targets live separately so this Makefile
 # remains the home for repository-wide targets.
 include $(ROOT_DIR)/migration.mk
@@ -50,8 +47,8 @@ image/test: ## Run image package unit tests
 ##@ Lint & Verify
 
 .PHONY: lint
-lint: $(GOLANGCI_LINT) ## Run golangci-lint
-	$(GOLANGCI_LINT) run --build-tags "$(GO_BUILD_TAGS)" ./...
+lint: ## Run golangci-lint
+	go tool golangci-lint run --build-tags "$(GO_BUILD_TAGS)" ./...
 
 .PHONY: fmt
 fmt: ## Run gofmt
@@ -70,8 +67,8 @@ verify: tidy fmt vet lint ## Run all verification steps (tidy, fmt, vet, lint)
 	@git diff --exit-code || (echo "Files modified by verify — please commit the changes" && exit 1)
 
 .PHONY: api-diff
-api-diff: $(GO_APIDIFF) ## Check for breaking API changes against origin/main
-	$(GO_APIDIFF) origin/main --repo-path=. --print-compatible
+api-diff: ## Check for breaking API changes against origin/main
+	go tool go-apidiff origin/main --repo-path=. --print-compatible
 
 ##@ Clean
 

@@ -20,6 +20,12 @@ The migration work follows a Specification-Driven Design (SDD) layout:
 | [specs/20260821-migration-v0-to-v1/plan.md](specs/20260821-migration-v0-to-v1/plan.md) | How it will be built (phased) |
 | [specs/20260821-migration-v0-to-v1/validation.md](specs/20260821-migration-v0-to-v1/validation.md) | How we prove it works |
 
+## Development tools
+
+The repository pins `golangci-lint`, `go-apidiff`, `kind`, and `crane` in the
+`tool` block of `go.mod`. Run them with `go tool <name>` or through the Make
+targets that use them, such as `make lint` and `make migration/e2e-fixture-setup`.
+
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).

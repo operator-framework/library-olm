@@ -49,12 +49,12 @@ migration/build-catalogs: ## Build migrate-catalogs-v0-to-v1 into bin/
 	go build -cover -covermode=count -o $(MIGRATE_CATALOGS_BIN) ./migration/examples/cmd/migrate-catalogs-v0-to-v1
 
 .PHONY: migration/build-e2e-image
-migration/build-e2e-image: $(KIND) ## Build and load an uninstrumented migration CLI image into the fixture kind cluster
+migration/build-e2e-image: ## Build and load an uninstrumented migration CLI image into the fixture kind cluster
 	@mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 go build -o $(MIGRATE_OPERATORS_BIN) ./migration/examples/cmd/migrate-operators-v0-to-v1
 	CGO_ENABLED=0 go build -o $(MIGRATE_CATALOGS_BIN) ./migration/examples/cmd/migrate-catalogs-v0-to-v1
 	docker build --tag "$(E2E_MIGRATION_IMAGE)" --file test/e2e/migration/migration-tool.Dockerfile .
-	$(KIND) load docker-image --name "$(E2E_FIXTURE_CLUSTER_NAME)" "$(E2E_MIGRATION_IMAGE)"
+	go tool kind load docker-image --name "$(E2E_FIXTURE_CLUSTER_NAME)" "$(E2E_MIGRATION_IMAGE)"
 
 .PHONY: migration/test-unit
 migration/test-unit: ## Run migration unit tests and write a coverage profile
@@ -67,17 +67,17 @@ migration/test-verbose: ## Run migration unit tests with verbose output
 	go test ./migration/... -v -count=1
 
 .PHONY: migration/e2e-setup
-migration/e2e-setup: $(KIND) ## Create kind and install pinned OLMv0 and OLMv1 releases
-	E2E_KUBECONFIG="$(E2E_KUBECONFIG)" E2E_CLUSTER_NAME="$(E2E_CLUSTER_NAME)" KIND="$(KIND)" OLM_V0_CRDS="$(OLM_V0_CRDS)" OLM_V0_MANIFEST="$(OLM_V0_MANIFEST)" OLM_V1_INSTALL="$(OLM_V1_INSTALL)" OLM_V1_INSTALL_SHA256="$(OLM_V1_INSTALL_SHA256)" ./hack/e2e/migration/setup.sh
+migration/e2e-setup: ## Create kind and install pinned OLMv0 and OLMv1 releases
+	E2E_KUBECONFIG="$(E2E_KUBECONFIG)" E2E_CLUSTER_NAME="$(E2E_CLUSTER_NAME)" OLM_V0_CRDS="$(OLM_V0_CRDS)" OLM_V0_MANIFEST="$(OLM_V0_MANIFEST)" OLM_V1_INSTALL="$(OLM_V1_INSTALL)" OLM_V1_INSTALL_SHA256="$(OLM_V1_INSTALL_SHA256)" ./hack/e2e/migration/setup.sh
 
 .PHONY: migration/e2e-fixture-setup
-migration/e2e-fixture-setup: $(KIND) $(CRANE) ## Create fixture kind cluster with OLMv0 APIs but no OLMv0 controllers
-	E2E_KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" E2E_CLUSTER_NAME="$(E2E_FIXTURE_CLUSTER_NAME)" E2E_INSTALL_OLMV0=false KIND="$(KIND)" OLM_V0_CRDS="$(OLM_V0_CRDS)" OLM_V0_MANIFEST="$(OLM_V0_MANIFEST)" OLM_V1_INSTALL="$(OLM_V1_INSTALL)" OLM_V1_INSTALL_SHA256="$(OLM_V1_INSTALL_SHA256)" ./hack/e2e/migration/setup.sh
-	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" CRANE="$(CRANE)" ./hack/e2e/migration/build-fixture-catalog.sh
+migration/e2e-fixture-setup: ## Create fixture kind cluster with OLMv0 APIs but no OLMv0 controllers
+	E2E_KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" E2E_CLUSTER_NAME="$(E2E_FIXTURE_CLUSTER_NAME)" E2E_INSTALL_OLMV0=false OLM_V0_CRDS="$(OLM_V0_CRDS)" OLM_V0_MANIFEST="$(OLM_V0_MANIFEST)" OLM_V1_INSTALL="$(OLM_V1_INSTALL)" OLM_V1_INSTALL_SHA256="$(OLM_V1_INSTALL_SHA256)" ./hack/e2e/migration/setup.sh
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/build-fixture-catalog.sh
 
 .PHONY: migration/e2e-teardown
-migration/e2e-teardown: $(KIND) ## Delete the dedicated migration kind cluster
-	E2E_CLUSTER_NAME="$(E2E_CLUSTER_NAME)" KIND="$(KIND)" ./hack/e2e/migration/teardown.sh
+migration/e2e-teardown: ## Delete the dedicated migration kind cluster
+	E2E_CLUSTER_NAME="$(E2E_CLUSTER_NAME)" ./hack/e2e/migration/teardown.sh
 
 .PHONY: migration/e2e-install-v0
 migration/e2e-install-v0: ## Install one migration E2E operator (E2E_OPERATOR=name) or all via OLMv0
@@ -132,8 +132,8 @@ migration/test-e2e-live-namespace-delete: migration/build ## Verify acknowledged
 
 .PHONY: migration/test-e2e-live-batch
 # Earlier live scenarios may restore OLMv0 Subscriptions; isolate --all first.
-migration/test-e2e-live-batch: migration/build $(KIND) ## Verify four-state batch selection against a live OLMv0 install
-	@E2E_CLUSTER_NAME="$(E2E_CLUSTER_NAME)" E2E_KUBECONFIG="$(E2E_KUBECONFIG)" KIND="$(KIND)" ./hack/e2e/migration/require-kind-cluster.sh
+migration/test-e2e-live-batch: migration/build ## Verify four-state batch selection against a live OLMv0 install
+	@E2E_CLUSTER_NAME="$(E2E_CLUSTER_NAME)" E2E_KUBECONFIG="$(E2E_KUBECONFIG)" ./hack/e2e/migration/require-kind-cluster.sh
 	@set -euo pipefail; \
 	while IFS=$$'\t' read -r operator channel namespace; do \
 		[[ -z "$$operator" || "$$operator" == \#* ]] && continue; \
@@ -175,8 +175,8 @@ migration/test-e2e-batch: migration/build ## Verify four-state batch selection a
 	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"
 
 .PHONY: migration/test-e2e-acceptance
-migration/test-e2e-acceptance: migration/build $(KIND) ## Verify remaining fixture acceptance cases with CLI coverage
-	@E2E_CLUSTER_NAME="$(E2E_FIXTURE_CLUSTER_NAME)" E2E_KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" KIND="$(KIND)" ./hack/e2e/migration/require-kind-cluster.sh
+migration/test-e2e-acceptance: migration/build ## Verify remaining fixture acceptance cases with CLI coverage
+	@E2E_CLUSTER_NAME="$(E2E_FIXTURE_CLUSTER_NAME)" E2E_KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/require-kind-cluster.sh
 	@set -euo pipefail; \
 	package=ecr-secret-operator; \
 	for scenario in non-image-source dependents-warning command-name deployment-config; do \
