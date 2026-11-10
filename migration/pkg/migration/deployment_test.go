@@ -72,7 +72,7 @@ func TestDeploymentReadiness(t *testing.T) {
 }
 
 func TestPrepareDeployment(t *testing.T) {
-	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: clusterObjectDeploymentCRDName}, Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{Type: apiextensionsv1.Established, Status: apiextensionsv1.ConditionTrue}}}}
+	crd := establishedClusterObjectDeploymentCRD()
 	ctx := context.Background()
 	if err := migrationTestClient(t).prepareClusterObjectDeployment(ctx, "example"); err == nil {
 		t.Fatal("accepted missing CRD")
@@ -163,10 +163,10 @@ func TestAutomaticDeploymentSelection(t *testing.T) {
 		{name: "discovery failure does not fall back", failDiscovery: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cosCRD := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName}, Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{Type: apiextensionsv1.Established, Status: apiextensionsv1.ConditionTrue}}}}
+			cosCRD := establishedClusterObjectSetCRD()
 			m := migrationTestClient(t, cosCRD)
 			if tc.present {
-				codCRD := cosCRD.DeepCopy()
+				codCRD := establishedClusterObjectDeploymentCRD()
 				codCRD.Name = clusterObjectDeploymentCRDName
 				codCRD.ResourceVersion = ""
 				if !tc.established {
@@ -491,4 +491,11 @@ func (c *deploymentDeletionClient) Delete(ctx context.Context, obj client.Object
 		}
 	}
 	return c.Client.Delete(ctx, obj, opts...)
+}
+
+func establishedClusterObjectDeploymentCRD() *apiextensionsv1.CustomResourceDefinition {
+	crd := establishedClusterObjectSetCRD()
+	crd.Name = clusterObjectDeploymentCRDName
+	crd.Spec.Versions[0].Schema = testRevisionSchema(true)
+	return crd
 }

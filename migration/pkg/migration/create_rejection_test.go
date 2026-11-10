@@ -5,9 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -34,7 +32,7 @@ func TestMigrationCreateRejectionRecovery(t *testing.T) {
 				ctx := context.Background()
 				m := migrationTestClient(t)
 				if mode == "COD" {
-					crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: clusterObjectDeploymentCRDName}, Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{Type: apiextensionsv1.Established, Status: apiextensionsv1.ConditionTrue}}}}
+					crd := establishedClusterObjectDeploymentCRD()
 					if err := m.Client.Create(ctx, crd); err != nil {
 						t.Fatal(err)
 					}

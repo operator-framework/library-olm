@@ -44,7 +44,7 @@ Verified during Phase 8 E2E.
 
 **COD transition (R2.7), in progress:** the library selects COD creation when its CRD exists,
 current-generation rollout checks, and COD-aware rollback. API types are pinned to
-operator-controller commit `77754d81ea01`, matching the COD CI controller and including
+operator-controller commit `9dd683afa190`, matching the COD CI controller and including
 the adoption label requirement. Migration stamps `apps.kubernetes.io/managed-by:
 operator-controller` on the ownerless COD before handoff; unit and E2E assertions
 check this label and preservation of the original COD identity. Directly created
@@ -58,8 +58,8 @@ PR #3058. On 2026-10-29, a disposable kind cluster running operator-controller m
 and its revisions 1 and 2 used `None` and `Prevent` collision protection. A separate
 full CLI fixture conversion and acknowledged rollback restored the Subscription,
 removed COD/COS resources, and preserved the operator Deployment UID and availability.
-The default E2E setup remains pinned to v1.12.0 for the legacy path. A separate CI job
-builds pinned COD-capable commit `77754d81ea0125d3a850e9fa57decf7a7255a409` and
+The default E2E setup builds the pinned current experimental controller. A separate CI job
+builds pinned COD-capable commit `9dd683afa190a67bc6c719abbafa97faa2d68b96` and
 runs covered handoff and workload-preserving rollback E2E targets. The rollback target
 passed locally on 2026-10-29.
 Both covered targets passed again on 2026-11-05 against `bbe43971eadd` on kind
@@ -67,6 +67,9 @@ Kubernetes 1.37, verifying labeled COD adoption and rollback.
 The covered handoff and rollback targets also pass against `77754d81ea01`,
 including COS manager-label assertions. Direct COS creation and the
 `UnmanagedRevision` terminal condition are covered by unit regressions.
+The current API uses typed `inlineManifest`/`secretRef` entries for creation and
+rollback. Older experimental COS/COD schemas are not supported; the controller
+and library must use matching definitions.
 
 ---
 
@@ -232,3 +235,5 @@ Phase 1 (4717) ──► Phase 2 (4718) ──► Phase 3 (4719) ──► Phase
 
 Phase 7 (4723, operator-controller): APIService-owning operators remain unsupported; C3 is permanent
 ```
+
+Revision preflight rejects deleting or incompatible COS/COD definitions before changing OLMv0 resources. Schemas must preserve opaque inline manifests and Secret-reference name, namespace, and key fields. Rollback permits verified newer sibling handoffs while retaining resource-UID, owner, and management-label checks.

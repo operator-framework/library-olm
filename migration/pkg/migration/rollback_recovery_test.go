@@ -486,3 +486,76 @@ func TestCleanupConflictReportsCSVAndArtifactFailures(t *testing.T) {
 		})
 	}
 }
+
+func TestRollbackSnapshotAllowsVerifiedSiblingHandoff(t *testing.T) {
+	for _, scenario := range []string{"sibling handoff", "unlisted revision", "foreign controller", "changed label", "replaced object", "sibling omits object", "different group"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx := context.Background()
+			manifest := unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "config", "namespace": "source"}}}
+			first := ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "example-2", UID: "revision-2"}, Spec: ocv1.ClusterObjectSetSpec{Group: "example", Revision: 2, Phases: []ocv1.ClusterObjectSetPhase{{Name: "deploy", Objects: []ocv1.ClusterObjectSetObject{{Type: ocv1.ObjectTypeInlineManifest, InlineManifest: manifest}}}}}}
+			second := *first.DeepCopy()
+			second.Name = "example-3"
+			second.UID = "revision-3"
+			second.Spec.Revision = 3
+			if scenario == "different group" {
+				second.Spec.Group = "other"
+			}
+			if scenario == "sibling omits object" {
+				second.Spec.Phases = nil
+			}
+			live := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "source", UID: "resource", OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(&first, ocv1.GroupVersion.WithKind(ocv1.ClusterObjectSetKind))}, Annotations: map[string]string{boxcutterRevisionAnnotation: "2"}, Labels: map[string]string{boxcutterManagedByLabel: "olm.operatorframework.io"}}}
+			m := migrationTestClient(t, live)
+			snapshot, err := m.snapshotRevisionObjects(ctx, []ocv1.ClusterObjectSet{first, second})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(snapshot) != 1 {
+				t.Fatalf("snapshot = %+v", snapshot)
+			}
+			// Permitted sibling identities must survive a persisted-snapshot merge.
+			old := snapshot[0]
+			old.AdditionalOwners = nil
+			mergedSnapshot, _, mergeErr := mergeRollbackObjects([]rollbackObject{old}, snapshot)
+			if mergeErr != nil || !reflect.DeepEqual(mergedSnapshot, snapshot) {
+				t.Fatalf("lost sibling identities: %+v, %v", mergedSnapshot, mergeErr)
+			}
+			// Adoption completes after the snapshot; GC then removes the verified owner.
+			live.OwnerReferences = nil
+			live.Annotations[boxcutterRevisionAnnotation] = "3"
+			switch scenario {
+			case "unlisted revision":
+				live.Annotations[boxcutterRevisionAnnotation] = "4"
+			case "foreign controller":
+				live.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "foreign", UID: "foreign"}}, corev1.SchemeGroupVersion.WithKind("ConfigMap"))}
+			case "changed label":
+				live.Labels[boxcutterManagedByLabel] = "foreign"
+			case "replaced object":
+				live.UID = "replacement"
+			}
+			if err := m.Client.Update(ctx, live); err != nil {
+				t.Fatal(err)
+			}
+			err = m.releaseRevisionObjects(ctx, snapshot)
+			if scenario != "sibling handoff" {
+				if err == nil {
+					t.Fatal("released unverified object")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = m.Client.Get(ctx, client.ObjectKeyFromObject(live), live); err != nil {
+				t.Fatal(err)
+			}
+			if live.Annotations[boxcutterRevisionAnnotation] != "" || live.UID != "resource" {
+				t.Fatalf("release lost identity or retained metadata: %+v", live)
+			}
+			// The permitted transition must also survive snapshot merges on retry.
+			merged, _, err := mergeRollbackObjects(snapshot, []rollbackObject{{Identity: snapshot[0].Identity, UID: "resource", OwnerUID: "revision-3", Revision: "3", ManagedBy: "olm.operatorframework.io"}})
+			if err != nil || len(merged[0].AdditionalOwners) != 1 {
+				t.Fatalf("merge = %+v, %v", merged, err)
+			}
+		})
+	}
+}

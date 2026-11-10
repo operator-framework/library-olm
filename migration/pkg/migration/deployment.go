@@ -53,6 +53,9 @@ func (m *Migrator) prepareClusterObjectDeployment(ctx context.Context, name stri
 	if !established || crd.DeletionTimestamp != nil {
 		return fmt.Errorf("ClusterObjectDeployment CRD is not established or is being deleted")
 	}
+	if err := validateRevisionSchema(&crd, true); err != nil {
+		return err
+	}
 	var cod ocv1.ClusterObjectDeployment
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: name}, &cod); err == nil {
 		return fmt.Errorf("ClusterObjectDeployment %s already exists", name)

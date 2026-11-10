@@ -17,14 +17,12 @@ E2E_COVERAGE_DIR ?= $(E2E_ARTIFACTS)/coverage
 E2E_CLUSTER_NAME ?= library-olm-e2e
 E2E_FIXTURE_CLUSTER_NAME ?= library-olm-fixture-e2e
 E2E_FIXTURE_KUBECONFIG ?= $(ROOT_DIR)/.kubeconfig/library-olm-fixture-e2e
-# Pin controller releases used by the E2E cluster. Override only to test a
+# Pin controllers used by the E2E cluster. Override only to test a
 # compatibility candidate; do not use "latest" in CI.
 OLM_V0_VERSION ?= v0.46.0
-OLM_V1_VERSION ?= v1.12.0
+OLM_V1_COMMIT ?= 9dd683afa190a67bc6c719abbafa97faa2d68b96
 OLM_V0_CRDS ?= https://github.com/operator-framework/operator-lifecycle-manager/releases/download/$(OLM_V0_VERSION)/crds.yaml
 OLM_V0_MANIFEST ?= https://github.com/operator-framework/operator-lifecycle-manager/releases/download/$(OLM_V0_VERSION)/olm.yaml
-OLM_V1_INSTALL ?= https://github.com/operator-framework/operator-controller/releases/download/$(OLM_V1_VERSION)/install-experimental.sh
-OLM_V1_INSTALL_SHA256 ?= 5c3c86e6d54b21ae7b0b566145ef703f8230e3f4cf4326541d42015a2a195970
 E2E_REAL_OPERATOR_MANIFEST ?= $(ROOT_DIR)/test/e2e/migration/real-operator.yaml
 E2E_REAL_OPERATOR_NAMESPACE ?= migration-e2e-real
 E2E_REAL_OPERATOR_SUBSCRIPTION ?= ecr-secret-operator
@@ -67,12 +65,12 @@ migration/test-verbose: ## Run migration unit tests with verbose output
 	go test ./migration/... -v -count=1
 
 .PHONY: migration/e2e-setup
-migration/e2e-setup: $(KIND) ## Create kind and install pinned OLMv0 and OLMv1 releases
-	E2E_KUBECONFIG="$(E2E_KUBECONFIG)" E2E_CLUSTER_NAME="$(E2E_CLUSTER_NAME)" KIND="$(KIND)" OLM_V0_CRDS="$(OLM_V0_CRDS)" OLM_V0_MANIFEST="$(OLM_V0_MANIFEST)" OLM_V1_INSTALL="$(OLM_V1_INSTALL)" OLM_V1_INSTALL_SHA256="$(OLM_V1_INSTALL_SHA256)" ./hack/e2e/migration/setup.sh
+migration/e2e-setup: $(KIND) ## Create kind and install pinned OLMv0 and experimental OLMv1
+	E2E_KUBECONFIG="$(E2E_KUBECONFIG)" E2E_CLUSTER_NAME="$(E2E_CLUSTER_NAME)" KIND="$(KIND)" OLM_V0_CRDS="$(OLM_V0_CRDS)" OLM_V0_MANIFEST="$(OLM_V0_MANIFEST)" OLM_V1_COMMIT="$(OLM_V1_COMMIT)" ./hack/e2e/migration/setup.sh
 
 .PHONY: migration/e2e-fixture-setup
 migration/e2e-fixture-setup: $(KIND) $(CRANE) ## Create fixture kind cluster with OLMv0 APIs but no OLMv0 controllers
-	E2E_KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" E2E_CLUSTER_NAME="$(E2E_FIXTURE_CLUSTER_NAME)" E2E_INSTALL_OLMV0=false KIND="$(KIND)" OLM_V0_CRDS="$(OLM_V0_CRDS)" OLM_V0_MANIFEST="$(OLM_V0_MANIFEST)" OLM_V1_INSTALL="$(OLM_V1_INSTALL)" OLM_V1_INSTALL_SHA256="$(OLM_V1_INSTALL_SHA256)" ./hack/e2e/migration/setup.sh
+	E2E_KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" E2E_CLUSTER_NAME="$(E2E_FIXTURE_CLUSTER_NAME)" E2E_INSTALL_OLMV0=false KIND="$(KIND)" OLM_V0_CRDS="$(OLM_V0_CRDS)" OLM_V0_MANIFEST="$(OLM_V0_MANIFEST)" OLM_V1_COMMIT="$(OLM_V1_COMMIT)" ./hack/e2e/migration/setup.sh
 	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" CRANE="$(CRANE)" ./hack/e2e/migration/build-fixture-catalog.sh
 
 .PHONY: migration/e2e-teardown
