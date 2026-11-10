@@ -56,7 +56,7 @@ func TestDryRunPreviewSortsResourceKinds(t *testing.T) {
 	if result.err != nil {
 		t.Fatal(result.err)
 	}
-	sections := strings.Split(string(result.output), "Resources that would be placed into ClusterObjectSet widget-1:")
+	sections := strings.Split(string(result.output), "Resources that would be placed into its template and controller-created COS revisions:")
 	if len(sections) != 6 {
 		t.Fatalf("got %d preview sections, want 5", len(sections)-1)
 	}
