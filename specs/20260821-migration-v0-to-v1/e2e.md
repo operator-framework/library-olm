@@ -41,7 +41,10 @@ pinned commit `c6e63b6166621b33a6de781c231bbcc97b5ca2c7`, then runs the handoff 
 rollback targets. Default suites also build this pinned controller from source,
 using upstream build targets and the experimental installer. Docker, Git, and
 `envsubst` must be available locally. Setup loads the built images into the
-existing kind cluster without recreating it.
+existing kind cluster without recreating it. Live setup also installs upstream's
+`operatorhubio` ClusterCatalog and waits for it to serve; the catalog-migration
+test uses its resolved image digest. Fixture setup skips that public catalog
+and uses the locally built fixture catalog.
 
 COS/COD are experimental: only the current typed `inlineManifest`/`objectRef`
 entries are supported. There is no conversion of older experimental resource
