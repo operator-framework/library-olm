@@ -168,7 +168,7 @@ COD-generated COS revisions receive this label from object-controller. The two
 manager values apply to different resources and must not be interchanged.
 Use the current revision object union (`type: InlineManifest` with `inlineManifest`,
 or `type: SecretReference` with `secretRef`). COS and COD are experimental APIs;
-compatibility with older COS/COD schemas is not supported. Install a controller
+compatibility with older COS/COD schemas and COS `Succeeded`/`Available` conditions is not supported. COS completion uses `status.completedAt`, and workload readiness uses `Ready=True`. Install a controller
 with matching API definitions before migration.
 Reject existing deployments/revision groups before destructive work. Rollback must stop the
 deployment with orphan deletion before removing revisions and restoring OLMv0 management.

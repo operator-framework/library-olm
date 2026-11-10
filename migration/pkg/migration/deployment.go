@@ -61,7 +61,7 @@ func (m *Migrator) prepareClusterObjectDeployment(ctx context.Context, name stri
 		return fmt.Errorf("check ClusterObjectDeployment %s: %w", name, err)
 	}
 	// An existing group must not be taken over merely because its deployment
-	// is absent. Check legacy labels too, before any OLMv0 objects are deleted.
+	// is absent. Check conflicting labels and names too, before any OLMv0 objects are deleted.
 	var revisions ocv1.ClusterObjectSetList
 	if err := m.Client.List(ctx, &revisions); err != nil {
 		return fmt.Errorf("check migration revision group: %w", err)
@@ -121,7 +121,7 @@ func (m *Migrator) waitForDeployment(ctx context.Context, created *ocv1.ClusterO
 	})
 }
 
-// rollbackDeployment permits the legacy API to be absent, but never hides
+// rollbackDeployment permits the COD API to be absent, but never hides
 // authorization or transport errors. A foreign deployment blocks rollback.
 func (m *Migrator) rollbackDeployment(ctx context.Context, ce *ocv1.ClusterExtension) (*ocv1.ClusterObjectDeployment, error) {
 	var cod ocv1.ClusterObjectDeployment
@@ -221,7 +221,7 @@ func (m *Migrator) listMigrationRevisions(ctx context.Context, ce *ocv1.ClusterE
 	}
 	selected := list.Items[:0]
 	for _, revision := range list.Items {
-		if revision.Spec.Group == ce.Name || revision.Spec.Group == "" && revision.Labels[LabelOwnerName] == ce.Name {
+		if revision.Spec.Group == ce.Name || revision.Labels[LabelOwnerName] == ce.Name || revision.Name == ce.Name+"-1" {
 			if err := m.validateRollbackRevision(ctx, &revision, ce); err != nil {
 				return err
 			}
@@ -234,7 +234,7 @@ func (m *Migrator) listMigrationRevisions(ctx context.Context, ce *ocv1.ClusterE
 
 func (m *Migrator) validateRollbackRevision(ctx context.Context, revision *ocv1.ClusterObjectSet, ce *ocv1.ClusterExtension) error {
 	name := ce.Name
-	if revision.Spec.Group != "" && revision.Spec.Group != name {
+	if revision.Spec.Group != name {
 		return fmt.Errorf("migration ClusterObjectSet %s belongs to another group %q", revision.Name, revision.Spec.Group)
 	}
 	if owner := revision.Labels[LabelOwnerName]; owner != "" && owner != name {
@@ -242,12 +242,9 @@ func (m *Migrator) validateRollbackRevision(ctx context.Context, revision *ocv1.
 	}
 	owner := metav1.GetControllerOf(revision)
 	if owner == nil {
-		// Legacy staging revisions and revisions orphaned during rollback have
-		// no controller. Require a matching group, label, or legacy initial name.
-		if revision.Spec.Group == name || revision.Labels[LabelOwnerName] == name || revision.Name == name+"-1" {
-			return nil
-		}
-		return fmt.Errorf("migration ClusterObjectSet %s has no verified migration identity", revision.Name)
+		// Staging revisions and revisions orphaned during rollback have no
+		// controller. Their required group was verified above.
+		return nil
 	}
 	unverified := fmt.Errorf("migration ClusterObjectSet %s is controlled by another or unverified owner", revision.Name)
 	if owner.APIVersion != ocv1.GroupVersion.String() || owner.Name != name || owner.UID == "" {

@@ -49,9 +49,9 @@ func TestRollbackRestoresSubscriptionAndOrphansAllOwnedRevisions(t *testing.T) {
 		MigratedFromSubscriptionAnnotation:    "source/sub",
 		MigrationSubscriptionBackupAnnotation: `{"name":"widgets","source":"catalog","sourceNamespace":"olm","channel":"stable","installPlanApproval":"Manual","startingCSV":"widgets.v1"}`,
 	}}}
-	first := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-1", Labels: map[string]string{LabelOwnerName: ce.Name}}}
-	second := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-2", Labels: map[string]string{LabelOwnerName: ce.Name}}}
-	unrelated := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "other-1", Labels: map[string]string{LabelOwnerName: "other"}}}
+	first := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-1", Labels: map[string]string{LabelOwnerName: ce.Name}}, Spec: ocv1.ClusterObjectSetSpec{Group: ce.Name}}
+	second := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-2", Labels: map[string]string{LabelOwnerName: ce.Name}}, Spec: ocv1.ClusterObjectSetSpec{Group: ce.Name}}
+	unrelated := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "other-1", Labels: map[string]string{LabelOwnerName: "other"}}, Spec: ocv1.ClusterObjectSetSpec{Group: "other"}}
 	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "operator", Namespace: "source"}}
 	og := &operatorsv1.OperatorGroup{ObjectMeta: metav1.ObjectMeta{Name: "shared", Namespace: "source"}}
 	m := migrationTestClient(t, ce, first, second, unrelated, deployment, og, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "source"}})
@@ -87,7 +87,7 @@ func TestRollbackRestoresSubscriptionAndOrphansAllOwnedRevisions(t *testing.T) {
 	}
 }
 
-func TestRollbackLegacyRevisionAndForeignNameCollision(t *testing.T) {
+func TestRollbackRevisionGroupAndForeignNameCollision(t *testing.T) {
 	for _, owner := range []string{"", "other"} {
 		t.Run("owner="+owner, func(t *testing.T) {
 			ctx := context.Background()
@@ -95,7 +95,7 @@ func TestRollbackLegacyRevisionAndForeignNameCollision(t *testing.T) {
 				MigratedFromSubscriptionAnnotation:    "source/sub",
 				MigrationSubscriptionBackupAnnotation: `{"name":"widgets","source":"catalog","sourceNamespace":"olm"}`,
 			}}}
-			revision := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-1", Labels: map[string]string{LabelOwnerName: owner}}}
+			revision := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-1", Labels: map[string]string{LabelOwnerName: owner}}, Spec: ocv1.ClusterObjectSetSpec{Group: ce.Name}}
 			m := migrationTestClient(t, ce, revision, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "source"}})
 			err := m.Rollback(ctx, Options{ClusterExtensionName: ce.Name, AcknowledgeInstalled: true})
 			if owner == "" {
@@ -103,7 +103,7 @@ func TestRollbackLegacyRevisionAndForeignNameCollision(t *testing.T) {
 					t.Fatal(err)
 				}
 				if err := m.Client.Get(ctx, client.ObjectKeyFromObject(revision), &ocv1.ClusterObjectSet{}); !apierrors.IsNotFound(err) {
-					t.Fatalf("legacy revision was not removed: %v", err)
+					t.Fatalf("revision was not removed: %v", err)
 				}
 				return
 			}
@@ -172,7 +172,7 @@ func (c *recreatingRevisionClient) Delete(ctx context.Context, obj client.Object
 	if c.deletes == 1 {
 		return c.Create(ctx, &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{
 			Name: obj.GetName(), UID: types.UID("replacement"), Labels: map[string]string{LabelOwnerName: "widgets"},
-		}})
+		}, Spec: ocv1.ClusterObjectSetSpec{Group: "widgets"}})
 	}
 	return nil
 }
@@ -182,7 +182,7 @@ func TestRollbackDeletesRevisionRecreatedDuringDeletion(t *testing.T) {
 	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "widgets"}}
 	revision := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{
 		Name: "widgets-2", UID: types.UID("original"), Labels: map[string]string{LabelOwnerName: "widgets"},
-	}}
+	}, Spec: ocv1.ClusterObjectSetSpec{Group: "widgets"}}
 	m := migrationTestClient(t, ce, revision)
 	recreator := &recreatingRevisionClient{Client: m.Client}
 	m.Client = recreator
@@ -212,8 +212,8 @@ func TestRollbackRevisionDeleteFailureKeepsBackupForRetry(t *testing.T) {
 		MigratedFromSubscriptionAnnotation:    "source/sub",
 		MigrationSubscriptionBackupAnnotation: `{"name":"widgets","source":"catalog","sourceNamespace":"olm"}`,
 	}}}
-	first := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-1", Labels: map[string]string{LabelOwnerName: ce.Name}}}
-	second := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-2", Labels: map[string]string{LabelOwnerName: ce.Name}}}
+	first := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-1", Labels: map[string]string{LabelOwnerName: ce.Name}}, Spec: ocv1.ClusterObjectSetSpec{Group: ce.Name}}
+	second := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-2", Labels: map[string]string{LabelOwnerName: ce.Name}}, Spec: ocv1.ClusterObjectSetSpec{Group: ce.Name}}
 	m := migrationTestClient(t, ce, first, second, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "source"}})
 	m.Client = &revisionDeleteFailureClient{Client: m.Client, failName: second.Name, failOnce: true}
 	if err := m.Rollback(ctx, Options{ClusterExtensionName: ce.Name, AcknowledgeInstalled: true}); err == nil || !strings.Contains(err.Error(), "revision deletion forbidden") {
@@ -345,7 +345,7 @@ func TestCleanupConflictPreservesSharedOperatorGroupAndOLMv1Management(t *testin
 	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "widgets", Annotations: map[string]string{
 		MigratedFromSubscriptionAnnotation: "source/sub",
 	}}, Spec: ocv1.ClusterExtensionSpec{Source: ocv1.SourceConfig{Catalog: &ocv1.CatalogFilter{PackageName: "widgets"}}}}
-	cos := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-2", Labels: map[string]string{LabelOwnerName: ce.Name}}}
+	cos := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-2", Labels: map[string]string{LabelOwnerName: ce.Name}}, Spec: ocv1.ClusterObjectSetSpec{Group: ce.Name}}
 	sub := &operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: "sub", Namespace: "source"}, Status: operatorsv1alpha1.SubscriptionStatus{InstalledCSV: "widgets.v1"}}
 	csv := &operatorsv1alpha1.ClusterServiceVersion{ObjectMeta: metav1.ObjectMeta{Name: "widgets.v1", Namespace: "source"}}
 	condition := &operatorsv1.OperatorCondition{ObjectMeta: metav1.ObjectMeta{Name: csv.Name, Namespace: csv.Namespace}}

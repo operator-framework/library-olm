@@ -28,12 +28,6 @@ const (
 	clusterObjectSetCRDName      = "clusterobjectsets.olm.operatorframework.io"
 	clusterExtensionCRDName      = "clusterextensions.olm.operatorframework.io"
 	operatorControllerDeployName = "operator-controller-controller-manager"
-
-	// operator-controller v1.12 uses these COS conditions. The COD-capable API
-	// replaced them with status.completedAt and ClusterObjectSetTypeReady and
-	// removed their constants; retain the values for legacy COS-only clusters.
-	legacyCOSConditionSucceeded = "Succeeded"
-	legacyCOSConditionAvailable = "Available"
 )
 
 // annotationPrefixesToStrip are annotation prefixes that should be removed from migrated resources.
@@ -789,7 +783,7 @@ func (m *Migrator) cleanupCreatedClusterObjectSet(ctx context.Context, resources
 	return m.cleanupCreatedSecrets(cleanupCtx, resources.secrets)
 }
 
-// WaitForCOSSucceeded waits for status.completedAt or legacy Succeeded=True.
+// WaitForCOSSucceeded waits for the current COS completion timestamp.
 func (m *Migrator) WaitForCOSSucceeded(ctx context.Context, cosName string) error {
 	return wait.PollUntilContextTimeout(ctx, cosWaitPollInterval, cosWaitTimeout, true, func(ctx context.Context) (bool, error) {
 		var cos ocv1.ClusterObjectSet
@@ -802,15 +796,13 @@ func (m *Migrator) WaitForCOSSucceeded(ctx context.Context, cosName string) erro
 			return true, nil
 		}
 		for _, c := range cos.Status.Conditions {
-			if c.Type == legacyCOSConditionSucceeded && c.Status == metav1.ConditionTrue {
-				return true, nil
-			}
-			if c.Type == legacyCOSConditionSucceeded && c.Reason == ocv1.ReasonBlocked {
-				return false, fmt.Errorf("ClusterObjectSet %s is blocked: %s", cosName, c.Message)
+			if c.Type == ocv1.ClusterObjectSetTypeReady && c.Status == metav1.ConditionFalse &&
+				c.ObservedGeneration == cos.Generation && c.Reason == ocv1.ClusterObjectSetReasonInvalidSpecification {
+				return false, fmt.Errorf("ClusterObjectSet %s has invalid specification: %s", cosName, c.Message)
 			}
 		}
 
-		m.progress(ProgressEvent{Step: ProgressStepCreate, Status: ProgressWaiting, Message: fmt.Sprintf("Waiting for ClusterObjectSet %s to reach Succeeded=True...", cosName)})
+		m.progress(ProgressEvent{Step: ProgressStepCreate, Status: ProgressWaiting, Message: fmt.Sprintf("Waiting for ClusterObjectSet %s to set status.completedAt...", cosName)})
 		return false, nil
 	})
 }
@@ -977,11 +969,11 @@ func (m *Migrator) WaitForClusterObjectSetAvailable(ctx context.Context, cosName
 			return false, err
 		}
 		for _, condition := range cos.Status.Conditions {
-			if (condition.Type == legacyCOSConditionAvailable || condition.Type == ocv1.ClusterObjectSetTypeReady) && condition.Status == metav1.ConditionTrue {
+			if condition.Type == ocv1.ClusterObjectSetTypeReady && condition.Status == metav1.ConditionTrue {
 				return true, nil
 			}
 		}
-		m.progress(ProgressEvent{Step: ProgressStepCreate, Status: ProgressWaiting, Message: fmt.Sprintf("Waiting for migration ClusterObjectSet %s to reach Available=True...", cosName)})
+		m.progress(ProgressEvent{Step: ProgressStepCreate, Status: ProgressWaiting, Message: fmt.Sprintf("Waiting for migration ClusterObjectSet %s to reach Ready=True...", cosName)})
 		return false, nil
 	})
 }
