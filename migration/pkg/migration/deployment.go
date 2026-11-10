@@ -26,23 +26,8 @@ const rollbackDeploymentUIDsAnnotation = "olm.operatorframework.io/rollback-depl
 
 var deploymentNamePattern = regexp.MustCompile(`^[a-z]([a-z0-9-]*[a-z0-9])?$`)
 
-func (m *Migrator) hasClusterObjectDeploymentCRD(ctx context.Context) (bool, error) {
-	var crd apiextensionsv1.CustomResourceDefinition
-	err := m.Client.Get(ctx, client.ObjectKey{Name: clusterObjectDeploymentCRDName}, &crd)
-	if apierrors.IsNotFound(err) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("discover ClusterObjectDeployment CRD: %w", err)
-	}
-	return true, nil
-}
-
-// prepareClusterObjectDeployment rejects incompatible APIs and occupied revision groups before migration.
-func (m *Migrator) prepareClusterObjectDeployment(ctx context.Context, name string) error {
-	if len(name) > 52 || !deploymentNamePattern.MatchString(name) {
-		return fmt.Errorf("ClusterObjectDeployment name %q must be 1–52 lowercase letters, digits or hyphens, starting with a letter and ending with a letter or digit", name)
-	}
+// ensureClusterObjectDeploymentCRD requires a ready, non-deleting COD API with compatible revision entries.
+func (m *Migrator) ensureClusterObjectDeploymentCRD(ctx context.Context) error {
 	var crd apiextensionsv1.CustomResourceDefinition
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: clusterObjectDeploymentCRDName}, &crd); err != nil {
 		return fmt.Errorf("ClusterObjectDeployment CRD is required for COD migration: %w", err)
@@ -53,6 +38,17 @@ func (m *Migrator) prepareClusterObjectDeployment(ctx context.Context, name stri
 	}
 	if !established || crd.DeletionTimestamp != nil {
 		return fmt.Errorf("ClusterObjectDeployment CRD is not established or is being deleted")
+	}
+	return nil
+}
+
+// prepareClusterObjectDeployment validates names and rejects occupied revision groups.
+func (m *Migrator) prepareClusterObjectDeployment(ctx context.Context, name string) error {
+	if len(name) > 52 || !deploymentNamePattern.MatchString(name) {
+		return fmt.Errorf("ClusterObjectDeployment name %q must be 1–52 lowercase letters, digits or hyphens, starting with a letter and ending with a letter or digit", name)
+	}
+	if err := m.ensureClusterObjectDeploymentCRD(ctx); err != nil {
+		return err
 	}
 	var cod ocv1.ClusterObjectDeployment
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: name}, &cod); err == nil {

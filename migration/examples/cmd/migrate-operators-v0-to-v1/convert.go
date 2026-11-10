@@ -245,20 +245,17 @@ func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.
 	return output.dryRunPreview(opts, resourceOpts, info)
 }
 
+// dryRunRecord describes planned COD staging and resource changes without mutating the cluster.
 func dryRunRecord(opts, resourceOpts migration.Options, info *migration.MigrationInfo) outputRecord {
 	kindCounts := make(map[string]int)
 	for _, obj := range info.CollectedObjects {
 		kindCounts[obj.GetKind()]++
 	}
-	cosName, codName := opts.ClusterExtensionName+"-1", ""
-	if info.UseClusterObjectDeployment {
-		cosName, codName = "", opts.ClusterExtensionName
-	}
 	return outputRecord{
 		Type: "dry-run", Command: "convert", Target: opts.SubscriptionNamespace + "/" + opts.SubscriptionName,
 		Data: dryRunData{
 			Package: info.PackageName, Version: info.Version, Channel: info.Channel,
-			ClusterObjectSet: cosName, ClusterObjectDeployment: codName, ClusterExtension: opts.ClusterExtensionName,
+			ClusterObjectDeployment: opts.ClusterExtensionName, ClusterExtension: opts.ClusterExtensionName,
 			InstallNamespace: resourceOpts.InstallNamespace, SystemNamespace: info.SystemNamespace,
 			ManualApproval: info.ManualApproval, KindCounts: kindCounts,
 			CleanupActions: dryRunCleanupPlan(opts, resourceOpts, info), BackupDirectory: opts.BackupDirectory,
@@ -269,17 +266,12 @@ func dryRunRecord(opts, resourceOpts migration.Options, info *migration.Migratio
 // printDryRunPreview summarizes the planned migration without printing collected resource contents.
 // Resource kinds are sorted so repeated previews present the same order.
 func printDryRunPreview(opts, resourceOpts migration.Options, info *migration.MigrationInfo) error {
-	success(fmt.Sprintf("ClusterObjectSet API established; using operator-controller namespace %s", info.SystemNamespace))
+	success(fmt.Sprintf("ClusterObjectDeployment and ClusterObjectSet APIs established; using operator-controller namespace %s", info.SystemNamespace))
 
 	success(fmt.Sprintf("Package: %s  Version: %s  Channel: %s", info.PackageName, info.Version, valueOrDefault(info.Channel, "(default)")))
 	fmt.Printf("\n  Resources that would be created:\n")
-	if info.UseClusterObjectDeployment {
-		detail("ClusterObjectDeployment:", fmt.Sprintf("%s (wait for rollout completion and availability before creating the ClusterExtension)", opts.ClusterExtensionName))
-		fmt.Printf("\n  Resources that would be placed into its template and controller-created COS revisions:\n")
-	} else {
-		detail("ClusterObjectSet:", fmt.Sprintf("%s-1 (wait for completion before creating the ClusterExtension)", opts.ClusterExtensionName))
-		fmt.Printf("\n  Resources that would be placed into ClusterObjectSet %s-1:\n", opts.ClusterExtensionName)
-	}
+	detail("ClusterObjectDeployment:", fmt.Sprintf("%s (wait for rollout completion and availability before creating the ClusterExtension)", opts.ClusterExtensionName))
+	fmt.Printf("\n  Resources that would be placed into its template and controller-created COS revisions:\n")
 
 	kindCounts := make(map[string]int)
 	for _, obj := range info.CollectedObjects {
@@ -326,7 +318,6 @@ type dryRunData struct {
 	Package                 string         `json:"package"`
 	Version                 string         `json:"version"`
 	Channel                 string         `json:"channel,omitempty"`
-	ClusterObjectSet        string         `json:"cluster_object_set,omitempty"`
 	ClusterObjectDeployment string         `json:"cluster_object_deployment,omitempty"`
 	ClusterExtension        string         `json:"cluster_extension"`
 	InstallNamespace        string         `json:"install_namespace"`
