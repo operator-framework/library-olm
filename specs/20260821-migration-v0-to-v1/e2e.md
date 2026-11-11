@@ -31,11 +31,9 @@ COD migration requires the COD API/controller and the COD-backed CE applier merg
 operator-controller PR #3058. The library's pinned API dependency alone does not
 install that controller. Unit tests exercise creation, preflight, readiness and
 rollback ownership and invalid-template diagnostics. The existing handoff scenario
-also checks COD identity preservation, CE ownership of the COD, and COD ownership of both
-revisions when a COD-capable controller is installed. On 2026-10-29 those assertions
-passed against operator-controller main `255a4026` in kind. A separate full CLI fixture
-conversion and acknowledged rollback preserved the operator Deployment UID and its one
-available replica, restored the Subscription, and removed the COD and both COS revisions.
+also checks COD identity preservation, CE ownership of the COD, and COD ownership
+of all revisions. Only the initial revision uses `None`; every subsequent revision
+must use `Prevent`, including any intermediate revisions during handoff.
 The `migration/test-e2e-cod-rollback` target now automates those rollback assertions and
 collects CLI coverage. A separate CI job builds and installs operator-controller from
 pinned commit `552f8422ebffc8102d8e0d4fa868f99b061cda23`, then runs the handoff and
@@ -218,8 +216,9 @@ their combined report. The Job intentionally does not upload diagnostics or cove
 
 The supersession check is deliberately separate from the conversion matrix. With the pinned
 experimental controller, migration creates revision 1 with collision protection `None`;
-creating the ClusterExtension results in a controller-owned, catalog-derived revision 2 with
-collision protection `Prevent`. The check requires both revisions to succeed.
+the protected handoff and ClusterExtension creation produce newer revisions with
+collision protection `Prevent`. The check requires initial migration and catalog
+completion, preserves ownership assertions, and permits intermediate protected revisions.
 
 ## CI rollout
 
@@ -428,3 +427,17 @@ Library callers can decode the saved spec into `Backup.Subscription` and use
 recovery has succeeded.
 
 After capturing the backup and before removing OLMv0 management, validate the staging COS or COD with its recovery annotations. Reject a candidate whose total annotation size exceeds Kubernetes' 256 KiB limit before creating it.
+
+### Protected COD-only handoff
+
+Migration creates a COD with `None` and without its CE-adoption label, waits for
+initial rollout completion and availability, then atomically enables `Prevent`
+and CE adoption. It clears permissive phase/object overrides in the same guarded
+patch before creating the CE. Failed or uncertain handoffs preserve staging resources.
+The protection-only template update may create an intermediate protected revision.
+
+`make migration/test-e2e-cos-supersession` also runs
+`TestCODProtectedRolloutCollision`, which verifies that a later COD rollout refuses
+an unrelated existing object. Both cases collect package coverage and run in the
+existing handoff CI jobs. Unit regressions cover readiness, identity changes,
+patch conflicts, uncertain patch outcomes, and refusal to create a CE on failure.

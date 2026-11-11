@@ -318,3 +318,17 @@ tests must decode the server-side backup after discarding the original plan and
 verify it can restore the original Subscription spec after safe target release.
 
 After capturing the backup and before removing OLMv0 management, validate the staging COS or COD with its recovery annotations. Reject a candidate whose total annotation size exceeds Kubernetes' 256 KiB limit before creating it.
+
+### Protected COD-only handoff
+
+Migration creates a COD with `None` and without its CE-adoption label, waits for
+initial rollout completion and availability, then atomically enables `Prevent`
+and CE adoption. It clears permissive phase/object overrides in the same guarded
+patch before creating the CE. Failed or uncertain handoffs preserve staging resources.
+The protection-only template update may create an intermediate protected revision.
+
+`make migration/test-e2e-cos-supersession` also runs
+`TestCODProtectedRolloutCollision`, which verifies that a later COD rollout refuses
+an unrelated existing object. Both cases collect package coverage and run in the
+existing handoff CI jobs. Unit regressions cover readiness, identity changes,
+patch conflicts, uncertain patch outcomes, and refusal to create a CE on failure.
