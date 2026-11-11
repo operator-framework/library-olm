@@ -519,3 +519,47 @@ func TestMissingCODBlocksMigrationBeforeMutation(t *testing.T) {
 		t.Fatal("migration accepted missing COD support")
 	}
 }
+
+// TestCreateMigrationResourcesSharesDefaults verifies COD and CE creation use the
+// same defaulted identity and namespace, while retaining explicit CE names.
+func TestCreateMigrationResourcesSharesDefaults(t *testing.T) {
+	for _, name := range []string{"", "custom"} {
+		t.Run("name="+name, func(t *testing.T) {
+			m := migrationTestClient(t, establishedClusterObjectDeploymentCRD())
+			m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{
+				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					switch resource := obj.(type) {
+					case *ocv1.ClusterObjectDeployment:
+						ready := readyDeployment()
+						resource.UID, resource.Generation, resource.Status = ready.UID, ready.Generation, ready.Status
+					case *ocv1.ClusterExtension:
+						resource.UID = "extension"
+						resource.Status.Conditions = []metav1.Condition{{Type: ocv1.TypeInstalled, Status: metav1.ConditionTrue}}
+					}
+					return c.Create(ctx, obj, opts...)
+				},
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			opts := Options{SubscriptionName: "subscription", SubscriptionNamespace: "source", ClusterExtensionName: name, SystemNamespace: "controller"}
+			if _, err := m.CreateMigrationResources(ctx, opts, &MigrationInfo{PackageName: "package", Channel: "stable"}, &Backup{}); err != nil {
+				t.Fatal(err)
+			}
+			expected := name
+			if expected == "" {
+				expected = "subscription"
+			}
+			var cod ocv1.ClusterObjectDeployment
+			if err := m.Client.Get(ctx, client.ObjectKey{Name: expected}, &cod); err != nil {
+				t.Fatal(err)
+			}
+			var ce ocv1.ClusterExtension
+			if err := m.Client.Get(ctx, client.ObjectKey{Name: expected}, &ce); err != nil {
+				t.Fatal(err)
+			}
+			if cod.Spec.Template.Metadata.Labels[LabelOwnerName] != expected || ce.Spec.Namespace != "source" {
+				t.Fatalf("inconsistent defaults: COD owner label=%q CE namespace=%q", cod.Spec.Template.Metadata.Labels[LabelOwnerName], ce.Spec.Namespace)
+			}
+		})
+	}
+}

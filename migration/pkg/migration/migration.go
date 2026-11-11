@@ -619,6 +619,7 @@ func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, inf
 // as one recoverable operation. Its result reports whether a target COD may have
 // started reconciling, including when cleanup was requested after a failure.
 func (m *Migrator) CreateMigrationResources(ctx context.Context, opts Options, info *MigrationInfo, backup *Backup) (MigrationResourcesResult, error) {
+	opts.ApplyDefaults()
 	resources, err := m.createMigrationDeployment(ctx, opts, info)
 	if err != nil {
 		result := MigrationResourcesResult{TargetMayBeActive: resources.cod != nil || resources.ownershipUnknown}
