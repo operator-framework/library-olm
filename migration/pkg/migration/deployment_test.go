@@ -482,7 +482,16 @@ func establishedClusterObjectDeploymentCRD() *apiextensionsv1.CustomResourceDefi
 // TestMissingCODBlocksMigrationBeforeMutation checks that missing COD support prevents destructive migration work.
 func TestMissingCODBlocksMigrationBeforeMutation(t *testing.T) {
 	sub, csv := healthySubscriptionFixtures()
-	m := migrationTestClient(t, sub, csv, establishedClusterObjectSetCRD())
+	sub.Spec.CatalogSource = "catalog"
+	sub.Spec.CatalogSourceNamespace = "catalogs"
+	catalog := &operatorsv1alpha1.CatalogSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "catalog", Namespace: "catalogs"},
+		Spec: operatorsv1alpha1.CatalogSourceSpec{
+			SourceType: operatorsv1alpha1.SourceTypeGrpc,
+			Image:      "registry.example/catalog:latest",
+		},
+	}
+	m := migrationTestClient(t, sub, csv, catalog, establishedClusterObjectSetCRD())
 	m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{
 		Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
 			t.Fatal("created a resource without COD support")
@@ -509,14 +518,14 @@ func TestMissingCODBlocksMigrationBeforeMutation(t *testing.T) {
 			found = true
 		}
 	}
-	if !found {
+	if !found || len(report.FailedChecks()) != 1 {
 		t.Fatalf("readiness did not report missing COD support: %+v", report)
 	}
 	if _, err := m.Gather(ctx, opts); err == nil || !strings.Contains(err.Error(), clusterObjectDeploymentCRDName) {
 		t.Fatalf("dry-run Gather did not reject missing COD: %v", err)
 	}
-	if err := m.Migrate(ctx, opts); err == nil {
-		t.Fatal("migration accepted missing COD support")
+	if err := m.Migrate(ctx, opts); err == nil || !strings.Contains(err.Error(), "readiness checks failed (1 issues)") {
+		t.Fatalf("migration did not reject missing COD at readiness: %v", err)
 	}
 }
 
