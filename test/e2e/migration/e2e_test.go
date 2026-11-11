@@ -423,6 +423,7 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 	}
 }
 
+// cosSucceeded reports revision completion through completedAt, without legacy condition fallbacks.
 func cosSucceeded(cos ocv1.ClusterObjectSet) bool {
 	return !cos.Status.CompletedAt.IsZero()
 }

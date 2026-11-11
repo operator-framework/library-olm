@@ -763,6 +763,7 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 	return resources, nil
 }
 
+// cleanupCreatedClusterObjectSet cleans staged resources using their recorded creation identities.
 func (m *Migrator) cleanupCreatedClusterObjectSet(ctx context.Context, resources *createdMigrationResources) error {
 	if resources == nil {
 		return nil

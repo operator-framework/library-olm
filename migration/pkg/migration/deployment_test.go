@@ -344,6 +344,7 @@ func TestRollbackRejectsForeignRevisionsBeforeStoppingDeployment(t *testing.T) {
 	}
 }
 
+// TestRollbackRevisionControllerOwnership checks that rollback rejects unrelated or unverified revision controllers.
 func TestRollbackRevisionControllerOwnership(t *testing.T) {
 	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "extension"}}
 	cod := readyDeployment()

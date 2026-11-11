@@ -96,6 +96,7 @@ func (m *Migrator) createClusterObjectDeployment(ctx context.Context, opts Optio
 	return m.waitForDeployment(ctx, cod)
 }
 
+// waitForDeployment waits for the created deployment to complete its current rollout and become available.
 func (m *Migrator) waitForDeployment(ctx context.Context, created *ocv1.ClusterObjectDeployment) error {
 	return wait.PollUntilContextTimeout(ctx, cosWaitPollInterval, cosWaitTimeout, true, func(ctx context.Context) (bool, error) {
 		var cod ocv1.ClusterObjectDeployment
@@ -215,6 +216,7 @@ func (m *Migrator) rememberRollbackDeployment(ctx context.Context, ce *ocv1.Clus
 	return nil
 }
 
+// listMigrationRevisions selects migration revisions and rejects conflicting ownership identities.
 func (m *Migrator) listMigrationRevisions(ctx context.Context, ce *ocv1.ClusterExtension, list *ocv1.ClusterObjectSetList) error {
 	if err := m.Client.List(ctx, list); err != nil {
 		return err
@@ -232,6 +234,7 @@ func (m *Migrator) listMigrationRevisions(ctx context.Context, ce *ocv1.ClusterE
 	return nil
 }
 
+// validateRollbackRevision requires the expected revision group and verifies controller ancestry before deletion.
 func (m *Migrator) validateRollbackRevision(ctx context.Context, revision *ocv1.ClusterObjectSet, ce *ocv1.ClusterExtension) error {
 	name := ce.Name
 	if revision.Spec.Group != name {

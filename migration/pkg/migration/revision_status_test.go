@@ -12,6 +12,7 @@ import (
 	ocv1 "github.com/operator-framework/operator-controller/api/v1"
 )
 
+// TestCOSWaitsRejectLegacyConditions requires current completion and readiness signals instead of legacy status conditions.
 func TestCOSWaitsRejectLegacyConditions(t *testing.T) {
 	cos := &ocv1.ClusterObjectSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "example-1"},
@@ -35,6 +36,7 @@ func TestCOSWaitsRejectLegacyConditions(t *testing.T) {
 	}
 }
 
+// TestCOSCompletionInvalidSpecification checks that a current invalid-specification condition fails completion promptly.
 func TestCOSCompletionInvalidSpecification(t *testing.T) {
 	for _, generation := range []int64{1, 2} {
 		cos := &ocv1.ClusterObjectSet{

@@ -43,6 +43,7 @@ func (c *orphanRecordingClient) Delete(ctx context.Context, obj client.Object, o
 	return c.Client.Delete(ctx, obj, opts...)
 }
 
+// TestRollbackRestoresSubscriptionAndOrphansAllOwnedRevisions checks restoration preserves workloads while removing verified revision management.
 func TestRollbackRestoresSubscriptionAndOrphansAllOwnedRevisions(t *testing.T) {
 	ctx := context.Background()
 	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "widgets", Annotations: map[string]string{
@@ -87,6 +88,7 @@ func TestRollbackRestoresSubscriptionAndOrphansAllOwnedRevisions(t *testing.T) {
 	}
 }
 
+// TestRollbackRevisionGroupAndForeignNameCollision rejects missing group identities and foreign revisions with colliding names.
 func TestRollbackRevisionGroupAndForeignNameCollision(t *testing.T) {
 	for _, owner := range []string{"", "other"} {
 		t.Run("owner="+owner, func(t *testing.T) {
@@ -161,6 +163,7 @@ type recreatingRevisionClient struct {
 	deletes int
 }
 
+// Delete simulates a controller creating a late revision during rollback deletion.
 func (c *recreatingRevisionClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
 	if _, ok := obj.(*ocv1.ClusterObjectSet); !ok {
 		return c.Client.Delete(ctx, obj, opts...)
@@ -177,6 +180,7 @@ func (c *recreatingRevisionClient) Delete(ctx context.Context, obj client.Object
 	return nil
 }
 
+// TestRollbackDeletesRevisionRecreatedDuringDeletion checks that late verified revisions are removed before restoration.
 func TestRollbackDeletesRevisionRecreatedDuringDeletion(t *testing.T) {
 	ctx := context.Background()
 	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "widgets"}}
@@ -206,6 +210,7 @@ func (c *revisionDeleteFailureClient) Delete(ctx context.Context, obj client.Obj
 	return c.Client.Delete(ctx, obj, opts...)
 }
 
+// TestRollbackRevisionDeleteFailureKeepsBackupForRetry preserves migration backup data when revision deletion fails.
 func TestRollbackRevisionDeleteFailureKeepsBackupForRetry(t *testing.T) {
 	ctx := context.Background()
 	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "widgets", Annotations: map[string]string{
@@ -340,6 +345,7 @@ func TestRecoverFromBackupTimeoutPreservesRecreatedSubscription(t *testing.T) {
 	}
 }
 
+// TestCleanupConflictPreservesSharedOperatorGroupAndOLMv1Management protects shared groups and active OLMv1 ownership during conflict cleanup.
 func TestCleanupConflictPreservesSharedOperatorGroupAndOLMv1Management(t *testing.T) {
 	ctx := context.Background()
 	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "widgets", Annotations: map[string]string{

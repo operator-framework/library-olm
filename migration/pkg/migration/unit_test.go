@@ -65,6 +65,7 @@ func (c canceledScaleClient) Update(ctx context.Context, obj client.Object, opts
 	return c.Client.Update(ctx, obj, opts...)
 }
 
+// Create injects configured creation failures for migration recovery tests.
 func (c failingMigrationClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
 	if c.failCOSCreate {
 		if _, ok := obj.(*ocv1.ClusterObjectSet); ok {
@@ -100,6 +101,7 @@ func (c failingMigrationClient) Create(ctx context.Context, obj client.Object, o
 	return c.Client.Create(ctx, obj, opts...)
 }
 
+// Get injects configured read failures for migration recovery tests.
 func (c failingMigrationClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 	if c.invalidCOS {
 		if cos, ok := obj.(*ocv1.ClusterObjectSet); ok {
@@ -1699,6 +1701,7 @@ func TestCreateMigrationResourcesPreservesTrackedCOSAfterClusterExtensionFailure
 	}
 }
 
+// TestCreateClusterObjectSetCleansSecretsAfterReadinessFailure checks failed staging cleans its owned Secret artifacts.
 func TestCreateClusterObjectSetCleansSecretsAfterReadinessFailure(t *testing.T) {
 	ctx := context.Background()
 	m := migrationTestClient(t, establishedClusterObjectSetCRD())
@@ -1778,6 +1781,7 @@ func TestRecoverCreatedMigrationResourcesPreservesActiveTargetResources(t *testi
 	}
 }
 
+// TestWaitForClusterObjectSetAvailable requires the current Ready condition for workload availability.
 func TestWaitForClusterObjectSetAvailable(t *testing.T) {
 	ctx := context.Background()
 	cos := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "sub-1"}, Status: ocv1.ClusterObjectSetStatus{Conditions: []metav1.Condition{{
