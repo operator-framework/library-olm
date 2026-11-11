@@ -243,7 +243,9 @@ nonzero results after partial failure (V1.7). Unit tests also verify that batch
 classification applies acknowledgment flags and rejects `-n` or `--ce-name` with `--all`.
 
 `make migration/test-e2e-live-batch` repeats the four-state selection check with
-two operators installed by OLMv0 and three isolated state markers. It asserts
+Redis and external-secrets installed by OLMv0 and three isolated state markers.
+This avoids the ecr-secret bundle’s invalid custom-resource sample in repeated
+conversions; ecr-secret remains covered by the live migration matrix. It asserts
 that both eligible operators are selected and converted. It has its own
 CLI coverage directory and runs in the live CI job.
 The live batch and fixture acceptance targets verify that their kubeconfig
