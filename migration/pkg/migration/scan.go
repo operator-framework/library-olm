@@ -741,7 +741,7 @@ func dependentsWarning(packageName string, dependents []string) string {
 	return fmt.Sprintf("other operator(s) may depend on package %q: %v — verify they remain functional after migration", packageName, dependents)
 }
 
-// Gather checks the target COS prerequisites and collects everything that would
+// Gather checks the target COD/COS prerequisites and collects everything that would
 // be migrated without making cluster mutations — backs convert --dry-run (R1.1).
 func (m *Migrator) Gather(ctx context.Context, opts Options) (*MigrationInfo, error) {
 	opts.ApplyDefaults()
@@ -754,7 +754,6 @@ func (m *Migrator) Gather(ctx context.Context, opts Options) (*MigrationInfo, er
 		return nil, err
 	}
 	info.SystemNamespace = prepared.SystemNamespace
-	info.UseClusterObjectDeployment = prepared.UseClusterObjectDeployment
 	return info, nil
 }
 

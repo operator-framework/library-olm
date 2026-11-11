@@ -10,6 +10,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	ocv1 "github.com/operator-framework/operator-controller/api/v1"
 	ocv1ac "github.com/operator-framework/operator-controller/applyconfigurations/api/v1"
 )
 
@@ -19,7 +20,7 @@ func largeConfigMap(name, payload string) *ocv1ac.ClusterObjectSetObjectApplyCon
 		"metadata": map[string]interface{}{"name": name},
 		"data":     map[string]interface{}{"payload": payload},
 	}}
-	return ocv1ac.ClusterObjectSetObject().WithObject(object)
+	return ocv1ac.ClusterObjectSetObject().WithType(ocv1.ObjectTypeInlineManifest).WithInlineManifest(object)
 }
 
 func TestSecretPackerSplitsLargeBundleAcrossSecrets(t *testing.T) {
@@ -81,5 +82,34 @@ func TestSecretPackerCompressesOversizedObject(t *testing.T) {
 	data, found, err := unstructured.NestedString(restored.Object, "data", "payload")
 	if err != nil || !found || data != payload {
 		t.Fatalf("restored payload length = %d, found = %t, error = %v", len(data), found, err)
+	}
+}
+
+func TestSecretPackerUsesObjectType(t *testing.T) {
+	for _, kind := range []string{"inline", "reference", "missing type", "missing manifest", "unknown"} {
+		t.Run(kind, func(t *testing.T) {
+			object := largeConfigMap("config", "payload")
+			switch kind {
+			case "reference":
+				object.WithType(ocv1.ObjectTypeObjectReference)
+			case "missing type":
+				object.Type = nil
+			case "missing manifest":
+				object.InlineManifest = nil
+			case "unknown":
+				object.WithType(ocv1.ObjectType("Unknown"))
+			}
+			packed, err := (&secretPacker{RevisionName: "example", OwnerName: "example", SystemNamespace: "controller"}).pack([]*ocv1ac.ClusterObjectSetPhaseApplyConfiguration{ocv1ac.ClusterObjectSetPhase().WithObjects(object)})
+			if kind == "inline" || kind == "reference" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if (len(packed.Refs) > 0) != (kind == "inline") {
+					t.Fatalf("wrong union member packed: %+v", packed)
+				}
+			} else if err == nil {
+				t.Fatal("accepted malformed union")
+			}
+		})
 	}
 }

@@ -72,7 +72,7 @@ func TestDeploymentReadiness(t *testing.T) {
 }
 
 func TestPrepareDeployment(t *testing.T) {
-	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: clusterObjectDeploymentCRDName}, Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{Type: apiextensionsv1.Established, Status: apiextensionsv1.ConditionTrue}}}}
+	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: clusterObjectDeploymentCRDName}, Spec: apiextensionsv1.CustomResourceDefinitionSpec{Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{Name: "v1", Served: true, Schema: testRevisionSchema(true)}}}, Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{Type: apiextensionsv1.Established, Status: apiextensionsv1.ConditionTrue}}}}
 	ctx := context.Background()
 	if err := migrationTestClient(t).prepareClusterObjectDeployment(ctx, "example"); err == nil {
 		t.Fatal("accepted missing CRD")
@@ -152,21 +152,21 @@ func TestDeploymentTerminalRevisionFailures(t *testing.T) {
 	}
 }
 
-func TestAutomaticDeploymentSelection(t *testing.T) {
+func TestRequiredDeploymentPrerequisite(t *testing.T) {
 	for _, tc := range []struct {
 		name                                string
 		present, established, failDiscovery bool
 	}{
-		{name: "absent uses COS"},
+		{name: "absent blocks migration"},
 		{name: "present uses COD", present: true, established: true},
 		{name: "unready does not fall back", present: true},
 		{name: "discovery failure does not fall back", failDiscovery: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cosCRD := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName}, Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{Type: apiextensionsv1.Established, Status: apiextensionsv1.ConditionTrue}}}}
+			cosCRD := establishedClusterObjectSetCRD()
 			m := migrationTestClient(t, cosCRD)
 			if tc.present {
-				codCRD := cosCRD.DeepCopy()
+				codCRD := establishedClusterObjectDeploymentCRD()
 				codCRD.Name = clusterObjectDeploymentCRDName
 				codCRD.ResourceVersion = ""
 				if !tc.established {
@@ -184,14 +184,11 @@ func TestAutomaticDeploymentSelection(t *testing.T) {
 					return c.Get(ctx, key, obj, opts...)
 				}})
 			}
-			// An input value must not override automatic selection.
-			opts, err := m.PrepareClusterObjectSet(context.Background(), Options{SubscriptionName: "example", SystemNamespace: "controller", UseClusterObjectDeployment: !tc.present})
-			wantError := tc.failDiscovery || tc.present && !tc.established
+			// Missing or unreadable COD support must never fall back to direct COS creation.
+			_, err := m.PrepareClusterObjectSet(context.Background(), Options{SubscriptionName: "example", SystemNamespace: "controller"})
+			wantError := tc.failDiscovery || !tc.present || !tc.established
 			if (err != nil) != wantError {
 				t.Fatalf("error = %v, want error %v", err, wantError)
-			}
-			if err == nil && opts.UseClusterObjectDeployment != tc.present {
-				t.Fatalf("COD selected = %v, want %v", opts.UseClusterObjectDeployment, tc.present)
 			}
 		})
 	}
@@ -234,28 +231,6 @@ func (c completingDeploymentClient) Create(ctx context.Context, obj client.Objec
 		cod.UID, cod.Generation, cod.Status = ready.UID, ready.Generation, ready.Status
 	}
 	return c.Client.Create(ctx, obj, opts...)
-}
-
-func TestCreateClusterObjectSetAdoptionLabel(t *testing.T) {
-	m := migrationTestClient(t)
-	m.Client = failingMigrationClient{Client: m.Client, succeedCOS: true}
-	resources, err := m.createClusterObjectSet(context.Background(), Options{ClusterExtensionName: "example", SubscriptionNamespace: "ns", SubscriptionName: "sub"}, &MigrationInfo{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resources.cos == nil || resources.cod != nil {
-		t.Fatal("expected a directly created COS when the COD CRD is absent")
-	}
-	var cos ocv1.ClusterObjectSet
-	if err := m.Client.Get(context.Background(), client.ObjectKeyFromObject(resources.cos), &cos); err != nil {
-		t.Fatal(err)
-	}
-	if cos.Labels["apps.kubernetes.io/managed-by"] != "object-controller" {
-		t.Fatal("migration COS lacks the object-controller adoption label")
-	}
-	if metav1.GetControllerOf(&cos) != nil || cos.Spec.Group != "example" || cos.Spec.CollisionProtection != ocv1.CollisionProtectionNone {
-		t.Fatalf("unexpected staging COS identity or collision protection: %#v", cos)
-	}
 }
 
 func TestCreateDeploymentTemplate(t *testing.T) {
@@ -352,7 +327,7 @@ func TestRollbackRevisionControllerOwnership(t *testing.T) {
 		missingCOD bool
 		wantError  bool
 	}{
-		{name: "orphaned or legacy revision"},
+		{name: "orphaned revision"},
 		{name: "CE controller", owner: metav1.NewControllerRef(ce, ocv1.GroupVersion.WithKind(ocv1.ClusterExtensionKind))},
 		{name: "COD controller", owner: metav1.NewControllerRef(cod, ocv1.GroupVersion.WithKind(ocv1.ClusterObjectDeploymentKind))},
 		{name: "missing COD cannot verify UID", owner: metav1.NewControllerRef(cod, ocv1.GroupVersion.WithKind(ocv1.ClusterObjectDeploymentKind)), missingCOD: true, wantError: true},
@@ -375,12 +350,11 @@ func TestRollbackRevisionControllerOwnership(t *testing.T) {
 			}
 		})
 	}
-	// The old initial revision may lack both group and label; other unowned
-	// objects without any migration identity must not be admitted by name alone.
+	// A matching name cannot substitute for the required group.
 	m := migrationTestClient(t, ce)
 	for _, name := range []string{"example-1", "unrelated"} {
-		revision := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: name}}
-		if err := m.validateRollbackRevision(context.Background(), revision, ce); (err != nil) != (name == "unrelated") {
+		revision := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{LabelOwnerName: ce.Name}}}
+		if err := m.validateRollbackRevision(context.Background(), revision, ce); err == nil {
 			t.Fatalf("validation of %s = %v", name, err)
 		}
 	}
@@ -491,4 +465,51 @@ func (c *deploymentDeletionClient) Delete(ctx context.Context, obj client.Object
 		}
 	}
 	return c.Client.Delete(ctx, obj, opts...)
+}
+
+func establishedClusterObjectDeploymentCRD() *apiextensionsv1.CustomResourceDefinition {
+	crd := establishedClusterObjectSetCRD()
+	crd.Name = clusterObjectDeploymentCRDName
+	crd.Spec.Versions[0].Schema = testRevisionSchema(true)
+	return crd
+}
+
+func TestMissingCODBlocksMigrationBeforeMutation(t *testing.T) {
+	sub, csv := healthySubscriptionFixtures()
+	m := migrationTestClient(t, sub, csv, establishedClusterObjectSetCRD())
+	m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{
+		Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+			t.Fatal("created a resource without COD support")
+			return nil
+		},
+		Update: func(context.Context, client.WithWatch, client.Object, ...client.UpdateOption) error {
+			t.Fatal("updated a resource without COD support")
+			return nil
+		},
+		Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
+			t.Fatal("deleted a resource without COD support")
+			return nil
+		},
+	})
+	ctx := context.Background()
+	opts := Options{SubscriptionName: sub.Name, SubscriptionNamespace: sub.Namespace}
+	report, err := m.CheckReadiness(ctx, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, check := range report.Checks {
+		if check.Name == "ClusterObjectDeployment API" && !check.Passed && strings.Contains(check.Message, clusterObjectDeploymentCRDName) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("readiness did not report missing COD support: %+v", report)
+	}
+	if _, err := m.Gather(ctx, opts); err == nil || !strings.Contains(err.Error(), clusterObjectDeploymentCRDName) {
+		t.Fatalf("dry-run Gather did not reject missing COD: %v", err)
+	}
+	if err := m.Migrate(ctx, opts); err == nil {
+		t.Fatal("migration accepted missing COD support")
+	}
 }

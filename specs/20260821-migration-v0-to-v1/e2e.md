@@ -5,7 +5,7 @@ This document tracks the implemented portion of the Phase 8 E2E plan from
 rejection paths, real-operator smoke scenarios, COS supersession, and an in-cluster Job that
 verifies ServiceAccount authentication.
 
-The suites install experimental OLMv1 because migration requires its COS API. The
+The suites install experimental OLMv1 because migration requires its COD and COS APIs. The
 system-managed namespace scenario uses the same profile, so standard-profile availability is
 not a migration gap. Dependency and APIService fixtures verify intentional compatibility
 refusals, not features this library is expected to implement.
@@ -14,20 +14,18 @@ refusals, not features this library is expected to implement.
 
 ### COD transition
 
-The library API dependency and COD CI controller both use commit `77754d81ea01`.
+The library API dependency and COD CI controller both use commit `c6e63b616662`.
 The handoff test checks that the ownerless migration COD
 has `apps.kubernetes.io/managed-by: operator-controller` before CE creation and
 retains the label and COD UID after adoption.
 Migration COS revisions carry `apps.kubernetes.io/managed-by: object-controller`.
-The handoff test checks this value on the initial revision in both modes and on
-the COD-generated catalog revision. Unit tests cover direct COS creation, while
-the COD controller stamps its own generated revisions.
+The handoff test checks this value on the initial revision and on
+the COD-generated catalog revision. Unit tests reject missing COD prerequisites; the COD controller stamps its own generated revisions.
 Unit regressions cover definitive create rejection recovery, terminal rollout
 diagnostics, and rollback retries with dangling references to verified COD UIDs.
 
-Migration automatically creates a COD named after the CE when the COD CRD exists;
-otherwise it directly creates a COS, including against the default v1.12.0 installation.
-A present but unready COD CRD or a discovery error blocks migration rather than falling back.
+Migration always creates a COD named after the CE. Missing, deleting, unestablished,
+or unreadable COD CRDs block migration before OLMv0 mutations. No direct-COS fallback exists.
 COD migration requires the COD API/controller and the COD-backed CE applier merged in
 operator-controller PR #3058. The library's pinned API dependency alone does not
 install that controller. Unit tests exercise creation, preflight, readiness and
@@ -39,13 +37,29 @@ conversion and acknowledged rollback preserved the operator Deployment UID and i
 available replica, restored the Subscription, and removed the COD and both COS revisions.
 The `migration/test-e2e-cod-rollback` target now automates those rollback assertions and
 collects CLI coverage. A separate CI job builds and installs operator-controller from
-pinned commit `77754d81ea0125d3a850e9fa57decf7a7255a409`, then runs the handoff and
-rollback targets. Default suites continue to exercise the legacy COS path.
+pinned commit `c6e63b6166621b33a6de781c231bbcc97b5ca2c7`, then runs the handoff and
+rollback targets. Default suites also build this pinned controller from source,
+using upstream build targets and the experimental installer. Docker, Git, Python 3, and
+`envsubst` must be available locally. Setup loads the built images into the
+existing kind cluster without recreating it. Live setup also installs upstream's
+`operatorhubio` ClusterCatalog and waits for it to serve; the catalog-migration
+test uses its resolved image digest. Every live setup reapplies the catalog, including retries after partial installation.
+Fixture setup skips that public catalog
+and uses the locally built fixture catalog.
 
-Both covered targets passed locally against `77754d81ea01` on
-kind Kubernetes 1.37: handoff in 25.7 seconds and fixture conversion/rollback in
-26.7 seconds. This verifies the revision labels and COD adoption requirement with the
-actual controller, as well as workload-preserving rollback after adoption.
+COS/COD are experimental: only the current typed `inlineManifest`/`objectRef`
+entries are supported. There is no conversion of older experimental resource
+schemas. Setup validates existing COS/COD schemas and rejects incompatible clusters
+with instructions to recreate them. If the ClusterExtension CRD already exists,
+setup skips the controller build and image loading; even a compatible cluster may
+therefore run an older commit. Recreate the cluster to change the installed controller
+commit. Fixture rollback verifies restoration, not OLMv0 reconciliation, because
+fixture clusters have no OLMv0 controllers.
+
+Both covered targets passed locally against `c6e63b616662` on kind Kubernetes
+1.37: handoff in 25.9 seconds and fixture conversion/rollback in 26.8 seconds.
+The default source-build bootstrap also passed. These checks verify current
+revision encoding, COD adoption, and workload-preserving rollback.
 
 ### Existing suites
 
@@ -55,13 +69,21 @@ actual controller, as well as workload-preserving rollback after adoption.
 | `real-operator` | separate kind cluster with OLMv0 + OLMv1 | OLMv0's installed OperatorHub catalog | Covers V5.2–V5.6 plus cleanup, healthy rollback, and remigration (V5.8). V5.7 upgrade remains a gap. |
 | `in-cluster-job` | fixture cluster | A replayed ecr-secret-operator installation | Proves both CLIs authenticate and migrate using only a Pod ServiceAccount. |
 
-Do not use a mutable public `latest` image or an unpinned release installer in CI. The fixture
+The live suite intentionally follows the upstream `operatorhubio` catalog tag.
+Quay removes superseded catalog manifests, so pinning its resolved digest does not
+provide a durable test input. The catalog-creation test uses the currently resolved
+digest and reports failure if that content disappears during the run. Use fixture
+suites for reproducible catalog content. Setup waits for object-controller,
+operator-controller, and catalogd on every run. Controller builds fix image names
+to match generated manifests, regardless of caller image overrides.
+
+Pin controller versions and installers in CI; the public live catalog above is an
+explicit exception. The fixture
 registry's `latest` tag is private to the disposable cluster and rebuilt from committed inputs on
-every setup. The default bootstrap pins OLMv0 to `v0.46.0`, OLMv1 to `v1.12.0`, and kind to
+every setup. The default bootstrap pins OLMv0 to `v0.46.0`, OLMv1 to commit `c6e63b616662`, and kind to
 `v0.33.0` with the digest-pinned Kubernetes `v1.37.0` node image; CI should
 mirror those release artifacts and override the URLs when it cannot access GitHub. The job inputs
-are the kind node image, OLMv0 manifest URL and digest, operator-controller release
-manifest URL and digest, and (only for the smoke suite) the catalog image/package/channel/CSV
+are the kind node image, OLMv0 manifest URL and digest, operator-controller source commit, and (only for the smoke suite) the catalog image/package/channel/CSV
 version. The fixture catalog is constructed from committed snapshots on every fixture-cluster
 setup, so it does not rely on a retained Quay digest or a mutable external catalog tag.
 
@@ -73,7 +95,7 @@ setup, so it does not rely on a retained Quay digest or a mutable external catal
    an optional override for that generated output path.
 2. Live only: apply the pinned OLMv0 quickstart manifest and wait for both `olm-operator` and
    `catalog-operator` deployments to be Available.
-3. Live only: install the pinned experimental operator-controller release and wait for its deployment,
+3. Live only: build and install the pinned experimental operator-controller and wait for its deployment,
    catalogd, cert provider, and required CRDs to be established.
 4. For the fixture suite, run `make migration/e2e-fixture-setup` to create (or reuse) the separate
    `library-olm-fixture-e2e` cluster and generate `.kubeconfig/library-olm-fixture-e2e`. This
@@ -119,7 +141,7 @@ The currently implemented coverage is described in the Fixtures and CI sections.
 
 | Validation IDs | Scenario | Required assertions |
 |---|---|---|
-| V1.1, V1.2, V1.3, V3.1–V3.7 | Baseline fixture migration | `check`, dry-run, COS `Succeeded=True` before CE creation, CE `Installed=True`, field mappings, CE backups/audit, Sub/CSV cleanup. |
+| V1.1, V1.2, V1.3, V3.1–V3.7 | Baseline fixture migration | `check`, dry-run, COD rollout completion and availability before CE creation, CE `Installed=True`, field mappings, CE backups/audit, Sub/CSV cleanup. |
 | V4.7 | Cross-namespace fixture migration | Target namespace is created with copied PSA/SCC labels; source Deployments are scaled to zero before target creation; CE and rendered Deployment use the target; collected source Deployment is removed while the source namespace remains. |
 | V4.7 | Acknowledged live namespace deletion | A real OLMv0 installation is converted with `--acknowledge-namespace-delete`; after CE installation in the target namespace, OLMv0 finalizes the CSV and the source namespace is deleted. |
 | V4.8 | System-managed namespace fixture migration | Against the experimental controller profile, verify the explicit opt-in omits `spec.namespace`, migration imports the prepared bundle-metadata namespace into its COS, the catalog COS takes ownership, OLMv1 manages the target Deployment there, and source copies are removed. Unit tests verify unsupported CRDs reject the mode before mutation. |
@@ -195,8 +217,8 @@ in-cluster Job E2E, COS-supersession E2E, and pinned COD handoff/rollback E2E as
 live, COS-supersession, and COD tests publish coverage inputs; a dependent coverage job displays
 their combined report. The Job intentionally does not upload diagnostics or coverage artifacts.
 
-The supersession check is deliberately separate from the conversion matrix. With the released
-operator-controller v1.12.0, migration creates revision 1 with collision protection `None`;
+The supersession check is deliberately separate from the conversion matrix. With the pinned
+experimental controller, migration creates revision 1 with collision protection `None`;
 creating the ClusterExtension results in a controller-owned, catalog-derived revision 2 with
 collision protection `Prevent`. The check requires both revisions to succeed.
 

@@ -39,12 +39,12 @@ import (
 
 type failingMigrationClient struct {
 	client.Client
-	failCOSCreate     bool
-	unknownCOSCreate  bool
+	failCODCreate     bool
+	unknownCODCreate  bool
 	failCECreate      bool
 	failCEAfterCreate bool
-	blockCOS          bool
-	succeedCOS        bool
+	invalidCOD        bool
+	succeedCOD        bool
 }
 
 // canceledScaleClient cancels the caller's context while failing one scale-down
@@ -66,14 +66,14 @@ func (c canceledScaleClient) Update(ctx context.Context, obj client.Object, opts
 }
 
 func (c failingMigrationClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
-	if c.failCOSCreate {
-		if _, ok := obj.(*ocv1.ClusterObjectSet); ok {
-			return apierrors.NewAlreadyExists(ocv1.GroupVersion.WithResource("clusterobjectsets").GroupResource(), obj.GetName())
+	if c.failCODCreate {
+		if _, ok := obj.(*ocv1.ClusterObjectDeployment); ok {
+			return apierrors.NewAlreadyExists(ocv1.GroupVersion.WithResource("clusterobjectdeployments").GroupResource(), obj.GetName())
 		}
 	}
-	if c.unknownCOSCreate {
-		if _, ok := obj.(*ocv1.ClusterObjectSet); ok {
-			return errors.New("simulated ClusterObjectSet create transport failure")
+	if c.unknownCODCreate {
+		if _, ok := obj.(*ocv1.ClusterObjectDeployment); ok {
+			return errors.New("simulated ClusterObjectDeployment create transport failure")
 		}
 	}
 	if c.failCECreate {
@@ -89,11 +89,11 @@ func (c failingMigrationClient) Create(ctx context.Context, obj client.Object, o
 			return errors.New("simulated ClusterExtension create transport failure")
 		}
 	}
-	if c.succeedCOS {
-		if cos, ok := obj.(*ocv1.ClusterObjectSet); ok {
+	if c.succeedCOD {
+		if cos, ok := obj.(*ocv1.ClusterObjectDeployment); ok {
 			cos.Status.Conditions = []metav1.Condition{
-				{Type: "Succeeded", Status: metav1.ConditionTrue},
-				{Type: "Available", Status: metav1.ConditionTrue},
+				{Type: ocv1.ClusterObjectDeploymentTypeProgressing, Status: metav1.ConditionFalse, Reason: ocv1.ClusterObjectDeploymentReasonNewClusterObjectSetProgressed},
+				{Type: ocv1.ClusterObjectDeploymentTypeAvailable, Status: metav1.ConditionTrue},
 			}
 		}
 	}
@@ -101,9 +101,12 @@ func (c failingMigrationClient) Create(ctx context.Context, obj client.Object, o
 }
 
 func (c failingMigrationClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-	if c.blockCOS {
-		if cos, ok := obj.(*ocv1.ClusterObjectSet); ok {
-			cos.Status.Conditions = []metav1.Condition{{Type: "Succeeded", Status: metav1.ConditionFalse, Reason: "Blocked"}}
+	if c.invalidCOD {
+		if cos, ok := obj.(*ocv1.ClusterObjectDeployment); ok {
+			if err := c.Client.Get(ctx, key, obj, opts...); err != nil {
+				return err
+			}
+			cos.Status.Conditions = []metav1.Condition{{Type: ocv1.ClusterObjectDeploymentTypeProgressing, Status: metav1.ConditionFalse, Reason: ocv1.ClusterObjectDeploymentReasonInvalidSpecification}}
 			return nil
 		}
 	}
@@ -152,6 +155,7 @@ func healthySubscriptionFixtures() (*operatorsv1alpha1.Subscription, *operatorsv
 func establishedClusterObjectSetCRD() *apiextensionsv1.CustomResourceDefinition {
 	return &apiextensionsv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
+		Spec:       apiextensionsv1.CustomResourceDefinitionSpec{Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{Name: "v1", Served: true, Schema: testRevisionSchema(false)}}},
 		Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{
 			Type:   apiextensionsv1.Established,
 			Status: apiextensionsv1.ConditionTrue,
@@ -185,7 +189,7 @@ func establishedClusterExtensionCRD(namespaceRequired bool) *apiextensionsv1.Cus
 
 func TestCheckReadiness(t *testing.T) {
 	sub, csv := healthySubscriptionFixtures()
-	m := migrationTestClient(t, sub, csv, establishedClusterObjectSetCRD())
+	m := migrationTestClient(t, sub, csv, establishedClusterObjectSetCRD(), establishedClusterObjectDeploymentCRD())
 	report, err := m.CheckReadiness(context.Background(), Options{SubscriptionName: "sub", SubscriptionNamespace: "ns"})
 	if err != nil || !report.Passed() {
 		t.Fatalf("healthy report=%#v err=%v", report, err)
@@ -194,7 +198,7 @@ func TestCheckReadiness(t *testing.T) {
 	busySub, busyCSV := healthySubscriptionFixtures()
 	busySub.Status.State = operatorsv1alpha1.SubscriptionStateUpgradeAvailable
 	busyCSV.Status.Phase = operatorsv1alpha1.CSVPhaseFailed
-	m = migrationTestClient(t, busySub, busyCSV, establishedClusterObjectSetCRD())
+	m = migrationTestClient(t, busySub, busyCSV, establishedClusterObjectSetCRD(), establishedClusterObjectDeploymentCRD())
 	report, err = m.CheckReadiness(context.Background(), Options{SubscriptionName: "sub", SubscriptionNamespace: "ns"})
 	if err != nil || report.Passed() || len(report.FailedChecks()) != 2 {
 		t.Fatalf("unacknowledged report=%#v err=%v", report, err)
@@ -206,7 +210,7 @@ func TestCheckReadiness(t *testing.T) {
 
 	depSub, depCSV := healthySubscriptionFixtures()
 	depSub.Annotations = map[string]string{"olm.generated-by": "parent"}
-	m = migrationTestClient(t, depSub, depCSV, establishedClusterObjectSetCRD(), &operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "other"}, Spec: &operatorsv1alpha1.SubscriptionSpec{Package: "widgets"}})
+	m = migrationTestClient(t, depSub, depCSV, establishedClusterObjectSetCRD(), establishedClusterObjectDeploymentCRD(), &operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "other"}, Spec: &operatorsv1alpha1.SubscriptionSpec{Package: "widgets"}})
 	report, err = m.CheckReadiness(context.Background(), Options{SubscriptionName: "sub", SubscriptionNamespace: "ns"})
 	if err != nil || report.Passed() || len(report.FailedChecks()) != 2 {
 		t.Fatalf("dependency/duplicate report=%#v err=%v", report, err)
@@ -392,13 +396,13 @@ func TestPhaseSortAndResourceKeys(t *testing.T) {
 		u.SetGroupVersionKind(schema.GroupVersionKind{Group: group, Version: "v1", Kind: kind})
 		u.SetNamespace(namespace)
 		u.SetName(name)
-		return *ocv1ac.ClusterObjectSetObject().WithObject(u)
+		return *ocv1ac.ClusterObjectSetObject().WithType(ocv1.ObjectTypeInlineManifest).WithInlineManifest(u)
 	}
 	phases := PhaseSort([]ocv1ac.ClusterObjectSetObjectApplyConfiguration{object("apps", "Deployment", "z", "b"), object("", "Secret", "z", "a"), object("apiextensions.k8s.io", "CustomResourceDefinition", "", "widgets.example.io"), object("apps", "Deployment", "a", "a")})
 	if len(phases) != 3 || *phases[0].Name != string(PhaseConfiguration) || *phases[1].Name != string(PhaseCRDs) || *phases[2].Name != string(PhaseDeploy) {
 		t.Fatalf("unexpected phases %#v", phases)
 	}
-	if *phases[2].CollisionProtection != ocv1.CollisionProtectionNone || phases[2].Objects[0].Object.GetNamespace() != "a" {
+	if *phases[2].CollisionProtection != ocv1.CollisionProtectionNone || phases[2].Objects[0].InlineManifest.GetNamespace() != "a" {
 		t.Fatalf("deployment phase not sorted with migration collision protection: %#v", phases[2])
 	}
 	a := unstructured.Unstructured{}
@@ -414,7 +418,7 @@ func TestPhaseSortAndResourceKeys(t *testing.T) {
 
 func TestSecretPacker(t *testing.T) {
 	obj := unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "one"}, "data": map[string]interface{}{"x": "y"}}}
-	phases := []*ocv1ac.ClusterObjectSetPhaseApplyConfiguration{ocv1ac.ClusterObjectSetPhase().WithObjects(ocv1ac.ClusterObjectSetObject().WithObject(obj), ocv1ac.ClusterObjectSetObject().WithObject(obj))}
+	phases := []*ocv1ac.ClusterObjectSetPhaseApplyConfiguration{ocv1ac.ClusterObjectSetPhase().WithObjects(ocv1ac.ClusterObjectSetObject().WithType(ocv1.ObjectTypeInlineManifest).WithInlineManifest(obj), ocv1ac.ClusterObjectSetObject().WithType(ocv1.ObjectTypeInlineManifest).WithInlineManifest(obj))}
 	result, err := (&secretPacker{RevisionName: "rev", OwnerName: "ce", SystemNamespace: "system"}).pack(phases)
 	if err != nil || len(result.Secrets) != 1 || len(result.Secrets[0].Data) != 1 || len(result.Refs) != 2 {
 		t.Fatalf("pack result=%#v err=%v", result, err)
@@ -896,6 +900,7 @@ func TestCleanupResultErr(t *testing.T) {
 func TestPrepareClusterObjectSet(t *testing.T) {
 	establishedCRD := &apiextensionsv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
+		Spec:       apiextensionsv1.CustomResourceDefinitionSpec{Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{Name: "v1", Served: true, Schema: testRevisionSchema(false)}}},
 		Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{
 			Type:   apiextensionsv1.Established,
 			Status: apiextensionsv1.ConditionTrue,
@@ -908,7 +913,7 @@ func TestPrepareClusterObjectSet(t *testing.T) {
 			Labels:    map[string]string{"app.kubernetes.io/name": "operator-controller"},
 		},
 	}
-	m := migrationTestClient(t, establishedCRD, controller)
+	m := migrationTestClient(t, establishedCRD, establishedClusterObjectDeploymentCRD(), controller)
 
 	got, err := m.PrepareClusterObjectSet(context.Background(), Options{SubscriptionName: "sub", SubscriptionNamespace: "operators"})
 	if err != nil {
@@ -918,7 +923,7 @@ func TestPrepareClusterObjectSet(t *testing.T) {
 		t.Fatalf("SystemNamespace = %q, want discovered operator-controller namespace", got.SystemNamespace)
 	}
 
-	got, err = m.PrepareClusterObjectSet(context.Background(), Options{SystemNamespace: "chosen"})
+	got, err = m.PrepareClusterObjectSet(context.Background(), Options{SubscriptionName: "sub", SystemNamespace: "chosen"})
 	if err != nil {
 		t.Fatalf("PrepareClusterObjectSet() with override error = %v", err)
 	}
@@ -938,6 +943,7 @@ func TestPrepareClusterObjectSetRejectsExistingClusterExtension(t *testing.T) {
 func TestPrepareClusterObjectSetRejectsDeletingOperatorControllerNamespace(t *testing.T) {
 	establishedCRD := &apiextensionsv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
+		Spec:       apiextensionsv1.CustomResourceDefinitionSpec{Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{Name: "v1", Served: true, Schema: testRevisionSchema(false)}}},
 		Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{
 			Type:   apiextensionsv1.Established,
 			Status: apiextensionsv1.ConditionTrue,
@@ -959,7 +965,7 @@ func TestPrepareClusterObjectSetRejectsDeletingOperatorControllerNamespace(t *te
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			m := migrationTestClient(t, establishedCRD, controller)
+			m := migrationTestClient(t, establishedCRD, establishedClusterObjectDeploymentCRD(), controller)
 			_, err := m.PrepareClusterObjectSet(context.Background(), opts)
 			if err == nil || !strings.Contains(err.Error(), "cannot delete source namespace \"operator-controller\"") {
 				t.Fatalf("PrepareClusterObjectSet() error = %v, want source operator-controller namespace deletion rejection", err)
@@ -976,6 +982,7 @@ func TestPrepareClusterObjectSetRequiresEstablishedCRD(t *testing.T) {
 
 	m = migrationTestClient(t, &apiextensionsv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
+		Spec:       apiextensionsv1.CustomResourceDefinitionSpec{Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{Name: "v1", Served: true, Schema: testRevisionSchema(false)}}},
 	})
 	if _, err := m.PrepareClusterObjectSet(context.Background(), Options{}); err == nil || !strings.Contains(err.Error(), "not established") {
 		t.Fatalf("PrepareClusterObjectSet() error = %v, want unestablished CRD error", err)
@@ -1130,7 +1137,7 @@ func TestScanStatesAndPublicHelpers(t *testing.T) {
 func TestCheckReturnsPassingAndFailingChecks(t *testing.T) {
 	sub, csv := healthySubscriptionFixtures()
 	sub.Status.State = operatorsv1alpha1.SubscriptionStateUpgradeAvailable
-	m := migrationTestClient(t, sub, csv, establishedClusterObjectSetCRD())
+	m := migrationTestClient(t, sub, csv, establishedClusterObjectSetCRD(), establishedClusterObjectDeploymentCRD())
 
 	result, err := m.Check(context.Background(), Options{SubscriptionName: sub.Name, SubscriptionNamespace: sub.Namespace})
 	if err != nil {
@@ -1194,7 +1201,7 @@ func TestScanAllSubscriptionsWithOptionsAppliesAcknowledgments(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "scoped", Namespace: sub.Namespace},
 		Spec:       operatorsv1.OperatorGroupSpec{TargetNamespaces: []string{sub.Namespace}},
 	}
-	m := migrationTestClient(t, sub, csv, og, establishedClusterObjectSetCRD())
+	m := migrationTestClient(t, sub, csv, og, establishedClusterObjectSetCRD(), establishedClusterObjectDeploymentCRD())
 
 	without, err := m.ScanAllSubscriptions(ctx)
 	if err != nil || len(without) != 1 {
@@ -1247,7 +1254,7 @@ func TestMigrateEmitsStructuredProgressOnFailure(t *testing.T) {
 func TestPrerequisitesAndRecoveryErrors(t *testing.T) {
 	ctx := context.Background()
 	sub, csv := healthySubscriptionFixtures()
-	m := migrationTestClient(t, sub, csv, establishedClusterObjectSetCRD())
+	m := migrationTestClient(t, sub, csv, establishedClusterObjectSetCRD(), establishedClusterObjectDeploymentCRD())
 	gotCSV, ip, readiness, compatibility, err := m.EnsurePrerequisites(ctx, Options{SubscriptionName: "sub", SubscriptionNamespace: "ns"})
 	if err != nil || gotCSV.Name != csv.Name || ip != nil || !readiness.Passed() || compatibility == nil {
 		t.Fatalf("EnsurePrerequisites() = csv=%#v ip=%#v readiness=%#v compatibility=%#v err=%v", gotCSV, ip, readiness, compatibility, err)
@@ -1351,7 +1358,7 @@ func TestNonImageCatalogSourceRejectsOperatorMigration(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "source", Namespace: "catalogs"},
 				Spec:       operatorsv1alpha1.CatalogSourceSpec{SourceType: tt.sourceType, Image: tt.image},
 			}
-			objects := []runtime.Object{sub, csv, establishedClusterObjectSetCRD()}
+			objects := []runtime.Object{sub, csv, establishedClusterObjectSetCRD(), establishedClusterObjectDeploymentCRD()}
 			if !tt.missing {
 				objects = append(objects, cs)
 			}
@@ -1473,7 +1480,7 @@ func TestMigrationOperationsRejectInvalidInstallPlanCatalogSource(t *testing.T) 
 					Image:      "registry.example/subscription:latest",
 				},
 			}
-			objects := []runtime.Object{sub, csv, ip, subscriptionCatalog, establishedClusterObjectSetCRD()}
+			objects := []runtime.Object{sub, csv, ip, subscriptionCatalog, establishedClusterObjectSetCRD(), establishedClusterObjectDeploymentCRD()}
 			if tt.effectiveCatalog != nil {
 				objects = append(objects, tt.effectiveCatalog)
 			}
@@ -1572,8 +1579,8 @@ func TestRollbackAndCleanupRejectInvalidInputWithoutMutation(t *testing.T) {
 
 func TestCreateClusterObjectSetPreservesTemporarySecretsOnCollision(t *testing.T) {
 	ctx := context.Background()
-	m := migrationTestClient(t, establishedClusterObjectSetCRD())
-	m.Client = failingMigrationClient{Client: m.Client, failCOSCreate: true}
+	m := migrationTestClient(t, establishedClusterObjectSetCRD(), establishedClusterObjectDeploymentCRD())
+	m.Client = failingMigrationClient{Client: m.Client, failCODCreate: true}
 	object := unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "operator-config", "namespace": "ns"},
 	}}
@@ -1588,17 +1595,17 @@ func TestCreateClusterObjectSetPreservesTemporarySecretsOnCollision(t *testing.T
 		t.Fatal(err)
 	}
 	if len(secrets.Items) == 0 {
-		t.Fatal("COS collision removed temporary Secret(s) despite unknown ownership")
+		t.Fatal("COD collision removed temporary Secret(s) despite unknown ownership")
 	}
-	if err := m.Client.Get(ctx, client.ObjectKey{Name: "sub-1"}, &ocv1.ClusterObjectSet{}); err == nil {
-		t.Fatal("COS collision created a ClusterObjectSet")
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: "sub"}, &ocv1.ClusterObjectDeployment{}); err == nil {
+		t.Fatal("COD collision created a ClusterObjectSet")
 	}
 }
 
-func TestCreateMigrationResourcesTreatsCOSCollisionAsPotentiallyActive(t *testing.T) {
+func TestCreateMigrationResourcesTreatsCODCollisionAsPotentiallyActive(t *testing.T) {
 	ctx := context.Background()
-	m := migrationTestClient(t, establishedClusterObjectSetCRD())
-	m.Client = failingMigrationClient{Client: m.Client, failCOSCreate: true}
+	m := migrationTestClient(t, establishedClusterObjectSetCRD(), establishedClusterObjectDeploymentCRD())
+	m.Client = failingMigrationClient{Client: m.Client, failCODCreate: true}
 	object := unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "operator-config", "namespace": "ns"},
 	}}
@@ -1606,17 +1613,17 @@ func TestCreateMigrationResourcesTreatsCOSCollisionAsPotentiallyActive(t *testin
 		PackageName: "widgets", BundleName: "widgets.v1", Version: "1.0.0", CollectedObjects: []unstructured.Unstructured{object},
 	}, nil)
 	if err == nil || !apierrors.IsAlreadyExists(err) {
-		t.Fatalf("CreateMigrationResources() error = %v, want COS collision", err)
+		t.Fatalf("CreateMigrationResources() error = %v, want COD collision", err)
 	}
 	if !result.TargetMayBeActive {
-		t.Fatal("CreateMigrationResources() TargetMayBeActive = false, want true after COS collision")
+		t.Fatal("CreateMigrationResources() TargetMayBeActive = false, want true after COD collision")
 	}
 }
 
 func TestCreateClusterObjectSetPreservesSecretsAfterUnknownCreateOutcome(t *testing.T) {
 	ctx := context.Background()
-	m := migrationTestClient(t, establishedClusterObjectSetCRD())
-	m.Client = failingMigrationClient{Client: m.Client, unknownCOSCreate: true}
+	m := migrationTestClient(t, establishedClusterObjectSetCRD(), establishedClusterObjectDeploymentCRD())
+	m.Client = failingMigrationClient{Client: m.Client, unknownCODCreate: true}
 	object := unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "operator-config", "namespace": "ns"},
 	}}
@@ -1631,7 +1638,7 @@ func TestCreateClusterObjectSetPreservesSecretsAfterUnknownCreateOutcome(t *test
 		t.Fatal(err)
 	}
 	if len(secrets.Items) == 0 {
-		t.Fatal("unknown COS creation outcome removed Secret references")
+		t.Fatal("unknown COD creation outcome removed Secret references")
 	}
 }
 
@@ -1670,11 +1677,11 @@ func TestCreateClusterExtensionRecordsNamespaceDeletionAcknowledgement(t *testin
 	}
 }
 
-func TestCreateMigrationResourcesPreservesTrackedCOSAfterClusterExtensionFailure(t *testing.T) {
+func TestCreateMigrationResourcesPreservesTrackedCODAfterClusterExtensionFailure(t *testing.T) {
 	ctx := context.Background()
-	m := migrationTestClient(t)
+	m := migrationTestClient(t, establishedClusterObjectDeploymentCRD())
 	baseClient := m.Client
-	m.Client = failingMigrationClient{Client: baseClient, succeedCOS: true, failCECreate: true}
+	m.Client = failingMigrationClient{Client: baseClient, succeedCOD: true, failCECreate: true}
 	object := unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "operator-config", "namespace": "ns"},
 	}}
@@ -1685,19 +1692,19 @@ func TestCreateMigrationResourcesPreservesTrackedCOSAfterClusterExtensionFailure
 		t.Fatalf("CreateMigrationResources() error = %v, want ClusterExtension creation failure", err)
 	}
 	if !result.TargetMayBeActive {
-		t.Fatal("CreateMigrationResources() TargetMayBeActive = false, want true after COS success")
+		t.Fatal("CreateMigrationResources() TargetMayBeActive = false, want true after COD success")
 	}
 	m.Client = baseClient
-	if err := m.Client.Get(ctx, client.ObjectKey{Name: "sub-1"}, &ocv1.ClusterObjectSet{}); err != nil {
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: "sub"}, &ocv1.ClusterObjectDeployment{}); err != nil {
 		t.Fatalf("ClusterExtension failure deleted the ClusterObjectSet needed for explicit recovery: %v", err)
 	}
 }
 
-func TestCreateClusterObjectSetCleansSecretsAfterReadinessFailure(t *testing.T) {
+func TestCreateClusterObjectSetPreservesSecretsAfterReadinessFailure(t *testing.T) {
 	ctx := context.Background()
-	m := migrationTestClient(t, establishedClusterObjectSetCRD())
+	m := migrationTestClient(t, establishedClusterObjectSetCRD(), establishedClusterObjectDeploymentCRD())
 	baseClient := m.Client
-	m.Client = failingMigrationClient{Client: baseClient, blockCOS: true}
+	m.Client = failingMigrationClient{Client: baseClient, invalidCOD: true}
 	object := unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "operator-config", "namespace": "ns"},
 	}}
@@ -1705,18 +1712,18 @@ func TestCreateClusterObjectSetCleansSecretsAfterReadinessFailure(t *testing.T) 
 		PackageName: "widgets", BundleName: "widgets.v1", Version: "1.0.0", CollectedObjects: []unstructured.Unstructured{object},
 	})
 	if err == nil {
-		t.Fatal("CreateClusterObjectSet() unexpectedly completed without COS status")
+		t.Fatal("CreateClusterObjectSet() unexpectedly completed without COD status")
 	}
 	m.Client = baseClient
 	var secrets corev1.SecretList
 	if err := m.Client.List(ctx, &secrets, client.InNamespace("olmv1-system")); err != nil {
 		t.Fatal(err)
 	}
-	if len(secrets.Items) != 0 {
-		t.Fatalf("COS readiness failure left Secret references: %#v", secrets.Items)
+	if len(secrets.Items) == 0 {
+		t.Fatalf("COD readiness failure removed Secret references: %#v", secrets.Items)
 	}
-	if err := m.Client.Get(ctx, client.ObjectKey{Name: "sub-1"}, &ocv1.ClusterObjectSet{}); err == nil {
-		t.Fatal("COS readiness failure left ClusterObjectSet")
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: "sub"}, &ocv1.ClusterObjectDeployment{}); err != nil {
+		t.Fatal("COD readiness failure removed ClusterObjectDeployment")
 	}
 }
 
@@ -1743,14 +1750,14 @@ func TestRecoverCreatedMigrationResourcesPreservesActiveTargetResources(t *testi
 	ctx := context.Background()
 	createdSecret := corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "created-ref", Namespace: "olmv1-system"}}
 	otherSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "other-ref", Namespace: "olmv1-system"}}
-	createdCOS := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "created-1"}}
-	otherCOS := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "other-1"}}
+	createdCOD := &ocv1.ClusterObjectDeployment{ObjectMeta: metav1.ObjectMeta{Name: "created-1"}}
+	otherCOD := &ocv1.ClusterObjectDeployment{ObjectMeta: metav1.ObjectMeta{Name: "other-1"}}
 	createdCE := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "created"}}
-	m := migrationTestClient(t, &createdSecret, otherSecret, createdCOS, otherCOS, createdCE)
+	m := migrationTestClient(t, &createdSecret, otherSecret, createdCOD, otherCOD, createdCE)
 	sub, _ := healthySubscriptionFixtures()
 
 	err := m.recoverCreatedMigrationResources(ctx, Options{SubscriptionName: sub.Name, SubscriptionNamespace: sub.Namespace}, &Backup{Subscription: sub}, &createdMigrationResources{
-		cos:     createdCOS,
+		cod:     createdCOD,
 		secrets: []corev1.Secret{createdSecret},
 		ce:      createdCE,
 	})
@@ -1758,14 +1765,14 @@ func TestRecoverCreatedMigrationResourcesPreservesActiveTargetResources(t *testi
 		t.Fatalf("recovery error = %v, want preserved target resources", err)
 	}
 	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(sub), &operatorsv1alpha1.Subscription{}); !apierrors.IsNotFound(err) {
-		t.Fatalf("recovery restored OLMv0 despite a potentially active COS: %v", err)
+		t.Fatalf("recovery restored OLMv0 despite a potentially active COD: %v", err)
 	}
-	for _, object := range []client.Object{&createdSecret, createdCOS, createdCE} {
+	for _, object := range []client.Object{&createdSecret, createdCOD, createdCE} {
 		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(object), object); err != nil {
 			t.Fatalf("recovery deleted created %T %q: %v", object, object.GetName(), err)
 		}
 	}
-	for _, object := range []client.Object{otherSecret, otherCOS} {
+	for _, object := range []client.Object{otherSecret, otherCOD} {
 		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(object), object); err != nil {
 			t.Fatalf("recovery deleted untracked %T %q: %v", object, object.GetName(), err)
 		}
@@ -1775,7 +1782,7 @@ func TestRecoverCreatedMigrationResourcesPreservesActiveTargetResources(t *testi
 func TestWaitForClusterObjectSetAvailable(t *testing.T) {
 	ctx := context.Background()
 	cos := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "sub-1"}, Status: ocv1.ClusterObjectSetStatus{Conditions: []metav1.Condition{{
-		Type: "Available", Status: metav1.ConditionTrue,
+		Type: ocv1.ClusterObjectSetTypeReady, Status: metav1.ConditionTrue,
 	}}}}
 	m := migrationTestClient(t, cos)
 	if err := m.WaitForClusterObjectSetAvailable(ctx, cos.Name); err != nil {
@@ -1785,16 +1792,16 @@ func TestWaitForClusterObjectSetAvailable(t *testing.T) {
 
 func TestRecoverCreatedMigrationResourcesRefusesUnknownOwnership(t *testing.T) {
 	ctx := context.Background()
-	cos := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "possibly-foreign-1"}}
+	cos := &ocv1.ClusterObjectDeployment{ObjectMeta: metav1.ObjectMeta{Name: "possibly-foreign-1"}}
 	m := migrationTestClient(t, cos)
 	err := m.recoverCreatedMigrationResources(ctx, Options{}, nil, &createdMigrationResources{
-		cos:              cos,
+		cod:              cos,
 		ownershipUnknown: true,
 	})
 	if err == nil || !strings.Contains(err.Error(), "outcome is unknown") {
 		t.Fatalf("recovery error = %v, want unknown ownership", err)
 	}
-	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(cos), &ocv1.ClusterObjectSet{}); err != nil {
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(cos), &ocv1.ClusterObjectDeployment{}); err != nil {
 		t.Fatalf("recovery deleted a resource with unknown ownership: %v", err)
 	}
 }

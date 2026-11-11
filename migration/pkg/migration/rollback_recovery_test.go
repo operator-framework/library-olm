@@ -48,9 +48,9 @@ func TestRollbackRestoresSubscriptionAndOrphansAllOwnedRevisions(t *testing.T) {
 		MigratedFromSubscriptionAnnotation:    "source/sub",
 		MigrationSubscriptionBackupAnnotation: `{"name":"widgets","source":"catalog","sourceNamespace":"olm","channel":"stable","installPlanApproval":"Manual","startingCSV":"widgets.v1"}`,
 	}}}
-	first := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-1", Labels: map[string]string{LabelOwnerName: ce.Name}}}
-	second := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-2", Labels: map[string]string{LabelOwnerName: ce.Name}}}
-	unrelated := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "other-1", Labels: map[string]string{LabelOwnerName: "other"}}}
+	first := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-1", Labels: map[string]string{LabelOwnerName: ce.Name}}, Spec: ocv1.ClusterObjectSetSpec{Group: ce.Name}}
+	second := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-2", Labels: map[string]string{LabelOwnerName: ce.Name}}, Spec: ocv1.ClusterObjectSetSpec{Group: ce.Name}}
+	unrelated := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "other-1", Labels: map[string]string{LabelOwnerName: "other"}}, Spec: ocv1.ClusterObjectSetSpec{Group: "other"}}
 	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "operator", Namespace: "source"}}
 	og := &operatorsv1.OperatorGroup{ObjectMeta: metav1.ObjectMeta{Name: "shared", Namespace: "source"}}
 	m := migrationTestClient(t, ce, first, second, unrelated, deployment, og, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "source"}})
@@ -86,7 +86,7 @@ func TestRollbackRestoresSubscriptionAndOrphansAllOwnedRevisions(t *testing.T) {
 	}
 }
 
-func TestRollbackLegacyRevisionAndForeignNameCollision(t *testing.T) {
+func TestRollbackRevisionGroupAndForeignNameCollision(t *testing.T) {
 	for _, owner := range []string{"", "other"} {
 		t.Run("owner="+owner, func(t *testing.T) {
 			ctx := context.Background()
@@ -94,7 +94,7 @@ func TestRollbackLegacyRevisionAndForeignNameCollision(t *testing.T) {
 				MigratedFromSubscriptionAnnotation:    "source/sub",
 				MigrationSubscriptionBackupAnnotation: `{"name":"widgets","source":"catalog","sourceNamespace":"olm"}`,
 			}}}
-			revision := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-1", Labels: map[string]string{LabelOwnerName: owner}}}
+			revision := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-1", Labels: map[string]string{LabelOwnerName: owner}}, Spec: ocv1.ClusterObjectSetSpec{Group: ce.Name}}
 			m := migrationTestClient(t, ce, revision, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "source"}})
 			err := m.Rollback(ctx, Options{ClusterExtensionName: ce.Name, AcknowledgeInstalled: true})
 			if owner == "" {
@@ -102,7 +102,7 @@ func TestRollbackLegacyRevisionAndForeignNameCollision(t *testing.T) {
 					t.Fatal(err)
 				}
 				if err := m.Client.Get(ctx, client.ObjectKeyFromObject(revision), &ocv1.ClusterObjectSet{}); !apierrors.IsNotFound(err) {
-					t.Fatalf("legacy revision was not removed: %v", err)
+					t.Fatalf("revision was not removed: %v", err)
 				}
 				return
 			}
@@ -171,7 +171,7 @@ func (c *recreatingRevisionClient) Delete(ctx context.Context, obj client.Object
 	if c.deletes == 1 {
 		return c.Create(ctx, &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{
 			Name: obj.GetName(), UID: types.UID("replacement"), Labels: map[string]string{LabelOwnerName: "widgets"},
-		}})
+		}, Spec: ocv1.ClusterObjectSetSpec{Group: "widgets"}})
 	}
 	return nil
 }
@@ -181,7 +181,7 @@ func TestRollbackDeletesRevisionRecreatedDuringDeletion(t *testing.T) {
 	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "widgets"}}
 	revision := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{
 		Name: "widgets-2", UID: types.UID("original"), Labels: map[string]string{LabelOwnerName: "widgets"},
-	}}
+	}, Spec: ocv1.ClusterObjectSetSpec{Group: "widgets"}}
 	m := migrationTestClient(t, ce, revision)
 	recreator := &recreatingRevisionClient{Client: m.Client}
 	m.Client = recreator
@@ -211,8 +211,8 @@ func TestRollbackRevisionDeleteFailureKeepsBackupForRetry(t *testing.T) {
 		MigratedFromSubscriptionAnnotation:    "source/sub",
 		MigrationSubscriptionBackupAnnotation: `{"name":"widgets","source":"catalog","sourceNamespace":"olm"}`,
 	}}}
-	first := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-1", Labels: map[string]string{LabelOwnerName: ce.Name}}}
-	second := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-2", Labels: map[string]string{LabelOwnerName: ce.Name}}}
+	first := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-1", Labels: map[string]string{LabelOwnerName: ce.Name}}, Spec: ocv1.ClusterObjectSetSpec{Group: ce.Name}}
+	second := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-2", Labels: map[string]string{LabelOwnerName: ce.Name}}, Spec: ocv1.ClusterObjectSetSpec{Group: ce.Name}}
 	m := migrationTestClient(t, ce, first, second, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "source"}})
 	m.Client = &revisionDeleteFailureClient{Client: m.Client, failName: second.Name, failOnce: true}
 	if err := m.Rollback(ctx, Options{ClusterExtensionName: ce.Name, AcknowledgeInstalled: true}); err == nil || !strings.Contains(err.Error(), "revision deletion forbidden") {
@@ -344,7 +344,7 @@ func TestCleanupConflictPreservesSharedOperatorGroupAndOLMv1Management(t *testin
 	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "widgets", Annotations: map[string]string{
 		MigratedFromSubscriptionAnnotation: "source/sub",
 	}}, Spec: ocv1.ClusterExtensionSpec{Source: ocv1.SourceConfig{Catalog: &ocv1.CatalogFilter{PackageName: "widgets"}}}}
-	cos := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-2", Labels: map[string]string{LabelOwnerName: ce.Name}}}
+	cos := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "widgets-2", Labels: map[string]string{LabelOwnerName: ce.Name}}, Spec: ocv1.ClusterObjectSetSpec{Group: ce.Name}}
 	sub := &operatorsv1alpha1.Subscription{ObjectMeta: metav1.ObjectMeta{Name: "sub", Namespace: "source"}, Status: operatorsv1alpha1.SubscriptionStatus{InstalledCSV: "widgets.v1"}}
 	csv := &operatorsv1alpha1.ClusterServiceVersion{ObjectMeta: metav1.ObjectMeta{Name: "widgets.v1", Namespace: "source"}}
 	condition := &operatorsv1.OperatorCondition{ObjectMeta: metav1.ObjectMeta{Name: csv.Name, Namespace: csv.Namespace}}
@@ -482,6 +482,79 @@ func TestCleanupConflictReportsCSVAndArtifactFailures(t *testing.T) {
 				if err := m.Client.Get(t.Context(), client.ObjectKeyFromObject(sub), &operatorsv1alpha1.Subscription{}); err != nil {
 					t.Fatal("discovery failure deleted Subscription")
 				}
+			}
+		})
+	}
+}
+
+func TestRollbackSnapshotAllowsVerifiedSiblingHandoff(t *testing.T) {
+	for _, scenario := range []string{"sibling handoff", "unlisted revision", "foreign controller", "changed label", "replaced object", "sibling omits object", "different group"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx := context.Background()
+			manifest := unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "config", "namespace": "source"}}}
+			first := ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "example-2", UID: "revision-2"}, Spec: ocv1.ClusterObjectSetSpec{Group: "example", Revision: 2, Phases: []ocv1.ClusterObjectSetPhase{{Name: "deploy", Objects: []ocv1.ClusterObjectSetObject{{Type: ocv1.ObjectTypeInlineManifest, InlineManifest: manifest}}}}}}
+			second := *first.DeepCopy()
+			second.Name = "example-3"
+			second.UID = "revision-3"
+			second.Spec.Revision = 3
+			if scenario == "different group" {
+				second.Spec.Group = "other"
+			}
+			if scenario == "sibling omits object" {
+				second.Spec.Phases = nil
+			}
+			live := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "source", UID: "resource", OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(&first, ocv1.GroupVersion.WithKind(ocv1.ClusterObjectSetKind))}, Annotations: map[string]string{boxcutterRevisionAnnotation: "2"}, Labels: map[string]string{boxcutterManagedByLabel: "olm.operatorframework.io"}}}
+			m := migrationTestClient(t, live)
+			snapshot, err := m.snapshotRevisionObjects(ctx, []ocv1.ClusterObjectSet{first, second})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(snapshot) != 1 {
+				t.Fatalf("snapshot = %+v", snapshot)
+			}
+			// Permitted sibling identities must survive a persisted-snapshot merge.
+			old := snapshot[0]
+			old.AdditionalOwners = nil
+			mergedSnapshot, _, mergeErr := mergeRollbackObjects([]rollbackObject{old}, snapshot)
+			if mergeErr != nil || !reflect.DeepEqual(mergedSnapshot, snapshot) {
+				t.Fatalf("lost sibling identities: %+v, %v", mergedSnapshot, mergeErr)
+			}
+			// Adoption completes after the snapshot; GC then removes the verified owner.
+			live.OwnerReferences = nil
+			live.Annotations[boxcutterRevisionAnnotation] = "3"
+			switch scenario {
+			case "unlisted revision":
+				live.Annotations[boxcutterRevisionAnnotation] = "4"
+			case "foreign controller":
+				live.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "foreign", UID: "foreign"}}, corev1.SchemeGroupVersion.WithKind("ConfigMap"))}
+			case "changed label":
+				live.Labels[boxcutterManagedByLabel] = "foreign"
+			case "replaced object":
+				live.UID = "replacement"
+			}
+			if err := m.Client.Update(ctx, live); err != nil {
+				t.Fatal(err)
+			}
+			err = m.releaseRevisionObjects(ctx, snapshot)
+			if scenario != "sibling handoff" {
+				if err == nil {
+					t.Fatal("released unverified object")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = m.Client.Get(ctx, client.ObjectKeyFromObject(live), live); err != nil {
+				t.Fatal(err)
+			}
+			if live.Annotations[boxcutterRevisionAnnotation] != "" || live.UID != "resource" {
+				t.Fatalf("release lost identity or retained metadata: %+v", live)
+			}
+			// The permitted transition must also survive snapshot merges on retry.
+			merged, _, err := mergeRollbackObjects(snapshot, []rollbackObject{{Identity: snapshot[0].Identity, UID: "resource", OwnerUID: "revision-3", Revision: "3", ManagedBy: "olm.operatorframework.io"}})
+			if err != nil || len(merged[0].AdditionalOwners) != 1 {
+				t.Fatalf("merge = %+v, %v", merged, err)
 			}
 		})
 	}

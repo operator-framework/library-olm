@@ -91,11 +91,21 @@ func (p *secretPacker) pack(phases []*ocv1ac.ClusterObjectSetPhaseApplyConfigura
 
 	for phaseIdx, phase := range phases {
 		for objIdx, obj := range phase.Objects {
-			if obj.Object == nil {
-				continue // already a ref
+			if obj.Type == nil {
+				return nil, fmt.Errorf("object in phase %d index %d has no type", phaseIdx, objIdx)
+			}
+			switch *obj.Type {
+			case ocv1.ObjectTypeObjectReference:
+				continue
+			case ocv1.ObjectTypeInlineManifest:
+				if obj.InlineManifest == nil {
+					return nil, fmt.Errorf("inline object in phase %d index %d has no manifest", phaseIdx, objIdx)
+				}
+			default:
+				return nil, fmt.Errorf("object in phase %d index %d has unsupported type %q", phaseIdx, objIdx, *obj.Type)
 			}
 
-			data, err := json.Marshal(obj.Object)
+			data, err := json.Marshal(obj.InlineManifest)
 			if err != nil {
 				return nil, fmt.Errorf("serializing object in phase %d index %d: %w", phaseIdx, objIdx, err)
 			}
