@@ -115,8 +115,8 @@ migration/test-e2e-live-matrix: migration/build ## Install and migrate all three
 .PHONY: migration/test-e2e-live-namespace-delete
 migration/test-e2e-live-namespace-delete: migration/build ## Verify acknowledged source-namespace deletion with live OLMv0
 	@set -euo pipefail; \
-	package=ecr-secret-operator; \
-	namespace=migration-e2e-ecr-secret; \
+	package=redis-operator; \
+	namespace=migration-e2e-redis; \
 	target="$$namespace-target"; \
 	coverage_dir="$(E2E_COVERAGE_DIR)/live/cross-namespace-delete"; \
 	artifact_dir="$(E2E_ARTIFACTS)/live/cross-namespace-delete"; \

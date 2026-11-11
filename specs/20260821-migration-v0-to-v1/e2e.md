@@ -380,3 +380,5 @@ E2E_CLUSTER_NAME=library-olm-fixture-e2e make migration/e2e-teardown
 Revision preflight rejects deleting or incompatible COS/COD definitions before changing OLMv0 resources. Schemas must preserve opaque inline manifests and Secret-reference name, namespace, and key fields. Rollback permits verified newer sibling handoffs while retaining resource-UID, owner, and management-label checks.
 
 Complete reused installations skip controller building and image loading after schema validation. Setup repairs missing controller deployments or CRDs only after validating every existing revision schema. Recreate the cluster to change the controller commit. Every setup waits for object-controller, operator-controller, and catalogd and repairs the live catalog.
+
+The live namespace-deletion target uses Redis. The ecr-secret-operator bundle includes a custom-resource sample with `spec.aws_iam_secret`, which is absent from its CRD schema and can block OLMv1 preflight in a new namespace. Ecr-secret-operator remains in the live migration matrix; the focused Redis scenario preserves all source-namespace deletion and label-transfer assertions.
