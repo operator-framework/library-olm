@@ -320,3 +320,10 @@ The protection-only template update may create an intermediate protected revisio
 an unrelated existing object. Both cases collect package coverage and run in the
 existing handoff CI jobs. Unit regressions cover readiness, identity changes,
 patch conflicts, uncertain patch outcomes, and refusal to create a CE on failure.
+
+Recovery before CE creation must not rely only on an in-memory backup. Persist the
+original Subscription and OperatorGroup specs on retained staging resources at
+creation, before rollout/handoff failures can strand the operator. Preserve them
+on failed or uncertain handoffs and refuse automatic OLMv0 restart. Regression
+tests must decode the server-side backup after discarding the original plan and
+verify it can restore the original Subscription spec after safe target release.

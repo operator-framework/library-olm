@@ -326,6 +326,7 @@ func buildClusterObjectDeployment(opts Options, info *MigrationInfo, phases []*o
 		LabelBundleName:                    info.BundleName,
 		LabelBundleVersion:                 info.Version,
 	}
+	addStagingBackup(annotations, info)
 	if info.BundleImage != "" {
 		annotations[LabelBundleReference] = info.BundleImage
 	}

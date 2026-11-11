@@ -166,3 +166,10 @@ must report `RevisionObjectCollision` without changing its UID, data, labels, or
 The protection transition may create an intermediate protected COS before the catalog
 revision; tests must validate every later revision uses `Prevent` without assuming
 that the catalog revision is always revision 2.
+
+Recovery before CE creation must not rely only on an in-memory backup. Persist the
+original Subscription and OperatorGroup specs on retained staging resources at
+creation, before rollout/handoff failures can strand the operator. Preserve them
+on failed or uncertain handoffs and refuse automatic OLMv0 restart. Regression
+tests must decode the server-side backup after discarding the original plan and
+verify it can restore the original Subscription spec after safe target release.
