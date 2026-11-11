@@ -27,6 +27,7 @@ func TestStagingBackupSurvivesFailedHandoff(t *testing.T) {
 	sub.Spec.InstallPlanApproval = operatorsv1alpha1.ApprovalManual
 	og := &operatorsv1.OperatorGroup{Spec: operatorsv1.OperatorGroupSpec{TargetNamespaces: []string{"watched"}}}
 	m := migrationTestClient(t, establishedClusterObjectDeploymentCRD())
+	m.Client = failingMigrationClient{Client: m.Client, succeedCOS: true}
 	info := &MigrationInfo{}
 	opts := Options{SubscriptionName: sub.Name, SubscriptionNamespace: sub.Namespace, ClusterExtensionName: "staged"}
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
@@ -98,6 +99,10 @@ func TestInitialCOSBackupSurvivesCODRejection(t *testing.T) {
 		}
 		if _, ok := obj.(*ocv1.ClusterExtension); ok {
 			t.Fatal("created CE after rejected COD")
+		}
+		if cos, ok := obj.(*ocv1.ClusterObjectSet); ok {
+			cos.Status.CompletedAt = metav1.Now()
+			cos.Status.Conditions = []metav1.Condition{{Type: ocv1.ClusterObjectSetTypeReady, Status: metav1.ConditionTrue}}
 		}
 		return c.Create(ctx, obj, opts...)
 	}})

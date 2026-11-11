@@ -368,7 +368,7 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 	if before.Items[0].Labels["apps.kubernetes.io/managed-by"] != "object-controller" {
 		t.Fatal("migration COS lacks the object-controller adoption label")
 	}
-	if !opts.UseClusterObjectDeployment && !cosSucceeded(before.Items[0]) {
+	if !cosSucceeded(before.Items[0]) {
 		t.Fatal("pre-existing COS did not set status.completedAt before CE creation")
 	}
 	if before.Items[0].Spec.CollisionProtection != ocv1.CollisionProtectionNone {

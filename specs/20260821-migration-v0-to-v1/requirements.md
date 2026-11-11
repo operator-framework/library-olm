@@ -156,7 +156,7 @@ selected automatically when the COD CRD exists; when absent, the direct COS
 workflow uses the current COS definitions. Discovery errors must fail rather than silently fall back. COD migration requires an established
 COD CRD and operator-controller's COD-backed ClusterExtension applier (upstream PR #3058).
 Create the initial COS (revision 1 in the COD's group) with collision protection `None`,
-then create the COD with `Prevent` without waiting between the two creates. The COD
+wait for its completion timestamp and readiness, then create the COD with `Prevent`. The COD
 adopts the initial COS and creates a protected revision from the migration template.
 Clear permissive phase/object overrides from that template. Wait for the COD's
 current-generation rollout completion and availability before creating the CE.

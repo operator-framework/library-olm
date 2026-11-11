@@ -754,9 +754,16 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 	}
 	resources.cos = cosObj
 
+	if err := m.WaitForCOSSucceeded(ctx, cosName); err != nil {
+		return resources, err
+	}
+	if err := m.WaitForClusterObjectSetAvailable(ctx, cosName); err != nil {
+		return resources, err
+	}
+
 	if opts.UseClusterObjectDeployment {
-		// Submit both resources before waiting: the initial COS may adopt only
-		// the collected OLMv0 objects, while every COD rollout uses Prevent.
+		// Complete initial adoption before a protected revision can supersede it.
+		// Only the initial COS may adopt collected OLMv0 objects blindly.
 		for _, phase := range phases {
 			phase.CollisionProtection = nil
 			for i := range phase.Objects {
@@ -766,12 +773,6 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 		return resources, m.createClusterObjectDeployment(ctx, opts, info, phases, invocationMarker, resources)
 	}
 
-	if err := m.WaitForCOSSucceeded(ctx, cosName); err != nil {
-		return resources, err
-	}
-	if err := m.WaitForClusterObjectSetAvailable(ctx, cosName); err != nil {
-		return resources, err
-	}
 	return resources, nil
 }
 

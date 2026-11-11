@@ -50,6 +50,7 @@ func TestMigrationCreateRejectionRecovery(t *testing.T) {
 						return c.Create(ctx, obj, opts...)
 					},
 				})
+				m.Client = failingMigrationClient{Client: m.Client, succeedCOS: true}
 				m.Client = reconcilingSubscriptionClient{Client: m.Client}
 				sub, _ := healthySubscriptionFixtures()
 				result, err := m.CreateMigrationResources(ctx, Options{ClusterExtensionName: "example", SubscriptionName: sub.Name, SubscriptionNamespace: sub.Namespace}, &MigrationInfo{}, &Backup{Subscription: sub})

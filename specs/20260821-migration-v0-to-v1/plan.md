@@ -314,4 +314,22 @@ Rollback persists verified resource identities and UIDs on the restored Subscrip
 
 ### Alternative COS + COD handoff
 
-The COS+COD alternative creates an initial COS with collision protection None and waits for adoption before creating the protected COD. The COD uses Prevent, and the CE adopts the COD. Verify collision rejection, rollback, and preserved recovery backups before CE creation.
+This draft evaluates COS + COD instead of COD-only staging. Create an adoptable
+initial COS with `None`, waits for it to complete adoption and become ready, then
+creates an adoptable COD with `Prevent`. The
+COD adopts the initial revision and creates a protected staging revision; the CE
+then adopts the same COD and rolls out catalog content. No permissive phase or
+object override may remain in the COD template. Failure after initial COS creation
+preserves staging resources rather than restarting OLMv0 automatically.
+
+The focused handoff suite covers the additional staging revision and a negative
+rollout collision. It remains part of the existing coverage-enabled handoff CI
+jobs. The direct-COS fallback inherited from the base remains unchanged; choosing
+the handoff protocol and removing the fallback are separate decisions.
+
+Recovery before CE creation must not rely only on an in-memory backup. Persist the
+original Subscription and OperatorGroup specs on retained staging resources at
+creation, before rollout/handoff failures can strand the operator. Preserve them
+on failed or uncertain handoffs and refuse automatic OLMv0 restart. Regression
+tests must decode the server-side backup after discarding the original plan and
+verify it can restore the original Subscription spec after safe target release.
