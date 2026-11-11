@@ -39,17 +39,21 @@ The `migration/test-e2e-cod-rollback` target now automates those rollback assert
 collects CLI coverage. A separate CI job builds and installs operator-controller from
 pinned commit `c6e63b6166621b33a6de781c231bbcc97b5ca2c7`, then runs the handoff and
 rollback targets. Default suites also build this pinned controller from source,
-using upstream build targets and the experimental installer. Docker, Git, and
+using upstream build targets and the experimental installer. Docker, Git, Python 3, and
 `envsubst` must be available locally. Setup loads the built images into the
 existing kind cluster without recreating it. Live setup also installs upstream's
 `operatorhubio` ClusterCatalog and waits for it to serve; the catalog-migration
-test uses its resolved image digest. Fixture setup skips that public catalog
+test uses its resolved image digest. Every live setup reapplies the catalog, including retries after partial installation.
+Fixture setup skips that public catalog
 and uses the locally built fixture catalog.
 
 COS/COD are experimental: only the current typed `inlineManifest`/`objectRef`
 entries are supported. There is no conversion of older experimental resource
-schemas. Recreate clusters installed with older definitions before running these
-suites. Fixture rollback verifies restoration, not OLMv0 reconciliation, because
+schemas. Setup validates existing COS/COD schemas and rejects incompatible clusters
+with instructions to recreate them. If the ClusterExtension CRD already exists,
+setup skips the controller build and image loading; even a compatible cluster may
+therefore run an older commit. Recreate the cluster to change the installed controller
+commit. Fixture rollback verifies restoration, not OLMv0 reconciliation, because
 fixture clusters have no OLMv0 controllers.
 
 Both covered targets passed locally against `c6e63b616662` on kind Kubernetes

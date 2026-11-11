@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -127,7 +128,7 @@ func (object rollbackObject) ownerships() []rollbackOwnership {
 }
 
 // mergeRollbackObjects retains the original resource UID and accepts another
-// owner only when a listed revision was observed controlling that same object.
+// owner only when it was verified while snapshotting that same object.
 func mergeRollbackObjects(saved, observed []rollbackObject) ([]rollbackObject, bool, error) {
 	merged := append([]rollbackObject(nil), saved...)
 	index := make(map[string]int, len(merged))
@@ -147,21 +148,22 @@ func mergeRollbackObjects(saved, observed []rollbackObject) ([]rollbackObject, b
 		if merged[i].UID != candidate.UID {
 			return nil, false, fmt.Errorf("resource %s was replaced during rollback", key)
 		}
-		ownership := candidate.ownerships()[0]
-		found := false
-		for _, prior := range merged[i].ownerships() {
-			if prior.OwnerUID != ownership.OwnerUID {
-				continue
+		for _, ownership := range candidate.ownerships() {
+			found := false
+			for _, prior := range merged[i].ownerships() {
+				if prior.OwnerUID != ownership.OwnerUID {
+					continue
+				}
+				if prior != ownership {
+					return nil, false, fmt.Errorf("ownership metadata on %s changed during rollback", key)
+				}
+				found = true
+				break
 			}
-			if prior != ownership {
-				return nil, false, fmt.Errorf("ownership metadata on %s changed during rollback", key)
+			if !found {
+				merged[i].AdditionalOwners = append(merged[i].AdditionalOwners, ownership)
+				changed = true
 			}
-			found = true
-			break
-		}
-		if !found {
-			merged[i].AdditionalOwners = append(merged[i].AdditionalOwners, ownership)
-			changed = true
 		}
 	}
 	return merged, changed, nil
@@ -170,14 +172,20 @@ func mergeRollbackObjects(saved, observed []rollbackObject) ([]rollbackObject, b
 // snapshotRevisionObjects records only resources currently controlled by a
 // revision being removed. It runs before deletion, while ownership is provable.
 func (m *Migrator) snapshotRevisionObjects(ctx context.Context, revisions []ocv1.ClusterObjectSet) ([]rollbackObject, error) {
-	var objects []rollbackObject
-	seen := map[string]bool{}
+	type revisionEntry struct {
+		manifest unstructured.Unstructured
+		revision *ocv1.ClusterObjectSet
+	}
+	entries := map[string][]revisionEntry{}
 	for i := range revisions {
 		revision := &revisions[i]
 		for _, phase := range revision.Spec.Phases {
 			for _, entry := range phase.Objects {
+				if entry.Type != ocv1.ObjectTypeInlineManifest && entry.Type != ocv1.ObjectTypeObjectReference {
+					return nil, fmt.Errorf("ClusterObjectSet %s has unsupported object type %q", revision.Name, entry.Type)
+				}
 				manifest := entry.InlineManifest
-				if entry.ObjectRef.Name != "" {
+				if entry.Type == ocv1.ObjectTypeObjectReference {
 					var err error
 					manifest, err = m.rollbackReferencedObject(ctx, entry.ObjectRef)
 					if err != nil {
@@ -188,37 +196,57 @@ func (m *Migrator) snapshotRevisionObjects(ctx context.Context, revisions []ocv1
 					return nil, fmt.Errorf("ClusterObjectSet %s phase %s has an incomplete object identity", revision.Name, phase.Name)
 				}
 				key := resourceKey(manifest)
-				if seen[key] {
-					continue
-				}
-				live := &unstructured.Unstructured{}
-				live.SetGroupVersionKind(manifest.GroupVersionKind())
-				if err := m.Client.Get(ctx, client.ObjectKeyFromObject(&manifest), live); err != nil {
-					if apierrors.IsNotFound(err) {
-						continue
-					}
-					return nil, fmt.Errorf("getting %s for rollback: %w", key, err)
-				}
-				owner := metav1.GetControllerOf(live)
-				if owner == nil || owner.UID != revision.UID || owner.Kind != "ClusterObjectSet" {
-					continue
-				}
-				if live.GetAnnotations()[boxcutterRevisionAnnotation] == "" {
-					continue
-				}
-				seen[key] = true
-				identity := unstructured.Unstructured{}
-				identity.SetGroupVersionKind(live.GroupVersionKind())
-				identity.SetName(live.GetName())
-				identity.SetNamespace(live.GetNamespace())
-				objects = append(objects, rollbackObject{
-					Identity: identity, UID: live.GetUID(), OwnerUID: owner.UID,
-					Revision:  live.GetAnnotations()[boxcutterRevisionAnnotation],
-					ManagedBy: live.GetLabels()[boxcutterManagedByLabel],
-					Managed:   live.GetLabels()[boxcutterManagedLabel],
+				entries[key] = append(entries[key], revisionEntry{manifest: manifest, revision: revision})
+			}
+		}
+	}
+	var objects []rollbackObject
+	for key, candidates := range entries {
+		manifest := candidates[0].manifest
+		live := &unstructured.Unstructured{}
+		live.SetGroupVersionKind(manifest.GroupVersionKind())
+		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(&manifest), live); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return nil, fmt.Errorf("getting %s for rollback: %w", key, err)
+		}
+		owner := metav1.GetControllerOf(live)
+		if owner == nil || owner.Kind != ocv1.ClusterObjectSetKind || owner.APIVersion != ocv1.GroupVersion.String() {
+			continue
+		}
+		var controlling *ocv1.ClusterObjectSet
+		for _, candidate := range candidates {
+			if owner.UID == candidate.revision.UID && owner.Name == candidate.revision.Name {
+				controlling = candidate.revision
+				break
+			}
+		}
+		if controlling == nil || live.GetAnnotations()[boxcutterRevisionAnnotation] == "" {
+			continue
+		}
+		identity := unstructured.Unstructured{}
+		identity.SetGroupVersionKind(live.GroupVersionKind())
+		identity.SetName(live.GetName())
+		identity.SetNamespace(live.GetNamespace())
+		object := rollbackObject{
+			Identity: identity, UID: live.GetUID(), OwnerUID: owner.UID,
+			Revision:  live.GetAnnotations()[boxcutterRevisionAnnotation],
+			ManagedBy: live.GetLabels()[boxcutterManagedByLabel], Managed: live.GetLabels()[boxcutterManagedLabel],
+		}
+		// A newer, verified sibling can adopt this same object after our read but
+		// before orphan deletion. Record only siblings that actually contain the
+		// object, preserving the resource UID and exact management-label checks.
+		for _, candidate := range candidates {
+			revision := candidate.revision
+			if revision.UID != "" && revision.Spec.Group == controlling.Spec.Group && revision.Spec.Revision > controlling.Spec.Revision {
+				object.AdditionalOwners = append(object.AdditionalOwners, rollbackOwnership{
+					OwnerUID: revision.UID, Revision: strconv.FormatInt(revision.Spec.Revision, 10),
+					ManagedBy: object.ManagedBy, Managed: object.Managed,
 				})
 			}
 		}
+		objects = append(objects, object)
 	}
 	return objects, nil
 }
@@ -343,7 +371,7 @@ func (m *Migrator) releaseRevisionObjects(ctx context.Context, objects []rollbac
 				}
 			}
 			if !knownMetadata {
-				return false, fmt.Errorf("ownership metadata on %s changed during rollback", key)
+				return false, fmt.Errorf("ownership metadata on %s changed during rollback (revision=%q, managed-by=%q, managed=%q)", key, currentRevision, currentManagedBy, currentManaged)
 			}
 			if currentRevision == "" && currentManagedBy == "" && currentManaged == "" {
 				return true, nil

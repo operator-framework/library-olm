@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -130,8 +131,15 @@ func TestDryRunRejectsSystemManagedSourceNamespace(t *testing.T) {
 			Status: apiextensionsv1.ConditionTrue,
 		}}},
 	}
+	var revisionSchema apiextensionsv1.JSONSchemaProps
+	if err := json.Unmarshal([]byte(`{"properties":{"spec":{"properties":{"phases":{"items":{"properties":{"objects":{"items":{"properties":{"type":{"type":"string"},"inlineManifest":{"type":"object"},"objectRef":{"type":"object"}}}}}}}}}}}`), &revisionSchema); err != nil {
+		t.Fatal(err)
+	}
+	cosCRD.Spec.Versions = []apiextensionsv1.CustomResourceDefinitionVersion{{Name: "v1", Served: true, Schema: &apiextensionsv1.CustomResourceValidation{OpenAPIV3Schema: &revisionSchema}}}
 	codCRD := cosCRD.DeepCopy()
 	codCRD.Name = "clusterobjectdeployments.olm.operatorframework.io"
+	codSchema := codCRD.Spec.Versions[0].Schema.OpenAPIV3Schema
+	codSchema.Properties["spec"] = apiextensionsv1.JSONSchemaProps{Properties: map[string]apiextensionsv1.JSONSchemaProps{"template": {Properties: map[string]apiextensionsv1.JSONSchemaProps{"spec": codSchema.Properties["spec"]}}}}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sub, csv, catalog, operatorGroup, cosCRD, codCRD, ceCRD).Build()
 	m := migration.NewMigrator(c, nil)
 	cmd := &cobra.Command{}

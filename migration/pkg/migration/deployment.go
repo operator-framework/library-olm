@@ -38,7 +38,7 @@ func (m *Migrator) ensureClusterObjectDeploymentCRD(ctx context.Context) error {
 	if !established || crd.DeletionTimestamp != nil {
 		return fmt.Errorf("ClusterObjectDeployment CRD is not established or is being deleted")
 	}
-	return nil
+	return validateRevisionSchema(&crd, true)
 }
 
 func (m *Migrator) prepareClusterObjectDeployment(ctx context.Context, name string) error {

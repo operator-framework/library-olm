@@ -133,18 +133,18 @@ func determinePhase(gk schema.GroupKind) Phase {
 
 func compareObjects(a, b ocv1ac.ClusterObjectSetObjectApplyConfiguration) int {
 	var aGVK, bGVK schema.GroupVersionKind
-	if a.InlineManifest != nil {
+	if a.Type != nil && *a.Type == ocv1.ObjectTypeInlineManifest && a.InlineManifest != nil {
 		aGVK = a.InlineManifest.GroupVersionKind()
 	}
-	if b.InlineManifest != nil {
+	if b.Type != nil && *b.Type == ocv1.ObjectTypeInlineManifest && b.InlineManifest != nil {
 		bGVK = b.InlineManifest.GroupVersionKind()
 	}
 	var aNs, bNs, aName, bName string
-	if a.InlineManifest != nil {
+	if a.Type != nil && *a.Type == ocv1.ObjectTypeInlineManifest && a.InlineManifest != nil {
 		aNs = a.InlineManifest.GetNamespace()
 		aName = a.InlineManifest.GetName()
 	}
-	if b.InlineManifest != nil {
+	if b.Type != nil && *b.Type == ocv1.ObjectTypeInlineManifest && b.InlineManifest != nil {
 		bNs = b.InlineManifest.GetNamespace()
 		bName = b.InlineManifest.GetName()
 	}
@@ -164,7 +164,7 @@ func PhaseSort(unsortedObjs []ocv1ac.ClusterObjectSetObjectApplyConfiguration) [
 
 	for _, obj := range unsortedObjs {
 		var gk schema.GroupKind
-		if obj.InlineManifest != nil {
+		if obj.Type != nil && *obj.Type == ocv1.ObjectTypeInlineManifest && obj.InlineManifest != nil {
 			gk = obj.InlineManifest.GroupVersionKind().GroupKind()
 		}
 		phase := determinePhase(gk)

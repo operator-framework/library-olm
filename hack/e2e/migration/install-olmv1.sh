@@ -16,14 +16,14 @@ git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
 
 # Reuse upstream image names, build targets, manifest generation, and installer.
 # Loading into the existing cluster avoids upstream's destructive cluster target.
-# Live tests require the upstream operatorhubio catalog; fixtures supply their own.
+# setup.sh installs/repairs the live catalog independently on every invocation.
 export KUBECONFIG
 KUBECONFIG=$(realpath "$E2E_KUBECONFIG")
-make -C "$source_dir" -f Makefile -f - migration-install KIND="$KIND" MIGRATION_CLUSTER="$E2E_CLUSTER_NAME" INSTALL_DEFAULT_CATALOGS="${E2E_INSTALL_OLMV0:-true}" <<'MAKE'
+make -C "$source_dir" -f Makefile -f - migration-install KIND="$KIND" MIGRATION_CLUSTER="$E2E_CLUSTER_NAME" <<'MAKE'
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 .PHONY: migration-install
 migration-install: docker-build manifests
 	$(KIND) load docker-image $(OPCON_IMG) $(CATD_IMG) $(OBJECT_CONTROLLER_IMG) --name $(MIGRATION_CLUSTER)
-	MANIFEST=$(EXPERIMENTAL_MANIFEST) DEFAULT_CATALOG=$(CATALOGS_MANIFEST) INSTALL_DEFAULT_CATALOGS=$(INSTALL_DEFAULT_CATALOGS) envsubst '$$DEFAULT_CATALOG,$$CERT_MGR_VERSION,$$INSTALL_DEFAULT_CATALOGS,$$MANIFEST' < scripts/install.tpl.sh | bash
+	MANIFEST=$(EXPERIMENTAL_MANIFEST) DEFAULT_CATALOG=$(CATALOGS_MANIFEST) INSTALL_DEFAULT_CATALOGS=false envsubst '$$DEFAULT_CATALOG,$$CERT_MGR_VERSION,$$INSTALL_DEFAULT_CATALOGS,$$MANIFEST' < scripts/install.tpl.sh | bash
 MAKE

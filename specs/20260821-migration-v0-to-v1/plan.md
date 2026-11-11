@@ -64,7 +64,7 @@ Kubernetes 1.37, verifying labeled COD adoption and rollback.
 The covered handoff and rollback targets also pass against `77754d81ea01`,
 including COS manager-label assertions. Missing-COD rejection and the `UnmanagedRevision` terminal condition are covered by unit regressions.
 The current API uses typed `inlineManifest`/`objectRef` entries for creation and
-rollback. Older experimental COS/COD schemas are not supported; the controller
+rollback. Preflight validates the served revision-entry schemas. Older experimental COS/COD schemas are not supported; the controller
 and library must use matching definitions.
 
 ---
@@ -172,7 +172,7 @@ an explicitly selected OLMv1 system-managed namespace mode.
 - Move collected namespace-scoped resources to the target namespace in the migration COS and,
   after the target CE is installed, remove their source copies.
 - Delete the source namespace only with `--acknowledge-namespace-delete`; retain it by default.
-- `--system-managed-install-namespace` uses operator-controller `v1.12.0`'s experimental
+- `--system-managed-install-namespace` uses the pinned operator-controller revision's experimental
   optional-namespace CRD. It capability-gates the mode and omits the CE field. Migration
   prepares the bundle-metadata namespace before its COS and imports it for the catalog
   revision's ownership handoff, after which OLMv1 manages it. Unit tests

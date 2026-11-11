@@ -8,7 +8,7 @@ OLMv0 v0.46.0, and experimental operator-controller pinned in `migration.mk`), b
 and migrates the bootstrap CatalogSource so operator checks can resolve a
 serving ClusterCatalog. It is safe to rerun without recreating the cluster.
 
-Prerequisites: Go, Docker, `kubectl`, `curl`, and `sha256sum`; the `make` target
+Prerequisites: Go, Docker, Git, `envsubst`, Python 3, `kubectl`, `curl`, and `sha256sum`; the `make` target
 installs the pinned Kind binary through Bingo. Release manifests and container
 images must be reachable. Allow several minutes for OLM and operator installation.
 

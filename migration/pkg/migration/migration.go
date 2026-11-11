@@ -333,7 +333,7 @@ func (m *Migrator) ensureClusterObjectSetCRD(ctx context.Context) error {
 	}
 	for _, condition := range crd.Status.Conditions {
 		if condition.Type == apiextensionsv1.Established && condition.Status == apiextensionsv1.ConditionTrue {
-			return nil
+			return validateRevisionSchema(&crd, false)
 		}
 	}
 	return fmt.Errorf("ClusterObjectSet CRD %q is not established", clusterObjectSetCRDName)

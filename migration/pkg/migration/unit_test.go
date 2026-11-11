@@ -155,6 +155,7 @@ func healthySubscriptionFixtures() (*operatorsv1alpha1.Subscription, *operatorsv
 func establishedClusterObjectSetCRD() *apiextensionsv1.CustomResourceDefinition {
 	return &apiextensionsv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
+		Spec:       apiextensionsv1.CustomResourceDefinitionSpec{Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{Name: "v1", Served: true, Schema: testRevisionSchema(false)}}},
 		Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{
 			Type:   apiextensionsv1.Established,
 			Status: apiextensionsv1.ConditionTrue,
@@ -899,6 +900,7 @@ func TestCleanupResultErr(t *testing.T) {
 func TestPrepareClusterObjectSet(t *testing.T) {
 	establishedCRD := &apiextensionsv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
+		Spec:       apiextensionsv1.CustomResourceDefinitionSpec{Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{Name: "v1", Served: true, Schema: testRevisionSchema(false)}}},
 		Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{
 			Type:   apiextensionsv1.Established,
 			Status: apiextensionsv1.ConditionTrue,
@@ -941,6 +943,7 @@ func TestPrepareClusterObjectSetRejectsExistingClusterExtension(t *testing.T) {
 func TestPrepareClusterObjectSetRejectsDeletingOperatorControllerNamespace(t *testing.T) {
 	establishedCRD := &apiextensionsv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
+		Spec:       apiextensionsv1.CustomResourceDefinitionSpec{Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{Name: "v1", Served: true, Schema: testRevisionSchema(false)}}},
 		Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{
 			Type:   apiextensionsv1.Established,
 			Status: apiextensionsv1.ConditionTrue,
@@ -979,6 +982,7 @@ func TestPrepareClusterObjectSetRequiresEstablishedCRD(t *testing.T) {
 
 	m = migrationTestClient(t, &apiextensionsv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
+		Spec:       apiextensionsv1.CustomResourceDefinitionSpec{Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{Name: "v1", Served: true, Schema: testRevisionSchema(false)}}},
 	})
 	if _, err := m.PrepareClusterObjectSet(context.Background(), Options{}); err == nil || !strings.Contains(err.Error(), "not established") {
 		t.Fatalf("PrepareClusterObjectSet() error = %v, want unestablished CRD error", err)

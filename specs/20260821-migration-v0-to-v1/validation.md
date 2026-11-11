@@ -12,7 +12,7 @@ kind cluster with both OLMv0 and OLMv1 installed.
 ## V1. Per-command behavior
 
 - **V1.1** `check <operator> -n <ns>` on a healthy AllNamespaces operator with an available catalog reports all checks green and exits 0; makes no cluster changes.
-- **V1.2** `convert <operator> -n <ns> --dry-run` lists every resource that would be migrated (grouped by kind), including CRDs, and reports the detected COS or COD manager with `CollisionProtection: None` on the COS or COD template; makes no cluster changes.
+- **V1.2** `convert <operator> -n <ns> --dry-run` lists every resource that would be migrated (grouped by kind), including CRDs, and reports the COD with `CollisionProtection: None` on its template; makes no cluster changes.
 - **V1.3** `convert <operator> -n <ns>` results in a `ClusterExtension` reaching `Installed=True`; the `Subscription` and `CSV` are deleted; CRDs remain and are adopted by OLMv1. Migration always uses COD: the COD's current-generation rollout completes and becomes available before the CE is created; the CE then owns the same COD and its catalog revision uses `CollisionProtection: Prevent`.
 - **V1.4** `rollback <ce-name> --acknowledge-installed` starts CE orphan deletion with a rollback finalizer to stop new revisions, records verified ownership from in-flight replacement revisions before deleting them, waits for orphaned resources to lose COS controller references, removes their OLMv1 revision metadata, restores the `Subscription` from the backup annotation, then removes the CE finalizer. A matching Subscription from a prior attempt permits retry; a conflicting Subscription or failed restoration retains the CE backup. The operator returns to OLMv0 management (`AtLatestKnown`/`UpgradePending`), and a subsequent migration can adopt preserved resources. Without `--acknowledge-installed` on an `Installed=True` CE, rollback refuses and exits non-zero.
   Verify CE-to-COD and COD-to-COS ownership and stop the COD with orphan deletion before removing its COS revisions, preventing replacement revisions during rollback. Before deletion and during subsequent revision discovery, reject controlled COS revisions unless the controller's API version, kind, name, and UID match the CE or its verified COD. Require the current `spec.group` identity even for unowned staging or orphaned revisions; a name or owner label alone cannot authorize deletion. Preserve workloads and retain the CE backup if cleanup or restoration fails.
@@ -87,10 +87,10 @@ flag flips it to `Eligible`:
 - **V4.4** Dependency operator (`olm.generated-by` present / declares requirements) → flagged; an operator others depend on migrates but emits a dependents warning.
 - **V4.5** OperatorCondition disambiguation: an operator with OLMv0-stamped OperatorCondition RBAC but **empty** `status.conditions` is **Eligible** (RBAC is not treated as usage).
 - **V4.6** Large bundle exceeding inline size limits migrates successfully via SecretPacker.
-- **V4.7** Namespace change copies `pod-security.kubernetes.io/*` and `security.openshift.io/scc.podSecurityLabelSync` to the new namespace. An existing target with no explicit PSA `enforce` label is rejected when the source sets one, because its cluster default is not observable. Collected source Deployments scale to zero before target creation so two controllers do not overlap. They return to their original replica count only when target COS creation failed before it may have reconciled; otherwise migration reports that the target may be active, leaves the source scaled down, and refuses automatic OLMv0 recovery. The target operator resources are present and their collected source copies are removed. The fixture scenario retains the old namespace by default; the live scenario passes `--acknowledge-namespace-delete` and verifies the source namespace is deleted after OLMv0 finalizes its CSV.
-- **V4.8** System-managed namespace: against operator-controller `v1.12.0`'s experimental CRD,
+- **V4.7** Namespace change copies `pod-security.kubernetes.io/*` and `security.openshift.io/scc.podSecurityLabelSync` to the new namespace. An existing target with no explicit PSA `enforce` label is rejected when the source sets one, because its cluster default is not observable. Collected source Deployments scale to zero before target creation so two controllers do not overlap. They return to their original replica count only when target COD creation failed before it may have reconciled; otherwise migration reports that the target may be active, leaves the source scaled down, and refuses automatic OLMv0 recovery. The target operator resources are present and their collected source copies are removed. The fixture scenario retains the old namespace by default; the live scenario passes `--acknowledge-namespace-delete` and verifies the source namespace is deleted after OLMv0 finalizes its CSV.
+- **V4.8** System-managed namespace: against the pinned experimental operator-controller revision,
   explicit system-managed conversion omits `ClusterExtension.spec.namespace`, prepares the
-  bundle-metadata namespace for the preceding COS, includes it in the migration revision,
+  bundle-metadata namespace for the COD rollout, includes it in the migration revision,
   and verifies the catalog revision takes Namespace ownership while OLMv1 manages the installation there.
   The same invocation against a CRD that requires the field is rejected before mutation with an
   actionable error. A conversion with neither namespace flag continues to use the Subscription
@@ -140,8 +140,8 @@ flag flips it to `Eligible`:
 | R1.7 Downtime posture | V5.6 (namespace unchanged), V4.7 (namespace change) |
 | R1.8 Recovery | V1.4, V1.5 |
 | R2.1 v0 module + CI | V7.1, V7.3 |
-| R2.2 ClusterObjectSet rename | V1.3 (COS created), V4.6 |
-| R2.3 Wait for COS Succeeded; no status writes | V1.3 |
+| R2.2 ClusterObjectSet rename | V1.3 (COD creates COS revisions), V4.6 |
+| R2.3 Wait for COD rollout; no status writes | V1.3 |
 | R2.4 SecretPacker + collision handling | V1.2, V4.2, V4.6 |
 | R2.5 CE annotations | V3.6 |
 | R2.6 `--backup <directory>` flag | V3.18 |
@@ -154,3 +154,5 @@ flag flips it to `Eligible`:
 | R8 CatalogSource→ClusterCatalog | V3.8–V3.11, V3.13–V3.17, V3.19 |
 | R9 Edge cases | V4.1–V4.8 |
 | R10 Non-goals | V6.4, V6.5 |
+
+Preflight rejects unserved or incompatible COS/COD revision schemas before OLMv0 mutations. Rollback permits an in-flight adoption only by verified newer sibling revisions that contain the same object, retaining resource-UID, foreign-owner, and management-label checks.
