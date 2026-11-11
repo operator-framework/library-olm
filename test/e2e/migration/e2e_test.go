@@ -4,12 +4,14 @@ package e2e
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -329,9 +331,10 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("list pre-existing COS: %v", err)
 	}
-	if len(before.Items) != 1 {
-		t.Fatalf("pre-existing COS count = %d, want 1", len(before.Items))
+	if len(before.Items) < 1 || len(before.Items) > 2 {
+		t.Fatalf("pre-existing COS count = %d, want initial revision and optional protected revision", len(before.Items))
 	}
+	slices.SortFunc(before.Items, func(a, b ocv1.ClusterObjectSet) int { return cmp.Compare(a.Spec.Revision, b.Spec.Revision) })
 	precreatedUID := before.Items[0].UID
 	var originalCOD ocv1.ClusterObjectDeployment
 	if err := kubeClient.Get(ctx, client.ObjectKey{Name: subscription}, &originalCOD); err != nil {
@@ -339,6 +342,9 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 	}
 	if !metav1.IsControlledBy(&before.Items[0], &originalCOD) || before.Items[0].Spec.Group != subscription {
 		t.Fatal("migration revision is not controlled by its COD")
+	}
+	if originalCOD.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
+		t.Fatal("adoptable COD must already enforce Prevent")
 	}
 	if originalCOD.Labels["apps.kubernetes.io/managed-by"] != "operator-controller" || metav1.GetControllerOf(&originalCOD) != nil {
 		t.Fatal("staging COD must be ownerless and carry the operator-controller adoption label")
@@ -367,21 +373,38 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("list COS after CE creation: %v", err)
 	}
-	if len(after.Items) != 2 {
-		t.Fatalf("COS count after CE creation = %d, want 2 (migration and catalog revisions)", len(after.Items))
+	if len(after.Items) < 2 {
+		t.Fatalf("COS count after CE creation = %d, want initial and catalog revisions", len(after.Items))
 	}
 	var migrationCOS, catalogCOS *ocv1.ClusterObjectSet
 	for i := range after.Items {
 		cos := &after.Items[i]
-		switch cos.Spec.Revision {
-		case 1:
+		if cos.Spec.Revision == 1 {
 			migrationCOS = cos
-		case 2:
+			continue
+		}
+		if cos.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
+			t.Fatalf("revision %s bypasses collision protection", cos.Name)
+		}
+		if !metav1.IsControlledBy(cos, &originalCOD) || cos.Spec.Group != subscription {
+			t.Fatalf("revision %s has unexpected ownership", cos.Name)
+		}
+		for _, phase := range cos.Spec.Phases {
+			if phase.CollisionProtection != "" && phase.CollisionProtection != ocv1.CollisionProtectionPrevent {
+				t.Fatalf("revision %s has permissive phase override", cos.Name)
+			}
+			for _, obj := range phase.Objects {
+				if obj.CollisionProtection != "" && obj.CollisionProtection != ocv1.CollisionProtectionPrevent {
+					t.Fatalf("revision %s has permissive object override", cos.Name)
+				}
+			}
+		}
+		if catalogCOS == nil || cos.Spec.Revision > catalogCOS.Spec.Revision {
 			catalogCOS = cos
 		}
 	}
 	if migrationCOS == nil || catalogCOS == nil {
-		t.Fatalf("COS revisions = %#v, want migration revision 1 and catalog revision 2", after.Items)
+		t.Fatalf("COS revisions = %#v, want migration revision 1 and a newer catalog revision", after.Items)
 	}
 	if migrationCOS.UID != precreatedUID {
 		t.Fatalf("migration COS UID = %s, want pre-created UID %s", migrationCOS.UID, precreatedUID)

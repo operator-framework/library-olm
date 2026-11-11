@@ -152,10 +152,14 @@ The directory is created if it does not exist. Failure to list associated plans 
 **R2.7 — Boxcutter phase 2.** Support one `ClusterObjectDeployment` (COD) per
 ClusterExtension, with controller-managed COS revisions. COD is the only migration path. Missing, deleting, unestablished, or unreadable COD CRDs block check, dry-run, and migration before OLMv0 resources change. COD migration requires an established
 COD CRD and operator-controller's COD-backed ClusterExtension applier (upstream PR #3058).
-Create the deployment with collision protection `None`, wait for current-generation rollout
-completion and availability, then create the CE to hand management to operator-controller.
-Set `apps.kubernetes.io/managed-by: operator-controller` on the COD itself so
-operator-controller retains its rollout data and can adopt it while ownerless.
+Create the deployment with collision protection `None` and no CE-adoption label.
+Wait for current-generation rollout completion and availability, then atomically
+change protection to `Prevent` and add `apps.kubernetes.io/managed-by: operator-controller`.
+Remove phase/object protection overrides in that same resource-version-guarded patch.
+Recheck UID, generation, migration invocation, readiness, and absence of controller
+ownership before patching. Only after a successful patch create the CE. Failures
+preserve the potentially active COD and its Secrets and refuse automatic OLMv0 recovery.
+Later rollouts must reject unrelated existing objects rather than blindly adopt them.
 Preserve the same COD UID through adoption; owner-kind and
 owner-name metadata alone do not authorize adoption. The adoption label is not
 required on the COS template or operator workload objects.

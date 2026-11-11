@@ -30,11 +30,9 @@ COD migration requires the COD API/controller and the COD-backed CE applier merg
 operator-controller PR #3058. The library's pinned API dependency alone does not
 install that controller. Unit tests exercise creation, preflight, readiness and
 rollback ownership and invalid-template diagnostics. The existing handoff scenario
-also checks COD identity preservation, CE ownership of the COD, and COD ownership of both
-revisions when a COD-capable controller is installed. On 2026-10-29 those assertions
-passed against operator-controller main `255a4026` in kind. A separate full CLI fixture
-conversion and acknowledged rollback preserved the operator Deployment UID and its one
-available replica, restored the Subscription, and removed the COD and both COS revisions.
+also checks COD identity preservation, CE ownership of the COD, and COD ownership
+of all revisions. Only the initial revision uses `None`; every subsequent revision
+must use `Prevent`, including any intermediate revisions during handoff.
 The `migration/test-e2e-cod-rollback` target now automates those rollback assertions and
 collects CLI coverage. A separate CI job builds and installs operator-controller from
 pinned commit `dae9b613163a8fc5df36e3b9ad5a770a64c0048c`, then runs the handoff and
@@ -217,8 +215,9 @@ their combined report. The Job intentionally does not upload diagnostics or cove
 
 The supersession check is deliberately separate from the conversion matrix. With the pinned
 experimental controller, migration creates revision 1 with collision protection `None`;
-creating the ClusterExtension results in a controller-owned, catalog-derived revision 2 with
-collision protection `Prevent`. The check requires both revisions to succeed.
+the protected handoff and ClusterExtension creation produce newer revisions with
+collision protection `Prevent`. The check requires initial migration and catalog
+completion, preserves ownership assertions, and permits intermediate protected revisions.
 
 ## CI rollout
 
@@ -392,3 +391,17 @@ Setup refuses existing OLM namespaces or APIs, including partial installations. 
 The live namespace-deletion target uses Redis. The ecr-secret-operator bundle includes a custom-resource sample with `spec.aws_iam_secret`, which is absent from its CRD schema and can block OLMv1 preflight in a new namespace. Ecr-secret-operator remains in the live migration matrix; the focused Redis scenario preserves all source-namespace deletion and label-transfer assertions.
 
 Rollback persists verified resource identities and UIDs on the restored Subscription before deleting the CE backup. Remigration includes still-unowned retained resources (including catalog-generated RBAC) omitted from the OLMv0 inventory; missing resources are skipped, replacements and newly controlled resources are rejected, and normal collection is deduplicated.
+
+### Protected COD-only handoff
+
+Migration creates a COD with `None` and without its CE-adoption label, waits for
+initial rollout completion and availability, then atomically enables `Prevent`
+and CE adoption. It clears permissive phase/object overrides in the same guarded
+patch before creating the CE. Failed or uncertain handoffs preserve staging resources.
+The protection-only template update may create an intermediate protected revision.
+
+`make migration/test-e2e-cos-supersession` also runs
+`TestCODProtectedRolloutCollision`, which verifies that a later COD rollout refuses
+an unrelated existing object. Both cases collect package coverage and run in the
+existing handoff CI jobs. Unit regressions cover readiness, identity changes,
+patch conflicts, uncertain patch outcomes, and refusal to create a CE on failure.

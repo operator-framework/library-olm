@@ -3,6 +3,7 @@ package migration
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -230,6 +232,9 @@ type completingDeploymentClient struct{ client.Client }
 // Create simulates controller completion for deployment creation tests.
 func (c completingDeploymentClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
 	if cod, ok := obj.(*ocv1.ClusterObjectDeployment); ok {
+		if cod.Labels[controllerManagedByLabel] != "" || cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionNone {
+			return errors.New("initial COD must use None without its adoption label")
+		}
 		ready := readyDeployment()
 		cod.UID, cod.Generation, cod.Status = ready.UID, ready.Generation, ready.Status
 	}
@@ -244,7 +249,7 @@ func TestCreateDeploymentTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resources.cod == nil || resources.cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionNone {
+	if resources.cod == nil || resources.cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
 		t.Fatalf("unexpected deployment: %+v", resources.cod)
 	}
 	if resources.cod.Annotations[migrationInvocationAnnotation] != "invocation" {
@@ -568,6 +573,179 @@ func TestCreateMigrationResourcesSharesDefaults(t *testing.T) {
 			}
 			if cod.Spec.Template.Metadata.Labels[LabelOwnerName] != expected || ce.Spec.Namespace != "source" {
 				t.Fatalf("inconsistent defaults: COD owner label=%q CE namespace=%q", cod.Spec.Template.Metadata.Labels[LabelOwnerName], ce.Spec.Namespace)
+			}
+		})
+	}
+}
+
+// TestProtectedCODHandoff verifies the atomic handoff and refuses stale identity,
+// status, ownership, and concurrent-write outcomes without enabling adoption.
+func TestProtectedCODHandoff(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		change     func(*ocv1.ClusterObjectDeployment)
+		patchError error
+	}{
+		{name: "ready"},
+		{name: "replacement", change: func(c *ocv1.ClusterObjectDeployment) { c.UID = "replacement" }},
+		{name: "changed template", change: func(c *ocv1.ClusterObjectDeployment) { c.Generation++ }},
+		{name: "stale progress", change: func(c *ocv1.ClusterObjectDeployment) { c.Status.Conditions[0].ObservedGeneration-- }},
+		{name: "unavailable", change: func(c *ocv1.ClusterObjectDeployment) { c.Status.Conditions[1].Status = metav1.ConditionFalse }},
+		{name: "already adoptable", change: func(c *ocv1.ClusterObjectDeployment) {
+			c.Labels = map[string]string{controllerManagedByLabel: "operator-controller"}
+		}},
+		{name: "different invocation", change: func(c *ocv1.ClusterObjectDeployment) { c.Annotations[migrationInvocationAnnotation] = "other" }},
+		{name: "controlled", change: func(c *ocv1.ClusterObjectDeployment) {
+			c.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(&ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "foreign", UID: "foreign"}}, ocv1.GroupVersion.WithKind(ocv1.ClusterExtensionKind))}
+		}},
+		{name: "conflict", patchError: apierrors.NewConflict(schema.GroupResource{Resource: "clusterobjectdeployments"}, "example", errors.New("changed"))},
+		{name: "transport", patchError: errors.New("connection reset")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			created := readyDeployment()
+			created.Annotations = map[string]string{migrationInvocationAnnotation: "invocation"}
+			created.Spec.Template.Spec.CollisionProtection = ocv1.CollisionProtectionNone
+			created.Spec.Template.Spec.Phases = []ocv1.ClusterObjectSetPhase{{Name: "deploy", CollisionProtection: ocv1.CollisionProtectionNone, Objects: []ocv1.ClusterObjectSetObject{{CollisionProtection: ocv1.CollisionProtectionNone}}}}
+			current := created.DeepCopy()
+			if tc.change != nil {
+				tc.change(current)
+			}
+			m := migrationTestClient(t, current)
+			patched := false
+			m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				patched = true
+				cod := obj.(*ocv1.ClusterObjectDeployment)
+				data, err := patch.Data(obj)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(string(data), "resourceVersion") {
+					t.Fatal("handoff patch lacks optimistic locking")
+				}
+				if cod.Labels[controllerManagedByLabel] != "operator-controller" || cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent || cod.Spec.Template.Spec.Phases[0].CollisionProtection != "" || cod.Spec.Template.Spec.Phases[0].Objects[0].CollisionProtection != "" {
+					t.Fatal("handoff patch must atomically enable protection and adoption without overrides")
+				}
+				if tc.patchError != nil {
+					return tc.patchError
+				}
+				return c.Patch(ctx, obj, patch, opts...)
+			}})
+			err := m.protectDeploymentForAdoption(t.Context(), created)
+			wantError := tc.change != nil || tc.patchError != nil
+			if (err != nil) != wantError {
+				t.Fatalf("error=%v wantError=%v", err, wantError)
+			}
+			if tc.change != nil && patched {
+				t.Fatal("patched changed or unready COD")
+			}
+			if tc.patchError != nil && !errors.Is(err, tc.patchError) {
+				t.Fatalf("lost patch error: %v", err)
+			}
+			if wantError {
+				var preserved ocv1.ClusterObjectDeployment
+				if err := m.Client.Get(t.Context(), client.ObjectKey{Name: created.Name}, &preserved); err != nil {
+					t.Fatal(err)
+				}
+				if preserved.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionNone {
+					t.Fatal("failed handoff changed the stored template")
+				}
+			}
+		})
+	}
+}
+
+// TestProtectedCODFailurePreservesStaging refuses CE creation and OLMv0 recovery
+// after an initial rollout timeout or an uncertain protection-patch outcome.
+func TestProtectedCODFailurePreservesStaging(t *testing.T) {
+	for _, mode := range []string{"wait timeout", "patch rejected", "patch response lost"} {
+		t.Run(mode, func(t *testing.T) {
+			m := migrationTestClient(t, establishedClusterObjectDeploymentCRD())
+			patchAttempted := false
+			m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{
+				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					cod, ok := obj.(*ocv1.ClusterObjectDeployment)
+					if !ok {
+						t.Fatalf("unexpected creation during failed handoff: %T", obj)
+					}
+					if cod.Labels[controllerManagedByLabel] != "" {
+						t.Fatal("initial COD is adoptable")
+					}
+					ready := readyDeployment()
+					cod.UID, cod.Generation = ready.UID, ready.Generation
+					if mode != "wait timeout" {
+						cod.Status = ready.Status
+					}
+					return c.Create(ctx, obj, opts...)
+				},
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, p client.Patch, opts ...client.PatchOption) error {
+					patchAttempted = true
+					if mode == "patch response lost" {
+						if err := c.Patch(ctx, obj, p, opts...); err != nil {
+							return err
+						}
+					}
+					return errors.New("handoff patch failed")
+				},
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+			defer cancel()
+			result, err := m.CreateMigrationResources(ctx, Options{SubscriptionName: "example", SubscriptionNamespace: "source"}, &MigrationInfo{}, &Backup{})
+			if err == nil || !result.TargetMayBeActive {
+				t.Fatalf("result=%+v error=%v", result, err)
+			}
+			if mode == "wait timeout" && patchAttempted {
+				t.Fatal("enabled adoption before readiness")
+			}
+			var cod ocv1.ClusterObjectDeployment
+			if err := m.Client.Get(t.Context(), client.ObjectKey{Name: "example"}, &cod); err != nil {
+				t.Fatal(err)
+			}
+			if mode != "patch response lost" && cod.Labels[controllerManagedByLabel] != "" {
+				t.Fatal("failed handoff enabled adoption")
+			}
+			if mode == "patch response lost" && (cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent || cod.Labels[controllerManagedByLabel] != "operator-controller") {
+				t.Fatal("accepted patch did not atomically set protection and adoption")
+			}
+		})
+	}
+}
+
+// TestProtectedCODRetriesStatusConflict permits status-only races but rejects a
+// concurrent template change when re-reading the deployment for the next attempt.
+func TestProtectedCODRetriesStatusConflict(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		t.Run(fmt.Sprint("templateChanged=", changed), func(t *testing.T) {
+			created := readyDeployment()
+			created.Annotations = map[string]string{migrationInvocationAnnotation: "invocation"}
+			created.Spec.Template.Spec.CollisionProtection = ocv1.CollisionProtectionNone
+			m := migrationTestClient(t, created.DeepCopy())
+			attempts := 0
+			m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, p client.Patch, opts ...client.PatchOption) error {
+				attempts++
+				if attempts == 1 {
+					var current ocv1.ClusterObjectDeployment
+					if err := c.Get(ctx, client.ObjectKeyFromObject(obj), &current); err != nil {
+						return err
+					}
+					if changed {
+						current.Generation++
+					} else {
+						current.Annotations["status-writer"] = "updated"
+					}
+					if err := c.Update(ctx, &current); err != nil {
+						return err
+					}
+					return apierrors.NewConflict(schema.GroupResource{Resource: "clusterobjectdeployments"}, obj.GetName(), errors.New("concurrent update"))
+				}
+				return c.Patch(ctx, obj, p, opts...)
+			}})
+			err := m.protectDeploymentForAdoption(t.Context(), created)
+			if changed {
+				if err == nil || attempts != 1 {
+					t.Fatalf("changed template accepted: attempts=%d err=%v", attempts, err)
+				}
+			} else if err != nil || attempts != 2 || created.Labels[controllerManagedByLabel] != "operator-controller" {
+				t.Fatalf("status conflict not retried: attempts=%d err=%v", attempts, err)
 			}
 		})
 	}

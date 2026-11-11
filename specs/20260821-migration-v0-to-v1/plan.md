@@ -306,3 +306,17 @@ Sources: [shared converter](https://github.com/operator-framework/library-olm/pu
 [typed construction](https://github.com/operator-framework/library-olm/pull/93#discussion_r4556794570).
 
 Rollback persists verified resource identities and UIDs on the restored Subscription before deleting the CE backup. Remigration includes still-unowned retained resources (including catalog-generated RBAC) omitted from the OLMv0 inventory; missing resources are skipped, replacements and newly controlled resources are rejected, and normal collection is deduplicated.
+
+### Protected COD-only handoff
+
+Migration creates a COD with `None` and without its CE-adoption label, waits for
+initial rollout completion and availability, then atomically enables `Prevent`
+and CE adoption. It clears permissive phase/object overrides in the same guarded
+patch before creating the CE. Failed or uncertain handoffs preserve staging resources.
+The protection-only template update may create an intermediate protected revision.
+
+`make migration/test-e2e-cos-supersession` also runs
+`TestCODProtectedRolloutCollision`, which verifies that a later COD rollout refuses
+an unrelated existing object. Both cases collect package coverage and run in the
+existing handoff CI jobs. Unit regressions cover readiness, identity changes,
+patch conflicts, uncertain patch outcomes, and refusal to create a CE on failure.
