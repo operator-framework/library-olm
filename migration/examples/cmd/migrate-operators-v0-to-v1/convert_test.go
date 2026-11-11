@@ -56,6 +56,13 @@ func TestDryRunPreviewSortsResourceKinds(t *testing.T) {
 	if result.err != nil {
 		t.Fatal(result.err)
 	}
+	for _, preview := range strings.Split(string(result.output), "Resources that would be created:")[1:] {
+		protection := strings.Index(preview, "Template CollisionProtection:")
+		extension := strings.Index(preview, "ClusterExtension that would be created:")
+		if protection < 0 || extension <= protection || strings.Count(preview, "CollisionProtection:") != 1 {
+			t.Fatalf("collision protection must appear only with the COD template: %s", preview)
+		}
+	}
 	sections := strings.Split(string(result.output), "Resources that would be placed into its template and controller-created COS revisions:")
 	if len(sections) != 6 {
 		t.Fatalf("got %d preview sections, want 5", len(sections)-1)
