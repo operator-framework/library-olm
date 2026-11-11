@@ -36,10 +36,14 @@ func TestCODProtectedRolloutCollision(t *testing.T) {
 		t.Fatal(err)
 	}
 	name := ns.Name
+	systemNamespace := ""
 	t.Cleanup(func() {
 		collectArtifacts(t, ns.Name)
 		run(t, "kubectl", "delete", "clusterobjectdeployment/"+name, "--ignore-not-found", "--wait=true", "--timeout=60s")
 		run(t, "kubectl", "delete", "clusterobjectset", "-l", migration.LabelOwnerName+"="+name, "--ignore-not-found", "--wait=true", "--timeout=60s")
+		if systemNamespace != "" {
+			run(t, "kubectl", "delete", "secret", "-n", systemNamespace, "-l", migration.LabelOwnerName+"="+name, "--ignore-not-found", "--wait=true", "--timeout=60s")
+		}
 		run(t, "kubectl", "delete", "namespace/"+ns.Name, "--wait=false")
 	})
 	original := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "migrated", Namespace: ns.Name}, Data: map[string]string{"value": "original"}}
@@ -56,6 +60,7 @@ func TestCODProtectedRolloutCollision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	systemNamespace = opts.SystemNamespace
 	if err := m.CreateClusterObjectSet(ctx, opts, &migration.MigrationInfo{CollectedObjects: []unstructured.Unstructured{manifest(original.Name, "original")}}); err != nil {
 		t.Fatal(err)
 	}
