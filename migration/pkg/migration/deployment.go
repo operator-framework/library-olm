@@ -286,6 +286,7 @@ func buildClusterObjectDeployment(opts Options, info *MigrationInfo, phases []*o
 		LabelBundleName:                    info.BundleName,
 		LabelBundleVersion:                 info.Version,
 	}
+	addStagingBackup(annotations, info)
 	if info.BundleImage != "" {
 		annotations[LabelBundleReference] = info.BundleImage
 	}
@@ -297,7 +298,7 @@ func buildClusterObjectDeployment(opts Options, info *MigrationInfo, phases []*o
 				WithMetadata(ocv1ac.ClusterObjectDeploymentTemplateMetadata().
 					WithLabels(map[string]string{LabelOwnerKind: ocv1.ClusterExtensionKind, LabelOwnerName: opts.ClusterExtensionName}).
 					WithAnnotations(annotations)).WithSpec(
-				ocv1ac.ClusterObjectDeploymentTemplateSpec().WithPhases(phases...).WithCollisionProtection(ocv1.CollisionProtectionNone))))
+				ocv1ac.ClusterObjectDeploymentTemplateSpec().WithPhases(phases...).WithCollisionProtection(ocv1.CollisionProtectionPrevent))))
 	data, err := json.Marshal(configuration)
 	if err != nil {
 		return nil, fmt.Errorf("marshal ClusterObjectDeployment: %w", err)

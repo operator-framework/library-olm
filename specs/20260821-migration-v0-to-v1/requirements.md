@@ -155,8 +155,14 @@ ClusterExtension, with controller-managed COS revisions. The initial implementat
 selected automatically when the COD CRD exists; when absent, the direct COS
 workflow uses the current COS definitions. Discovery errors must fail rather than silently fall back. COD migration requires an established
 COD CRD and operator-controller's COD-backed ClusterExtension applier (upstream PR #3058).
-Create the deployment with collision protection `None`, wait for current-generation rollout
-completion and availability, then create the CE to hand management to operator-controller.
+Create the initial COS (revision 1 in the COD's group) with collision protection `None`,
+then create the COD with `Prevent` without waiting between the two creates. The COD
+adopts the initial COS and creates a protected revision from the migration template.
+Clear permissive phase/object overrides from that template. Wait for the COD's
+current-generation rollout completion and availability before creating the CE.
+Only the initial COS may blindly adopt collected OLMv0 objects; subsequent templates
+must reject unrelated existing objects. If COD creation fails after COS creation,
+preserve the initial COS and its Secrets and refuse automatic OLMv0 recovery.
 Set `apps.kubernetes.io/managed-by: operator-controller` on the COD itself so
 operator-controller retains its rollout data and can adopt it while ownerless.
 Preserve the same COD UID through adoption; owner-kind and
@@ -382,3 +388,10 @@ unreferenced source would be deleted without changing it.
 Readiness reporting includes a lightweight COS API availability check; this is diagnostic, not a guarantee that a later write will succeed. Preparation does not repeat that COS CRD check. COD discovery remains necessary to select the revision manager. Gather (including CLI dry-run) and migration validate the prepared revision with a strict server-side dry-run create before removing OLMv0 management. Validation and creation share the same revision and Secret-reference builders; dry-run does not persist revisions or packed Secrets. The API server validates schema, admission, and permissions, but does not run controller-level validation of referenced workloads. Rollback permits verified newer sibling handoffs while retaining resource-UID, owner, and management-label checks.
 
 Rollback persists verified resource identities and UIDs on the restored Subscription before deleting the CE backup. Remigration includes still-unowned retained resources (including catalog-generated RBAC) omitted from the OLMv0 inventory; missing resources are skipped, replacements and newly controlled resources are rejected, and normal collection is deduplicated.
+
+Recovery before CE creation must not rely only on an in-memory backup. Persist the
+original Subscription and OperatorGroup specs on retained staging resources at
+creation, before rollout/handoff failures can strand the operator. Preserve them
+on failed or uncertain handoffs and refuse automatic OLMv0 restart. Regression
+tests must decode the server-side backup after discarding the original plan and
+verify it can restore the original Subscription spec after safe target release.

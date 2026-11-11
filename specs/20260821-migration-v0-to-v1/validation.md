@@ -12,7 +12,7 @@ kind cluster with both OLMv0 and OLMv1 installed.
 ## V1. Per-command behavior
 
 - **V1.1** `check <operator> -n <ns>` on a healthy AllNamespaces operator with an available catalog reports all checks green and exits 0; makes no cluster changes.
-- **V1.2** `convert <operator> -n <ns> --dry-run` lists every resource that would be migrated (grouped by kind), including CRDs, and reports the detected COS or COD manager with `CollisionProtection: None` on the COS or COD template; makes no cluster changes.
+- **V1.2** `convert <operator> -n <ns> --dry-run` lists every resource that would be migrated (grouped by kind), including CRDs, and reports the detected COS or COD manager with `CollisionProtection: None` on the initial COS and `Prevent` on the COD template; makes no cluster changes.
 - **V1.3** `convert <operator> -n <ns>` results in a `ClusterExtension` reaching `Installed=True`; the `Subscription` and `CSV` are deleted; CRDs remain and are adopted by OLMv1. In direct COS mode, the COS sets `status.completedAt` before the CE is created. In COD mode, the COD's current-generation rollout completes and becomes available before the CE is created; the CE then owns the same COD and its catalog revision uses `CollisionProtection: Prevent`.
 - **V1.4** `rollback <ce-name> --acknowledge-installed` starts CE orphan deletion with a rollback finalizer to stop new revisions, records verified ownership from in-flight replacement revisions before deleting them, waits for orphaned resources to lose COS controller references, removes their OLMv1 revision metadata, restores the `Subscription` from the backup annotation, then removes the CE finalizer. A matching Subscription from a prior attempt permits retry; a conflicting Subscription or failed restoration retains the CE backup. The operator returns to OLMv0 management (`AtLatestKnown`/`UpgradePending`), and a subsequent migration can adopt preserved resources. Without `--acknowledge-installed` on an `Installed=True` CE, rollback refuses and exits non-zero.
   In COD mode, verify CE-to-COD and COD-to-COS ownership and stop the COD with orphan deletion before removing its COS revisions, preventing replacement revisions during rollback. Before deletion and during subsequent revision discovery, reject controlled COS revisions unless the controller's API version, kind, name, and UID match the CE or its verified COD. Require the current `spec.group` identity even for unowned staging or orphaned revisions; a name or owner label alone cannot authorize deletion. Preserve workloads and retain the CE backup if cleanup or restoration fails.
@@ -21,20 +21,20 @@ kind cluster with both OLMv0 and OLMv1 installed.
 - **V1.7** `convert --all` stops on the first failure by default; with `--continue-on-error` it logs the failure and continues, exiting non-zero if any operator failed.
 - **V1.8** No command ever blocks on interactive input. An operator whose name collides with a verb (e.g. `check`) is migratable as a positional argument (`convert check -n <ns>`).
 - **V1.9** Manager detection selects direct COS when the COD CRD is absent and COD when it is present and established. Discovery errors and unmet prerequisites fail before deleting OLMv0 resources. Validate COD name/group constraints and reject an existing COD rather than overwriting it. CRD presence is the supported capability signal; controller-version detection is not required.
-- **V1.10** The COD template preserves migration labels, annotations, packed Secret references, and `CollisionProtection: None`. Readiness requires completion and availability for the current generation; stale status cannot satisfy the wait. Invalid-specification and deadline failures report actionable errors. Once a COD may have reconciled, failure preserves migration resources and refuses automatic OLMv0 recovery.
+- **V1.10** The COD template preserves migration labels, annotations, packed Secret references, and `CollisionProtection: Prevent` without permissive phase/object overrides. Readiness requires completion and availability for the current generation; stale status cannot satisfy the wait. Invalid-specification and deadline failures report actionable errors. Once a COD may have reconciled, failure preserves migration resources and refuses automatic OLMv0 recovery.
   The COD itself carries `apps.kubernetes.io/managed-by: operator-controller`
   before CE creation and after adoption. It has no controller owner during
   staging, then gains the CE controller reference while retaining its UID.
   The template continues to carry extension identity metadata without copying
   this COD-specific adoption label onto operator workloads.
   Directly created migration COS revisions carry `apps.kubernetes.io/managed-by:
-  object-controller` and remain ownerless during staging. COD-generated migration
+  object-controller` and start ownerless; in COD mode the COD adopts them. COD-generated staging
   and catalog revisions carry the same COS label, while the COD retains its
   distinct `operator-controller` value.
   Assert inline and Secret-backed object encodings using the current COS/COD
   definitions, including workload preservation during rollback. Older experimental
   schemas are outside the compatibility requirements.
-  Assert prompt failures for all current-generation terminal `Progressing=False` reasons except successful completion, including revision collisions and invalid revisions; preserve the controller's reason and message. Definitive COS/COD create rejections restore OLMv0 and report that the target cannot be active; timeouts and transport failures refuse automatic recovery.
+  Assert prompt failures for all current-generation terminal `Progressing=False` reasons except successful completion, including revision collisions and invalid revisions; preserve the controller's reason and message. Definitive initial COS create rejections restore OLMv0 and report that the target cannot be active; a COD rejection after COS creation preserves staging resources and refuses automatic recovery; timeouts and transport failures refuse automatic recovery.
   Rollback persists verified COD UIDs before deletion and accepts matching dangling references even after restarting rollback. Unknown UIDs remain rejected, and failure to persist verified identity prevents COD deletion.
 
 ## V2. Eligibility matrix (one case per check, R3)
@@ -108,7 +108,7 @@ flag flips it to `Eligible`:
 - **V5.8** `rollback <ce-name> --acknowledge-installed` → Subscription restored, CE and COS revisions deleted, preserved Deployments released from OLMv1 ownership; a second `convert` creates new CE/COS UIDs, installs successfully, and adopts the same Deployment UIDs.
   In COD mode, also verify the COD is deleted and no COS remains in its group, while the Deployment UID and availability are preserved. Fixture tests assert restored Subscription state; OLMv0 reconciliation requires the live environment.
 - **V5.9** Fresh cluster with operators in all four states → `check --all` → correct four-section output; `convert --all` warns on Conflicts and migrates only Eligible.
-- **V5.10** On a COD-capable controller, fixture migration creates one COD named for the CE. Catalog handoff retains that COD's UID, establishes CE ownership of the COD and COD ownership of successive COS revisions in the same group, and retains the migration revision (`None`) alongside a new catalog revision (`Prevent`). Verify the migration COS retains its UID and both revisions retain their respective collision-protection settings. Run handoff and fixture conversion/rollback (V5.8) in the dedicated COD CI job, collecting coverage separately from the other fixture tests.
+- **V5.10** On a COD-capable controller, fixture migration creates one COD named for the CE. Catalog handoff retains that COD's UID, establishes CE ownership of the COD and COD ownership of successive COS revisions in the same group, and retains the migration revision (`None`) alongside a new catalog revision (`Prevent`). Verify the migration COS retains its UID and all revisions retain their respective collision-protection settings. Before CE creation, assert revision 1 uses `None` and the COD-created staging revision uses `Prevent`; catalog handoff produces another protected revision. Add an unrelated existing object to a later COD template and assert `RevisionObjectCollision` without changing that object’s UID, data, labels, or ownership. Run handoff and fixture conversion/rollback (V5.8) in the dedicated COD CI job, collecting coverage separately from the other fixture tests.
 
 ## V6. Non-functional (Jira deployment considerations)
 
@@ -158,3 +158,10 @@ flag flips it to `Eligible`:
 Readiness reporting includes a lightweight COS API availability check; this is diagnostic, not a guarantee that a later write will succeed. Preparation does not repeat that COS CRD check. COD discovery remains necessary to select the revision manager. Gather (including CLI dry-run) and migration validate the prepared revision with a strict server-side dry-run create before removing OLMv0 management. Validation and creation share the same revision and Secret-reference builders; dry-run does not persist revisions or packed Secrets. The API server validates schema, admission, and permissions, but does not run controller-level validation of referenced workloads. Rollback permits verified newer sibling handoffs while retaining resource-UID, owner, and management-label checks.
 
 Rollback persists verified resource identities and UIDs on the restored Subscription before deleting the CE backup. Remigration includes still-unowned retained resources (including catalog-generated RBAC) omitted from the OLMv0 inventory; missing resources are skipped, replacements and newly controlled resources are rejected, and normal collection is deduplicated.
+
+Recovery before CE creation must not rely only on an in-memory backup. Persist the
+original Subscription and OperatorGroup specs on retained staging resources at
+creation, before rollout/handoff failures can strand the operator. Preserve them
+on failed or uncertain handoffs and refuse automatic OLMv0 restart. Regression
+tests must decode the server-side backup after discarding the original plan and
+verify it can restore the original Subscription spec after safe target release.

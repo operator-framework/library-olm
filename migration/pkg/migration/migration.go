@@ -41,11 +41,12 @@ var annotationPrefixesToStrip = []string{
 // Recovery must never infer ownership from predictable names or labels: another
 // migration may have created objects with the same values after this one started.
 type createdMigrationResources struct {
-	cos              *ocv1.ClusterObjectSet
-	cod              *ocv1.ClusterObjectDeployment
-	secrets          []corev1.Secret
-	ce               *ocv1.ClusterExtension
-	ownershipUnknown bool
+	cos                 *ocv1.ClusterObjectSet
+	cod                 *ocv1.ClusterObjectDeployment
+	secrets             []corev1.Secret
+	ce                  *ocv1.ClusterExtension
+	ownershipUnknown    bool
+	deploymentRequested bool
 }
 
 // MigrationResourcesResult records whether target resources may have started
@@ -633,6 +634,12 @@ func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, inf
 // as one recoverable operation. Its result reports whether a target COS may have
 // started reconciling, including when cleanup was requested after a failure.
 func (m *Migrator) CreateMigrationResources(ctx context.Context, opts Options, info *MigrationInfo, backup *Backup) (MigrationResourcesResult, error) {
+	var err error
+	info, err = withStagingBackup(info, backup)
+	if err != nil {
+		return MigrationResourcesResult{}, err
+	}
+	opts.ApplyDefaults()
 	resources, err := m.createClusterObjectSet(ctx, opts, info)
 	if err != nil {
 		result := MigrationResourcesResult{TargetMayBeActive: resources.cos != nil || resources.cod != nil || resources.ownershipUnknown}
@@ -665,6 +672,7 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 		return resources, err
 	}
 	opts.UseClusterObjectDeployment = useCOD
+	resources.deploymentRequested = useCOD
 	if useCOD {
 		if err := m.prepareClusterObjectDeployment(ctx, opts.ClusterExtensionName); err != nil {
 			return resources, err
@@ -721,14 +729,6 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 		resources.secrets = append(resources.secrets, *secret)
 	}
 
-	if opts.UseClusterObjectDeployment {
-		err := m.createClusterObjectDeployment(ctx, opts, info, phases, invocationMarker, resources)
-		if err != nil && resources.cod == nil {
-			return resources, failWithSecretCleanup(err)
-		}
-		return resources, err
-	}
-
 	cosObj, err := buildClusterObjectSet(opts, info, phases, invocationMarker)
 	if err != nil {
 		return resources, failWithSecretCleanup(err)
@@ -754,6 +754,18 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 	}
 	resources.cos = cosObj
 
+	if opts.UseClusterObjectDeployment {
+		// Submit both resources before waiting: the initial COS may adopt only
+		// the collected OLMv0 objects, while every COD rollout uses Prevent.
+		for _, phase := range phases {
+			phase.CollisionProtection = nil
+			for i := range phase.Objects {
+				phase.Objects[i].CollisionProtection = nil
+			}
+		}
+		return resources, m.createClusterObjectDeployment(ctx, opts, info, phases, invocationMarker, resources)
+	}
+
 	if err := m.WaitForCOSSucceeded(ctx, cosName); err != nil {
 		return resources, err
 	}
@@ -768,8 +780,8 @@ func (m *Migrator) cleanupCreatedClusterObjectSet(ctx context.Context, resources
 	if resources == nil {
 		return nil
 	}
-	if resources.cod != nil {
-		return fmt.Errorf("ClusterObjectDeployment may have reconciled; preserving its revisions and Secrets for explicit recovery")
+	if resources.cod != nil || resources.deploymentRequested && resources.cos != nil {
+		return fmt.Errorf("ClusterObjectSet or ClusterObjectDeployment may have reconciled; preserving its revisions and Secrets for explicit recovery")
 	}
 	if resources.ownershipUnknown {
 		return fmt.Errorf("ClusterObjectSet creation outcome is unknown; refusing automatic cleanup")

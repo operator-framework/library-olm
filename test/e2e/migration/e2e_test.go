@@ -4,12 +4,14 @@ package e2e
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -329,9 +331,14 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("list pre-existing COS: %v", err)
 	}
-	if len(before.Items) != 1 {
-		t.Fatalf("pre-existing COS count = %d, want 1", len(before.Items))
+	expectedBefore := 1
+	if opts.UseClusterObjectDeployment {
+		expectedBefore = 2
 	}
+	if len(before.Items) != expectedBefore {
+		t.Fatalf("pre-existing COS count = %d, want %d", len(before.Items), expectedBefore)
+	}
+	slices.SortFunc(before.Items, func(a, b ocv1.ClusterObjectSet) int { return cmp.Compare(a.Spec.Revision, b.Spec.Revision) })
 	precreatedUID := before.Items[0].UID
 	var originalCOD ocv1.ClusterObjectDeployment
 	if opts.UseClusterObjectDeployment {
@@ -340,6 +347,9 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 		}
 		if !metav1.IsControlledBy(&before.Items[0], &originalCOD) || before.Items[0].Spec.Group != subscription {
 			t.Fatal("migration revision is not controlled by its COD")
+		}
+		if originalCOD.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
+			t.Fatal("staging COD must enforce Prevent before CE adoption")
 		}
 		if originalCOD.Labels["apps.kubernetes.io/managed-by"] != "operator-controller" || metav1.GetControllerOf(&originalCOD) != nil {
 			t.Fatal("staging COD must be ownerless and carry the operator-controller adoption label")
@@ -351,7 +361,7 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 	if before.Items[0].Labels["apps.kubernetes.io/managed-by"] != "object-controller" {
 		t.Fatal("migration COS lacks the object-controller adoption label")
 	}
-	if !cosSucceeded(before.Items[0]) {
+	if !opts.UseClusterObjectDeployment && !cosSucceeded(before.Items[0]) {
 		t.Fatal("pre-existing COS did not set status.completedAt before CE creation")
 	}
 	if before.Items[0].Spec.CollisionProtection != ocv1.CollisionProtectionNone {
@@ -369,8 +379,8 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("list COS after CE creation: %v", err)
 	}
-	if len(after.Items) != 2 {
-		t.Fatalf("COS count after CE creation = %d, want 2 (migration and catalog revisions)", len(after.Items))
+	if len(after.Items) != expectedBefore+1 {
+		t.Fatalf("COS count after CE creation = %d, want %d", len(after.Items), expectedBefore+1)
 	}
 	var migrationCOS, catalogCOS *ocv1.ClusterObjectSet
 	for i := range after.Items {
@@ -378,12 +388,12 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 		switch cos.Spec.Revision {
 		case 1:
 			migrationCOS = cos
-		case 2:
+		case int64(expectedBefore + 1):
 			catalogCOS = cos
 		}
 	}
 	if migrationCOS == nil || catalogCOS == nil {
-		t.Fatalf("COS revisions = %#v, want migration revision 1 and catalog revision 2", after.Items)
+		t.Fatalf("COS revisions = %#v, want migration revision 1 and catalog revision %d", after.Items, expectedBefore+1)
 	}
 	if migrationCOS.UID != precreatedUID {
 		t.Fatalf("migration COS UID = %s, want pre-created UID %s", migrationCOS.UID, precreatedUID)

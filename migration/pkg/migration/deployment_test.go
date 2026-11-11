@@ -3,6 +3,7 @@ package migration
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,6 +13,8 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -268,7 +271,7 @@ func TestCreateDeploymentTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resources.cod == nil || resources.cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionNone {
+	if resources.cod == nil || resources.cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
 		t.Fatalf("unexpected deployment: %+v", resources.cod)
 	}
 	if resources.cod.Annotations[migrationInvocationAnnotation] != "invocation" {
@@ -501,4 +504,126 @@ func establishedClusterObjectDeploymentCRD() *apiextensionsv1.CustomResourceDefi
 	crd := establishedClusterObjectSetCRD()
 	crd.Name = clusterObjectDeploymentCRDName
 	return crd
+}
+
+// TestCreateCOSBeforeProtectedCOD verifies staging does not wait between creates
+// and that permissive phase/object overrides cannot leak into future rollouts.
+func TestCreateCOSBeforeProtectedCOD(t *testing.T) {
+	for _, rejectCOD := range []bool{false, true} {
+		t.Run(fmt.Sprint("rejectCOD=", rejectCOD), func(t *testing.T) {
+			m := migrationTestClient(t, establishedClusterObjectDeploymentCRD())
+			var order []string
+			denied := apierrors.NewForbidden(schema.GroupResource{Resource: "clusterobjectdeployments"}, "example", errors.New("denied"))
+			m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{
+				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					switch obj := obj.(type) {
+					case *ocv1.ClusterObjectSet:
+						order = append(order, "COS")
+						obj.UID = "initial"
+						// Deliberately leave status empty: COD creation must not wait.
+					case *ocv1.ClusterObjectDeployment:
+						order = append(order, "COD")
+						if rejectCOD {
+							return denied
+						}
+						ready := readyDeployment()
+						obj.UID, obj.Generation, obj.Status = ready.UID, ready.Generation, ready.Status
+					}
+					return c.Create(ctx, obj, opts...)
+				},
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			obj := unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "existing", "namespace": "ns"}}}
+			resources, err := m.createClusterObjectSet(ctx, Options{ClusterExtensionName: "example", SubscriptionNamespace: "ns", SubscriptionName: "sub"}, &MigrationInfo{CollectedObjects: []unstructured.Unstructured{obj}})
+			if !reflect.DeepEqual(order, []string{"COS", "COD"}) {
+				t.Fatalf("create order = %v, error %v", order, err)
+			}
+			if rejectCOD {
+				if !errors.Is(err, denied) {
+					t.Fatalf("error = %v", err)
+				}
+				if err := m.cleanupCreatedClusterObjectSet(ctx, resources); err == nil {
+					t.Fatal("allowed unsafe cleanup after COS creation")
+				}
+				if err := m.recoverCreatedMigrationResources(ctx, Options{}, &Backup{}, resources); err == nil {
+					t.Fatal("allowed OLMv0 recovery after COS creation")
+				}
+				var preserved ocv1.ClusterObjectSet
+				if err := m.Client.Get(ctx, client.ObjectKey{Name: "example-1"}, &preserved); err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resources.cos.Spec.CollisionProtection != ocv1.CollisionProtectionNone || resources.cos.Spec.Group != "example" || resources.cos.Spec.Revision != 1 {
+				t.Fatalf("invalid initial COS: %+v", resources.cos.Spec)
+			}
+			if resources.cos.Labels[controllerManagedByLabel] != "object-controller" {
+				t.Fatal("COS cannot be adopted")
+			}
+			if resources.cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
+				t.Fatal("COD must prevent collisions")
+			}
+			for _, phase := range resources.cod.Spec.Template.Spec.Phases {
+				if phase.CollisionProtection != "" {
+					t.Fatal("phase overrides COD protection")
+				}
+				for _, entry := range phase.Objects {
+					if entry.CollisionProtection != "" {
+						t.Fatal("object overrides COD protection")
+					}
+				}
+			}
+			if resources.cos.Spec.Phases[0].CollisionProtection != ocv1.CollisionProtectionNone {
+				t.Fatal("mutated initial COS while building COD")
+			}
+		})
+	}
+}
+
+// TestCreateMigrationResourcesSharesDefaults verifies COD and CE creation use the
+// same defaulted identity and namespace, while retaining explicit CE names.
+func TestCreateMigrationResourcesSharesDefaults(t *testing.T) {
+	for _, name := range []string{"", "custom"} {
+		t.Run("name="+name, func(t *testing.T) {
+			m := migrationTestClient(t, establishedClusterObjectDeploymentCRD())
+			m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{
+				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					switch resource := obj.(type) {
+					case *ocv1.ClusterObjectDeployment:
+						ready := readyDeployment()
+						resource.UID, resource.Generation, resource.Status = ready.UID, ready.Generation, ready.Status
+					case *ocv1.ClusterExtension:
+						resource.UID = "extension"
+						resource.Status.Conditions = []metav1.Condition{{Type: ocv1.TypeInstalled, Status: metav1.ConditionTrue}}
+					}
+					return c.Create(ctx, obj, opts...)
+				},
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			opts := Options{SubscriptionName: "subscription", SubscriptionNamespace: "source", ClusterExtensionName: name, SystemNamespace: "controller"}
+			if _, err := m.CreateMigrationResources(ctx, opts, &MigrationInfo{PackageName: "package", Channel: "stable"}, &Backup{}); err != nil {
+				t.Fatal(err)
+			}
+			expected := name
+			if expected == "" {
+				expected = "subscription"
+			}
+			var cod ocv1.ClusterObjectDeployment
+			if err := m.Client.Get(ctx, client.ObjectKey{Name: expected}, &cod); err != nil {
+				t.Fatal(err)
+			}
+			var ce ocv1.ClusterExtension
+			if err := m.Client.Get(ctx, client.ObjectKey{Name: expected}, &ce); err != nil {
+				t.Fatal(err)
+			}
+			if cod.Spec.Template.Metadata.Labels[LabelOwnerName] != expected || ce.Spec.Namespace != "source" {
+				t.Fatalf("inconsistent defaults: COD owner label=%q CE namespace=%q", cod.Spec.Template.Metadata.Labels[LabelOwnerName], ce.Spec.Namespace)
+			}
+		})
+	}
 }

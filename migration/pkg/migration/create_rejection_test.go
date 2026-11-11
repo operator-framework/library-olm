@@ -41,13 +41,13 @@ func TestMigrationCreateRejectionRecovery(t *testing.T) {
 				attempted := false
 				m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{
 					Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
-						switch obj.(type) {
-						case *ocv1.ClusterObjectSet, *ocv1.ClusterObjectDeployment:
+						_, isCOS := obj.(*ocv1.ClusterObjectSet)
+						_, isCOD := obj.(*ocv1.ClusterObjectDeployment)
+						if mode == "COS" && isCOS || mode == "COD" && isCOD {
 							attempted = true
 							return tc.err
-						default:
-							return c.Create(ctx, obj, opts...)
 						}
+						return c.Create(ctx, obj, opts...)
 					},
 				})
 				m.Client = reconcilingSubscriptionClient{Client: m.Client}
@@ -56,14 +56,15 @@ func TestMigrationCreateRejectionRecovery(t *testing.T) {
 				if !attempted || !errors.Is(err, tc.err) {
 					t.Fatalf("expected create rejection %v, got %v (attempted: %v)", tc.err, err, attempted)
 				}
-				if result.TargetMayBeActive != tc.ambiguous {
-					t.Fatalf("TargetMayBeActive = %v, want %v", result.TargetMayBeActive, tc.ambiguous)
+				wantActive := tc.ambiguous || mode == "COD"
+				if result.TargetMayBeActive != wantActive {
+					t.Fatalf("TargetMayBeActive = %v, want %v", result.TargetMayBeActive, wantActive)
 				}
 				var restored operatorsv1alpha1.Subscription
 				getErr := m.Client.Get(ctx, client.ObjectKeyFromObject(sub), &restored)
-				if tc.ambiguous {
+				if wantActive {
 					if !apierrors.IsNotFound(getErr) {
-						t.Fatalf("ambiguous create restored OLMv0: %v", getErr)
+						t.Fatalf("potentially active migration restored OLMv0: %v", getErr)
 					}
 				} else if getErr != nil || restored.Status.State != operatorsv1alpha1.SubscriptionStateAtLatest {
 					t.Fatalf("definitive rejection did not restore OLMv0: %v, state %s", getErr, restored.Status.State)

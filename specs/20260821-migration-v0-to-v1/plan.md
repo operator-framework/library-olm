@@ -310,3 +310,8 @@ Sources: [shared converter](https://github.com/operator-framework/library-olm/pu
 [typed construction](https://github.com/operator-framework/library-olm/pull/93#discussion_r4556794570).
 
 Rollback persists verified resource identities and UIDs on the restored Subscription before deleting the CE backup. Remigration includes still-unowned retained resources (including catalog-generated RBAC) omitted from the OLMv0 inventory; missing resources are skipped, replacements and newly controlled resources are rejected, and normal collection is deduplicated.
+
+
+### Alternative COS + COD handoff
+
+The COS+COD alternative creates an initial COS with collision protection None and waits for adoption before creating the protected COD. The COD uses Prevent, and the CE adopts the COD. Verify collision rejection, rollback, and preserved recovery backups before CE creation.
