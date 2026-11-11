@@ -51,10 +51,8 @@ schemas. Recreate clusters installed with older definitions before running these
 suites. Fixture rollback verifies restoration, not OLMv0 reconciliation, because
 fixture clusters have no OLMv0 controllers.
 
-Both covered targets passed locally against `9dd683afa190` on kind Kubernetes
-1.37: handoff in 25.9 seconds and fixture conversion/rollback in 26.8 seconds.
-The default source-build bootstrap also passed. These checks verify current
-revision encoding, COD adoption, and workload-preserving rollback.
+The covered targets verify revision encoding, COD adoption, and workload-preserving
+rollback. Rerun them against the pinned controller whenever updating the API dependency.
 
 ### Existing suites
 
@@ -381,4 +379,4 @@ E2E_CLUSTER_NAME=library-olm-fixture-e2e make migration/e2e-teardown
 
 Revision preflight rejects deleting or incompatible COS/COD definitions before changing OLMv0 resources. Schemas must preserve opaque inline manifests and Secret-reference name, namespace, and key fields. Rollback permits verified newer sibling handoffs while retaining resource-UID, owner, and management-label checks.
 
-Reused clusters skip the controller build and image loading after schema validation. Recreate the cluster to change the controller commit. Every setup waits for object-controller, operator-controller, and catalogd and repairs the live catalog.
+Complete reused installations skip controller building and image loading after schema validation. Setup repairs missing controller deployments or CRDs only after validating every existing revision schema. Recreate the cluster to change the controller commit. Every setup waits for object-controller, operator-controller, and catalogd and repairs the live catalog.

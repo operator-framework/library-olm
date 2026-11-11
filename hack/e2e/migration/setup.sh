@@ -24,16 +24,26 @@ else
 fi
 kubectl --kubeconfig "$E2E_KUBECONFIG" wait --for=condition=Ready nodes --all --timeout=3m
 
-# A reused cluster keeps its installed controller. Reject incompatible schemas
-# before making further setup changes; only NotFound permits installation.
-existing_controller=$(kubectl --kubeconfig "$E2E_KUBECONFIG" get crd/clusterextensions.olm.operatorframework.io --ignore-not-found -o name)
+# Validate every revision CRD that already exists before repairing a partial
+# install. Missing resources permit installation; incompatible schemas do not.
 validate_revision_crds() {
-	kubectl --kubeconfig "$E2E_KUBECONFIG" get crd/clusterobjectsets.olm.operatorframework.io crd/clusterobjectdeployments.olm.operatorframework.io -o json |
-		python3 "$root_dir/hack/e2e/migration/validate-revision-crds.py"
+	local definitions
+	definitions=$(kubectl --kubeconfig "$E2E_KUBECONFIG" get crd/clusterobjectsets.olm.operatorframework.io crd/clusterobjectdeployments.olm.operatorframework.io "$@" -o json)
+	# kubectl can emit no document when every named resource is absent.
+	if [[ -z "$definitions" && ${1:-} == --ignore-not-found ]]; then
+		return
+	fi
+	printf '%s\n' "$definitions" | python3 "$root_dir/hack/e2e/migration/validate-revision-crds.py"
 }
-if [[ -n "$existing_controller" ]]; then
-	validate_revision_crds
-fi
+validate_revision_crds --ignore-not-found
+installed_resources=$(kubectl --kubeconfig "$E2E_KUBECONFIG" -n olmv1-system get \
+	crd/clusterextensions.olm.operatorframework.io \
+	crd/clusterobjectsets.olm.operatorframework.io \
+	crd/clusterobjectdeployments.olm.operatorframework.io \
+	deployment/operator-controller-controller-manager \
+	deployment/catalogd-controller-manager \
+	deployment/object-controller-controller-manager \
+	--ignore-not-found -o name | wc -l)
 
 # The v0.46 CRD bundle exceeds Kubernetes' client-side last-applied annotation
 # limit for the CSV CRD. Server-side apply stores managed fields instead.
@@ -45,7 +55,7 @@ if [[ ${E2E_INSTALL_OLMV0:-true} == true ]]; then
 fi
 
 # Install the controller matching the current experimental COS/COD definitions.
-if [[ -z "$existing_controller" ]]; then
+if (( installed_resources < 6 )); then
 	E2E_CLUSTER_NAME="$cluster_name" "$root_dir/hack/e2e/migration/install-olmv1.sh"
 fi
 kubectl --kubeconfig "$E2E_KUBECONFIG" wait --for=condition=Established crd/clusterextensions.olm.operatorframework.io crd/clustercatalogs.olm.operatorframework.io --timeout=5m

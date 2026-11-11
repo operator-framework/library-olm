@@ -91,7 +91,8 @@ func TestSecretPackerUsesObjectType(t *testing.T) {
 			object := largeConfigMap("config", "payload")
 			switch kind {
 			case "reference":
-				object.WithType(ocv1.ObjectTypeSecretReference)
+				object.WithType(ocv1.ObjectTypeSecretReference).WithSecretRef(ocv1ac.SecretSourceRef().WithName("stored").WithNamespace("controller").WithKey("manifest"))
+				object.InlineManifest = nil
 			case "missing type":
 				object.Type = nil
 			case "missing manifest":
@@ -99,16 +100,29 @@ func TestSecretPackerUsesObjectType(t *testing.T) {
 			case "unknown":
 				object.WithType(ocv1.ObjectType("Unknown"))
 			}
-			packed, err := (&secretPacker{RevisionName: "example", OwnerName: "example", SystemNamespace: "controller"}).pack([]*ocv1ac.ClusterObjectSetPhaseApplyConfiguration{ocv1ac.ClusterObjectSetPhase().WithObjects(object)})
-			if kind == "inline" || kind == "reference" {
-				if err != nil {
-					t.Fatal(err)
+			phases := []*ocv1ac.ClusterObjectSetPhaseApplyConfiguration{ocv1ac.ClusterObjectSetPhase().WithObjects(object)}
+			before, err := json.Marshal(phases)
+			if err != nil {
+				t.Fatal(err)
+			}
+			packed, err := (&secretPacker{RevisionName: "example", OwnerName: "example", SystemNamespace: "controller"}).pack(phases)
+			if kind != "inline" && kind != "reference" {
+				if err == nil {
+					t.Fatal("accepted malformed union")
 				}
-				if (len(packed.Refs) > 0) != (kind == "inline") {
-					t.Fatalf("wrong union member packed: %+v", packed)
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (len(packed.Refs) > 0) != (kind == "inline") {
+				t.Fatalf("wrong union member packed: %+v", packed)
+			}
+			if kind == "reference" {
+				after, marshalErr := json.Marshal(phases)
+				if marshalErr != nil || string(before) != string(after) || len(packed.Secrets) != 0 {
+					t.Fatalf("existing reference was changed or repacked: phases=%s secrets=%d error=%v", after, len(packed.Secrets), marshalErr)
 				}
-			} else if err == nil {
-				t.Fatal("accepted malformed union")
 			}
 		})
 	}

@@ -176,7 +176,7 @@ an explicitly selected OLMv1 system-managed namespace mode.
 - Move collected namespace-scoped resources to the target namespace in the migration COS and,
   after the target CE is installed, remove their source copies.
 - Delete the source namespace only with `--acknowledge-namespace-delete`; retain it by default.
-- `--system-managed-install-namespace` uses operator-controller `v1.12.0`'s experimental
+- `--system-managed-install-namespace` uses the pinned operator-controller experimental
   optional-namespace CRD. It capability-gates the mode and omits the CE field. Migration
   prepares the bundle-metadata namespace before its COS and imports it for the catalog
   revision's ownership handoff, after which OLMv1 manages it. Unit tests
