@@ -38,6 +38,7 @@ func (m *Migrator) hasClusterObjectDeploymentCRD(ctx context.Context) (bool, err
 	return true, nil
 }
 
+// prepareClusterObjectDeployment rejects incompatible APIs and occupied revision groups before migration.
 func (m *Migrator) prepareClusterObjectDeployment(ctx context.Context, name string) error {
 	if len(name) > 52 || !deploymentNamePattern.MatchString(name) {
 		return fmt.Errorf("ClusterObjectDeployment name %q must be 1–52 lowercase letters, digits or hyphens, starting with a letter and ending with a letter or digit", name)

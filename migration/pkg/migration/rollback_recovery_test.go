@@ -464,6 +464,7 @@ func (c conflictCleanupFailureClient) Delete(ctx context.Context, object client.
 	return c.Client.Delete(ctx, object, opts...)
 }
 
+// TestCleanupConflictReportsCSVAndArtifactFailures checks that cleanup errors retain their resource context.
 func TestCleanupConflictReportsCSVAndArtifactFailures(t *testing.T) {
 	for _, scenario := range []string{"list", "delete CSV", "delete condition"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -487,6 +488,7 @@ func TestCleanupConflictReportsCSVAndArtifactFailures(t *testing.T) {
 	}
 }
 
+// TestRollbackSnapshotAllowsVerifiedSiblingHandoff permits verified adoption races while rejecting foreign owners and replaced resources.
 func TestRollbackSnapshotAllowsVerifiedSiblingHandoff(t *testing.T) {
 	for _, scenario := range []string{"sibling handoff", "unlisted revision", "foreign controller", "changed label", "replaced object", "sibling omits object", "different group"} {
 		t.Run(scenario, func(t *testing.T) {

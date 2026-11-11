@@ -149,6 +149,7 @@ func healthySubscriptionFixtures() (*operatorsv1alpha1.Subscription, *operatorsv
 	return sub, csv
 }
 
+// establishedClusterObjectSetCRD returns a served COS schema suitable for preflight tests.
 func establishedClusterObjectSetCRD() *apiextensionsv1.CustomResourceDefinition {
 	return &apiextensionsv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
@@ -387,6 +388,7 @@ func TestCompatibilityPureChecks(t *testing.T) {
 	}
 }
 
+// TestPhaseSortAndResourceKeys checks deterministic resource ordering and identity keys.
 func TestPhaseSortAndResourceKeys(t *testing.T) {
 	object := func(group, kind, namespace, name string) ocv1ac.ClusterObjectSetObjectApplyConfiguration {
 		u := unstructured.Unstructured{}
@@ -413,6 +415,7 @@ func TestPhaseSortAndResourceKeys(t *testing.T) {
 	}
 }
 
+// TestSecretPacker verifies packed manifests can be recovered through their generated Secret references.
 func TestSecretPacker(t *testing.T) {
 	obj := unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "one"}, "data": map[string]interface{}{"x": "y"}}}
 	phases := []*ocv1ac.ClusterObjectSetPhaseApplyConfiguration{ocv1ac.ClusterObjectSetPhase().WithObjects(ocv1ac.ClusterObjectSetObject().WithType(ocv1.ObjectTypeInlineManifest).WithInlineManifest(obj), ocv1ac.ClusterObjectSetObject().WithType(ocv1.ObjectTypeInlineManifest).WithInlineManifest(obj))}
@@ -894,6 +897,7 @@ func TestCleanupResultErr(t *testing.T) {
 	}
 }
 
+// TestPrepareClusterObjectSet covers migration defaults and prerequisite validation.
 func TestPrepareClusterObjectSet(t *testing.T) {
 	establishedCRD := &apiextensionsv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
@@ -937,6 +941,7 @@ func TestPrepareClusterObjectSetRejectsExistingClusterExtension(t *testing.T) {
 	}
 }
 
+// TestPrepareClusterObjectSetRejectsDeletingOperatorControllerNamespace ensures a terminating controller namespace prevents staging.
 func TestPrepareClusterObjectSetRejectsDeletingOperatorControllerNamespace(t *testing.T) {
 	establishedCRD := &apiextensionsv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
@@ -971,6 +976,7 @@ func TestPrepareClusterObjectSetRejectsDeletingOperatorControllerNamespace(t *te
 	}
 }
 
+// TestPrepareClusterObjectSetRequiresEstablishedCRD ensures unestablished revision APIs block migration preflight.
 func TestPrepareClusterObjectSetRequiresEstablishedCRD(t *testing.T) {
 	m := migrationTestClient(t)
 	if _, err := m.PrepareClusterObjectSet(context.Background(), Options{}); err == nil || !strings.Contains(err.Error(), clusterObjectSetCRDName) {

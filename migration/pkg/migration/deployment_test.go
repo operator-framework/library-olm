@@ -71,6 +71,7 @@ func TestDeploymentReadiness(t *testing.T) {
 	}
 }
 
+// TestPrepareDeployment covers invalid names, unavailable APIs, and occupied deployment identities.
 func TestPrepareDeployment(t *testing.T) {
 	crd := establishedClusterObjectDeploymentCRD()
 	ctx := context.Background()
@@ -152,6 +153,7 @@ func TestDeploymentTerminalRevisionFailures(t *testing.T) {
 	}
 }
 
+// TestAutomaticDeploymentSelection verifies API discovery selects the manager without unsafe fallback.
 func TestAutomaticDeploymentSelection(t *testing.T) {
 	for _, tc := range []struct {
 		name                                string
@@ -477,6 +479,7 @@ type deploymentDeletionClient struct {
 	stopped bool
 }
 
+// Delete checks that rollback stops the deployment before removing its revisions.
 func (c *deploymentDeletionClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
 	options := (&client.DeleteOptions{}).ApplyOptions(opts)
 	switch obj.(type) {
@@ -493,6 +496,7 @@ func (c *deploymentDeletionClient) Delete(ctx context.Context, obj client.Object
 	return c.Client.Delete(ctx, obj, opts...)
 }
 
+// establishedClusterObjectDeploymentCRD returns a served COD schema suitable for preflight tests.
 func establishedClusterObjectDeploymentCRD() *apiextensionsv1.CustomResourceDefinition {
 	crd := establishedClusterObjectSetCRD()
 	crd.Name = clusterObjectDeploymentCRDName

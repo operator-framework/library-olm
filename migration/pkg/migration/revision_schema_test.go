@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
+// testRevisionSchema builds the current COS or COD revision-entry schema for preflight tests.
 func testRevisionSchema(deployment bool) *apiextensionsv1.CustomResourceValidation {
 	var schema apiextensionsv1.JSONSchemaProps
 	if err := json.Unmarshal([]byte(`{"properties":{"spec":{"properties":{"phases":{"items":{"properties":{"objects":{"items":{"properties":{"type":{"type":"string","enum":["InlineManifest","SecretReference"]},"inlineManifest":{"type":"object","x-kubernetes-embedded-resource":true,"x-kubernetes-preserve-unknown-fields":true},"secretRef":{"type":"object","properties":{"name":{"type":"string"},"namespace":{"type":"string"},"key":{"type":"string"}}}}}}}}}}}}}`), &schema); err != nil {
@@ -23,6 +24,7 @@ func testRevisionSchema(deployment bool) *apiextensionsv1.CustomResourceValidati
 	return &apiextensionsv1.CustomResourceValidation{OpenAPIV3Schema: &schema}
 }
 
+// TestRevisionSchemaPreflight verifies incompatible schemas are rejected before resource creation or deletion.
 func TestRevisionSchemaPreflight(t *testing.T) {
 	for _, name := range []string{clusterObjectSetCRDName, clusterObjectDeploymentCRDName} {
 		for _, mutation := range []string{"valid", "no schema", "unserved", "old fields", "wrong union", "pruned reference", "wrong reference type", "pruned inline", "nested pruning", "preserved reference", "restricted additional reference", "deleting"} {

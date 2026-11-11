@@ -340,6 +340,7 @@ func (m *Migrator) ensureSystemManagedNamespaceSupport(ctx context.Context) erro
 	return fmt.Errorf("system-managed install namespace requires a ClusterExtension CRD schema that declares optional spec.namespace")
 }
 
+// ensureClusterObjectSetCRD requires an established, non-deleting COS API with compatible revision entries.
 func (m *Migrator) ensureClusterObjectSetCRD(ctx context.Context) error {
 	var crd apiextensionsv1.CustomResourceDefinition
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: clusterObjectSetCRDName}, &crd); err != nil {
@@ -659,6 +660,7 @@ func (m *Migrator) CreateMigrationResources(ctx context.Context, opts Options, i
 	return MigrationResourcesResult{}, nil
 }
 
+// createClusterObjectSet stages resources through the selected manager and records identities for recovery.
 func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, info *MigrationInfo) (*createdMigrationResources, error) {
 	resources := &createdMigrationResources{}
 	useCOD, err := m.hasClusterObjectDeploymentCRD(ctx)

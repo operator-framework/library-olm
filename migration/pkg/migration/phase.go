@@ -131,6 +131,7 @@ func determinePhase(gk schema.GroupKind) Phase {
 	return phase
 }
 
+// compareObjects orders inline manifests by resource identity within a migration phase.
 func compareObjects(a, b ocv1ac.ClusterObjectSetObjectApplyConfiguration) int {
 	var aGVK, bGVK schema.GroupVersionKind
 	if a.Type != nil && *a.Type == ocv1.ObjectTypeInlineManifest && a.InlineManifest != nil {

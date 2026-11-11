@@ -122,6 +122,7 @@ type rollbackOwnership struct {
 	Managed   string    `json:"managed"`
 }
 
+// ownerships returns the original owner and any verified sibling ownership alternatives.
 func (object rollbackObject) ownerships() []rollbackOwnership {
 	owners := []rollbackOwnership{{OwnerUID: object.OwnerUID, Revision: object.Revision, ManagedBy: object.ManagedBy, Managed: object.Managed}}
 	return append(owners, object.AdditionalOwners...)
@@ -251,6 +252,7 @@ func (m *Migrator) snapshotRevisionObjects(ctx context.Context, revisions []ocv1
 	return objects, nil
 }
 
+// rollbackReferencedObject loads and decodes a Secret-backed manifest for rollback snapshots.
 func (m *Migrator) rollbackReferencedObject(ctx context.Context, ref ocv1.SecretSourceRef) (unstructured.Unstructured, error) {
 	var secret corev1.Secret
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: ref.Namespace}, &secret); err != nil {

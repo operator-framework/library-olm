@@ -14,6 +14,7 @@ import (
 	ocv1ac "github.com/operator-framework/operator-controller/applyconfigurations/api/v1"
 )
 
+// largeConfigMap builds an inline ConfigMap with configurable payload size.
 func largeConfigMap(name, payload string) *ocv1ac.ClusterObjectSetObjectApplyConfiguration {
 	object := unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "ConfigMap",
@@ -54,6 +55,7 @@ func TestSecretPackerSplitsLargeBundleAcrossSecrets(t *testing.T) {
 	}
 }
 
+// TestSecretPackerCompressesOversizedObject checks compression preserves a manifest that exceeds the uncompressed size limit.
 func TestSecretPackerCompressesOversizedObject(t *testing.T) {
 	payload := strings.Repeat("x", gzipThreshold+1)
 	phase := ocv1ac.ClusterObjectSetPhase().WithObjects(largeConfigMap("large", payload))
@@ -85,6 +87,7 @@ func TestSecretPackerCompressesOversizedObject(t *testing.T) {
 	}
 }
 
+// TestSecretPackerUsesObjectType verifies discriminator dispatch preserves existing references and rejects malformed inline entries.
 func TestSecretPackerUsesObjectType(t *testing.T) {
 	for _, kind := range []string{"inline", "reference", "missing type", "missing manifest", "unknown"} {
 		t.Run(kind, func(t *testing.T) {

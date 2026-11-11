@@ -14,6 +14,7 @@ import (
 	ocv1 "github.com/operator-framework/operator-controller/api/v1"
 )
 
+// TestMigrationCreateRejectionRecovery distinguishes definitive create rejection from ambiguous outcomes before restoring OLMv0.
 func TestMigrationCreateRejectionRecovery(t *testing.T) {
 	for _, mode := range []string{"COS", "COD"} {
 		for _, tc := range []struct {
