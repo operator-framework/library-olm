@@ -348,6 +348,13 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 		if !metav1.IsControlledBy(&before.Items[0], &originalCOD) || before.Items[0].Spec.Group != subscription {
 			t.Fatal("migration revision is not controlled by its COD")
 		}
+		protected := &before.Items[1]
+		if protected.Spec.Revision != 2 || protected.Spec.Group != subscription || !metav1.IsControlledBy(protected, &originalCOD) {
+			t.Fatal("protected staging revision is not revision 2 controlled by its COD")
+		}
+		if protected.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
+			t.Fatal("staging revision must enforce Prevent before CE adoption")
+		}
 		if originalCOD.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
 			t.Fatal("staging COD must enforce Prevent before CE adoption")
 		}
