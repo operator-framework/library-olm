@@ -132,7 +132,7 @@ func TestDryRunRejectsSystemManagedSourceNamespace(t *testing.T) {
 		}}},
 	}
 	var revisionSchema apiextensionsv1.JSONSchemaProps
-	if err := json.Unmarshal([]byte(`{"properties":{"spec":{"properties":{"phases":{"items":{"properties":{"objects":{"items":{"properties":{"type":{"type":"string"},"inlineManifest":{"type":"object"},"objectRef":{"type":"object"}}}}}}}}}}}`), &revisionSchema); err != nil {
+	if err := json.Unmarshal([]byte(`{"properties":{"spec":{"properties":{"phases":{"items":{"properties":{"objects":{"items":{"properties":{"type":{"type":"string"},"inlineManifest":{"type":"object","x-kubernetes-embedded-resource":true,"x-kubernetes-preserve-unknown-fields":true},"objectRef":{"type":"object","properties":{"name":{"type":"string"},"namespace":{"type":"string"},"key":{"type":"string"}}}}}}}}}}}}}`), &revisionSchema); err != nil {
 		t.Fatal(err)
 	}
 	cosCRD.Spec.Versions = []apiextensionsv1.CustomResourceDefinitionVersion{{Name: "v1", Served: true, Schema: &apiextensionsv1.CustomResourceValidation{OpenAPIV3Schema: &revisionSchema}}}

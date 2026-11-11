@@ -33,11 +33,35 @@ func validateRevisionSchema(crd *apiextensionsv1.CustomResourceDefinition, deplo
 		accepts := func(value string) bool {
 			return typeField.Type == "string" && (len(typeField.Enum) == 0 || slices.ContainsFunc(typeField.Enum, func(e apiextensionsv1.JSON) bool { return string(e.Raw) == fmt.Sprintf("%q", value) }))
 		}
-		if fields["inlineManifest"].Type == "object" && fields["objectRef"].Type == "object" &&
+		if preservesInlineManifest(fields["inlineManifest"]) && preservesObjectReference(fields["objectRef"]) &&
 			accepts(string(ocv1.ObjectTypeInlineManifest)) && accepts(string(ocv1.ObjectTypeObjectReference)) {
 			return nil
 		}
 		break
 	}
 	return fmt.Errorf("CRD %s must serve %s with typed inlineManifest/objectRef revision entries; install matching experimental operator-controller definitions", crd.Name, ocv1.GroupVersion.Version)
+}
+
+// preservesInlineManifest requires an opaque embedded resource, so arbitrary
+// nested operator manifests cannot be pruned by a partial schema.
+func preservesInlineManifest(field apiextensionsv1.JSONSchemaProps) bool {
+	return field.Type == "object" && field.XEmbeddedResource && field.XPreserveUnknownFields != nil && *field.XPreserveUnknownFields && len(field.Properties) == 0 && field.AdditionalProperties == nil
+}
+
+// preservesObjectReference accepts declared string fields or preserved unknown
+// fields. Explicit declarations take precedence over unknown-field preservation.
+func preservesObjectReference(field apiextensionsv1.JSONSchemaProps) bool {
+	if field.Type != "object" {
+		return false
+	}
+	for _, name := range []string{"name", "namespace", "key"} {
+		if property, exists := field.Properties[name]; exists {
+			if property.Type != "string" {
+				return false
+			}
+		} else if field.XPreserveUnknownFields == nil || !*field.XPreserveUnknownFields || field.AdditionalProperties != nil {
+			return false
+		}
+	}
+	return true
 }

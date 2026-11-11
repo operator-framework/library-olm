@@ -331,6 +331,9 @@ func (m *Migrator) ensureClusterObjectSetCRD(ctx context.Context) error {
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: clusterObjectSetCRDName}, &crd); err != nil {
 		return fmt.Errorf("ClusterObjectSet CRD %q is required before migration: %w", clusterObjectSetCRDName, err)
 	}
+	if crd.DeletionTimestamp != nil {
+		return fmt.Errorf("ClusterObjectSet CRD %q is being deleted", clusterObjectSetCRDName)
+	}
 	for _, condition := range crd.Status.Conditions {
 		if condition.Type == apiextensionsv1.Established && condition.Status == apiextensionsv1.ConditionTrue {
 			return validateRevisionSchema(&crd, false)

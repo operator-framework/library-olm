@@ -166,7 +166,7 @@ manager values apply to different resources and must not be interchanged.
 Use the current revision object union (`type: InlineManifest` with `inlineManifest`,
 or `type: ObjectReference` with `objectRef`). COS and COD are experimental APIs;
 compatibility with older COS/COD schemas and COS `Succeeded`/`Available` conditions is not supported. COS completion uses `status.completedAt`, and workload readiness uses `Ready=True`. Install a controller
-with matching API definitions before migration. Check the served COS/COD schemas for typed revision entries during readiness and preflight; reject incompatible definitions before any OLMv0 mutation.
+with matching API definitions before migration. The COS and COD prerequisites must reject deleting CRDs and schemas that prune inline manifests or Secret-reference name, namespace, and key fields. Check the served COS/COD schemas for typed revision entries during readiness and preflight; reject incompatible definitions before any OLMv0 mutation.
 Reject existing deployments/revision groups before destructive work. Rollback must stop the
 deployment with orphan deletion before removing revisions and restoring OLMv0 management.
 Persist verified deployment UIDs on the CE before deletion so late revisions with

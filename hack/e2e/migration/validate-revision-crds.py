@@ -27,6 +27,18 @@ def validate(crd):
         require(not fields["type"].get("enum") or variant in fields["type"]["enum"], f"{name} rejects {variant}")
     for field in ("inlineManifest", "objectRef"):
         require(fields[field]["type"] == "object", f"{name} lacks {field}")
+    inline = fields["inlineManifest"]
+    require(inline.get("x-kubernetes-embedded-resource") is True and
+            inline.get("x-kubernetes-preserve-unknown-fields") is True and
+            not inline.get("properties") and "additionalProperties" not in inline,
+            f"{name} must preserve opaque inline manifests")
+    reference = fields["objectRef"]
+    for field in ("name", "namespace", "key"):
+        property_schema = reference.get("properties", {}).get(field)
+        require(property_schema.get("type") == "string" if property_schema is not None else
+                (reference.get("x-kubernetes-preserve-unknown-fields") is True and
+                 "additionalProperties" not in reference),
+                f"{name} must preserve objectRef.{field} as a string")
 
 
 if __name__ == "__main__":

@@ -69,7 +69,16 @@ revision encoding, COD adoption, and workload-preserving rollback.
 | `real-operator` | separate kind cluster with OLMv0 + OLMv1 | OLMv0's installed OperatorHub catalog | Covers V5.2–V5.6 plus cleanup, healthy rollback, and remigration (V5.8). V5.7 upgrade remains a gap. |
 | `in-cluster-job` | fixture cluster | A replayed ecr-secret-operator installation | Proves both CLIs authenticate and migrate using only a Pod ServiceAccount. |
 
-Do not use a mutable public `latest` image or an unpinned release installer in CI. The fixture
+The live suite intentionally follows the upstream `operatorhubio` catalog tag.
+Quay removes superseded catalog manifests, so pinning its resolved digest does not
+provide a durable test input. The catalog-creation test uses the currently resolved
+digest and reports failure if that content disappears during the run. Use fixture
+suites for reproducible catalog content. Setup waits for object-controller,
+operator-controller, and catalogd on every run. Controller builds fix image names
+to match generated manifests, regardless of caller image overrides.
+
+Pin controller versions and installers in CI; the public live catalog above is an
+explicit exception. The fixture
 registry's `latest` tag is private to the disposable cluster and rebuilt from committed inputs on
 every setup. The default bootstrap pins OLMv0 to `v0.46.0`, OLMv1 to commit `c6e63b616662`, and kind to
 `v0.33.0` with the digest-pinned Kubernetes `v1.37.0` node image; CI should

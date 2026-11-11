@@ -19,7 +19,17 @@ git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
 # setup.sh installs/repairs the live catalog independently on every invocation.
 export KUBECONFIG
 KUBECONFIG=$(realpath "$E2E_KUBECONFIG")
-make -C "$source_dir" -f Makefile -f - migration-install KIND="$KIND" MIGRATION_CLUSTER="$E2E_CLUSTER_NAME" <<'MAKE'
+# The generated Helm manifest uses these image names; do not inherit caller
+# image overrides (including make command-line variables) into the build.
+make -C "$source_dir" -f Makefile -f - migration-install \
+	IMAGE_REGISTRY=quay.io/operator-framework IMAGE_TAG=devel \
+	OPCON_IMAGE_REPO=quay.io/operator-framework/operator-controller \
+	CATD_IMAGE_REPO=quay.io/operator-framework/catalogd \
+	OBJECT_CONTROLLER_IMAGE_REPO=quay.io/operator-framework/object-controller \
+	OPCON_IMG=quay.io/operator-framework/operator-controller:devel \
+	CATD_IMG=quay.io/operator-framework/catalogd:devel \
+	OBJECT_CONTROLLER_IMG=quay.io/operator-framework/object-controller:devel \
+	KIND="$KIND" MIGRATION_CLUSTER="$E2E_CLUSTER_NAME" <<'MAKE'
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 .PHONY: migration-install

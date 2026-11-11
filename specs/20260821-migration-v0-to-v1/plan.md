@@ -64,7 +64,7 @@ Kubernetes 1.37, verifying labeled COD adoption and rollback.
 The covered handoff and rollback targets also pass against `77754d81ea01`,
 including COS manager-label assertions. Missing-COD rejection and the `UnmanagedRevision` terminal condition are covered by unit regressions.
 The current API uses typed `inlineManifest`/`objectRef` entries for creation and
-rollback. Preflight validates the served revision-entry schemas. Older experimental COS/COD schemas are not supported; the controller
+rollback. Preflight validates the served revision-entry schemas. Revision preflight verifies opaque inline manifest preservation and string Secret-reference fields for both COS and COD. E2E setup waits for object-controller on reused clusters. Live catalogs track upstream published content; fixture catalogs provide reproducibility. Older experimental COS/COD schemas are not supported; the controller
 and library must use matching definitions.
 
 ---

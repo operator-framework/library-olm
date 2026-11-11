@@ -49,7 +49,7 @@ if [[ -z "$existing_controller" ]]; then
 	E2E_CLUSTER_NAME="$cluster_name" "$root_dir/hack/e2e/migration/install-olmv1.sh"
 fi
 kubectl --kubeconfig "$E2E_KUBECONFIG" wait --for=condition=Established crd/clusterextensions.olm.operatorframework.io crd/clustercatalogs.olm.operatorframework.io --timeout=5m
-kubectl --kubeconfig "$E2E_KUBECONFIG" -n olmv1-system wait --for=condition=Available deployment/operator-controller-controller-manager deployment/catalogd-controller-manager --timeout=5m
+kubectl --kubeconfig "$E2E_KUBECONFIG" -n olmv1-system wait --for=condition=Available deployment/operator-controller-controller-manager deployment/catalogd-controller-manager deployment/object-controller-controller-manager --timeout=5m
 
 validate_revision_crds
 # Install/repair this catalog even when an earlier setup already installed the
