@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	ocv1 "github.com/operator-framework/operator-controller/api/v1"
@@ -35,10 +36,14 @@ func TestCODProtectedRolloutCollision(t *testing.T) {
 		t.Fatal(err)
 	}
 	name := ns.Name
+	systemNamespace := ""
 	t.Cleanup(func() {
 		collectArtifacts(t, ns.Name)
 		run(t, "kubectl", "delete", "clusterobjectdeployment/"+name, "--ignore-not-found", "--wait=true", "--timeout=60s")
 		run(t, "kubectl", "delete", "clusterobjectset", "-l", migration.LabelOwnerName+"="+name, "--ignore-not-found", "--wait=true", "--timeout=60s")
+		if systemNamespace != "" {
+			run(t, "kubectl", "delete", "secret", "-n", systemNamespace, "-l", migration.LabelOwnerName+"="+name, "--ignore-not-found", "--wait=true", "--timeout=60s")
+		}
 		run(t, "kubectl", "delete", "namespace/"+ns.Name, "--wait=false")
 	})
 	original := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "migrated", Namespace: ns.Name}, Data: map[string]string{"value": "original"}}
@@ -55,6 +60,7 @@ func TestCODProtectedRolloutCollision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	systemNamespace = opts.SystemNamespace
 	if !opts.UseClusterObjectDeployment {
 		t.Fatal("test requires COD support")
 	}
@@ -75,9 +81,14 @@ func TestCODProtectedRolloutCollision(t *testing.T) {
 	if adopted.UID != original.UID || metav1.GetControllerOf(&adopted) == nil {
 		t.Fatal("initial object was not adopted in place")
 	}
-	before := cod.DeepCopy()
-	cod.Spec.Template.Spec.Phases[0].Objects = append(cod.Spec.Template.Spec.Phases[0].Objects, ocv1.ClusterObjectSetObject{Type: ocv1.ObjectTypeInlineManifest, InlineManifest: manifest(foreign.Name, "must-not-be-applied")})
-	if err := c.Patch(ctx, &cod, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := c.Get(ctx, client.ObjectKey{Name: name}, &cod); err != nil {
+			return err
+		}
+		before := cod.DeepCopy()
+		cod.Spec.Template.Spec.Phases[0].Objects = append(cod.Spec.Template.Spec.Phases[0].Objects, ocv1.ClusterObjectSetObject{Type: ocv1.ObjectTypeInlineManifest, InlineManifest: manifest(foreign.Name, "must-not-be-applied")})
+		return c.Patch(ctx, &cod, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := wait.PollUntilContextCancel(ctx, time.Second, true, func(ctx context.Context) (bool, error) {
