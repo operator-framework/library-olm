@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -567,5 +568,62 @@ func TestRollbackSnapshotAllowsVerifiedSiblingHandoff(t *testing.T) {
 				t.Fatalf("merge = %+v, %v", merged, err)
 			}
 		})
+	}
+}
+
+// TestRollbackSnapshotOrdering is independent of revision list and manifest order.
+func TestRollbackSnapshotOrdering(t *testing.T) {
+	objects := make([]ocv1.ClusterObjectSetObject, 0, 2)
+	for _, name := range []string{"z-config", "a-config"} {
+		objects = append(objects, ocv1.ClusterObjectSetObject{
+			Type: ocv1.ObjectTypeInlineManifest,
+			InlineManifest: unstructured.Unstructured{Object: map[string]interface{}{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]interface{}{"name": name, "namespace": "source"},
+			}},
+		})
+	}
+	first := ocv1.ClusterObjectSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "example-1", UID: "revision-1"},
+		Spec: ocv1.ClusterObjectSetSpec{Group: "example", Revision: 1,
+			Phases: []ocv1.ClusterObjectSetPhase{{Name: "deploy", Objects: objects}}},
+	}
+	second, tenth := *first.DeepCopy(), *first.DeepCopy()
+	second.Name, second.UID, second.Spec.Revision = "example-2", "revision-2", 2
+	tenth.Name, tenth.UID, tenth.Spec.Revision = "example-10", "revision-10", 10
+	live := make([]runtime.Object, 0, len(objects))
+	for _, object := range objects {
+		live = append(live, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+			Name: object.InlineManifest.GetName(), Namespace: "source", UID: types.UID(object.InlineManifest.GetName()),
+			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(&first, ocv1.GroupVersion.WithKind(ocv1.ClusterObjectSetKind))},
+			Annotations:     map[string]string{boxcutterRevisionAnnotation: "1"},
+			Labels:          map[string]string{boxcutterManagedByLabel: "olm.operatorframework.io"},
+		}})
+	}
+	m := migrationTestClient(t, live...)
+	var expected []rollbackObject
+	for _, order := range [][]ocv1.ClusterObjectSet{
+		{tenth, first, second}, {second, tenth, first}, {first, second, tenth},
+	} {
+		before := slices.Clone(order)
+		got, err := m.snapshotRevisionObjects(t.Context(), order)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(order, before) {
+			t.Fatal("snapshot reordered caller's revisions")
+		}
+		if len(got) != 2 || got[0].Identity.GetName() != "a-config" || got[1].Identity.GetName() != "z-config" {
+			t.Fatalf("unexpected resource order: %+v", got)
+		}
+		for _, object := range got {
+			if len(object.AdditionalOwners) != 2 || object.AdditionalOwners[0].Revision != "2" || object.AdditionalOwners[1].Revision != "10" {
+				t.Fatalf("unexpected sibling order: %+v", object.AdditionalOwners)
+			}
+		}
+		if expected != nil && !reflect.DeepEqual(got, expected) {
+			t.Fatalf("snapshot depends on revision input order: got %+v, want %+v", got, expected)
+		}
+		expected = got
 	}
 }

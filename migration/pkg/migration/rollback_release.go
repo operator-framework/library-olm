@@ -2,11 +2,13 @@ package migration
 
 import (
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"time"
 
@@ -247,8 +249,19 @@ func (m *Migrator) snapshotRevisionObjects(ctx context.Context, revisions []ocv1
 				})
 			}
 		}
+		// These revisions were formatted from int64 values above, so parsing
+		// cannot fail. Order the completed ownership list before storing it.
+		slices.SortFunc(object.AdditionalOwners, func(a, b rollbackOwnership) int {
+			aRevision, _ := strconv.ParseInt(a.Revision, 10, 64)
+			bRevision, _ := strconv.ParseInt(b.Revision, 10, 64)
+			return cmp.Or(cmp.Compare(aRevision, bRevision), cmp.Compare(a.OwnerUID, b.OwnerUID))
+		})
 		objects = append(objects, object)
 	}
+	// Map iteration must not affect the order of the completed snapshot.
+	slices.SortFunc(objects, func(a, b rollbackObject) int {
+		return cmp.Compare(resourceKey(a.Identity), resourceKey(b.Identity))
+	})
 	return objects, nil
 }
 
