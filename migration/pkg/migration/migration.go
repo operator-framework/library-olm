@@ -22,7 +22,6 @@ import (
 	operatorsv1 "github.com/operator-framework/api/pkg/operators/v1"
 	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	ocv1 "github.com/operator-framework/operator-controller/api/v1"
-	ocv1ac "github.com/operator-framework/operator-controller/applyconfigurations/api/v1"
 )
 
 const (
@@ -177,6 +176,10 @@ func (m *Migrator) migrate(ctx context.Context, opts Options, nextStep func(Prog
 		if err := m.IncludeSystemManagedNamespace(ctx, info, resourceOpts.InstallNamespace); err != nil {
 			return err
 		}
+	}
+
+	if err := m.validateMigrationRevision(ctx, opts, info); err != nil {
+		return err
 	}
 
 	nextStep(ProgressStepBackup, "Backing up OLMv0 resources")
@@ -340,7 +343,8 @@ func (m *Migrator) ensureSystemManagedNamespaceSupport(ctx context.Context) erro
 	return fmt.Errorf("system-managed install namespace requires a ClusterExtension CRD schema that declares optional spec.namespace")
 }
 
-// ensureClusterObjectSetCRD requires an established, non-deleting COS API with compatible revision entries.
+// ensureClusterObjectSetCRD requires an established, non-deleting COS API.
+// The prepared revision is validated separately through a server-side dry run.
 func (m *Migrator) ensureClusterObjectSetCRD(ctx context.Context) error {
 	var crd apiextensionsv1.CustomResourceDefinition
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: clusterObjectSetCRDName}, &crd); err != nil {
@@ -351,7 +355,7 @@ func (m *Migrator) ensureClusterObjectSetCRD(ctx context.Context) error {
 	}
 	for _, condition := range crd.Status.Conditions {
 		if condition.Type == apiextensionsv1.Established && condition.Status == apiextensionsv1.ConditionTrue {
-			return validateRevisionSchema(&crd, false)
+			return nil
 		}
 	}
 	return fmt.Errorf("ClusterObjectSet CRD %q is not established", clusterObjectSetCRDName)
@@ -680,29 +684,9 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 		packingName = opts.ClusterExtensionName
 	}
 
-	cosObjects := make([]ocv1ac.ClusterObjectSetObjectApplyConfiguration, 0, len(info.CollectedObjects))
-	for _, obj := range info.CollectedObjects {
-		stripped := stripResource(obj)
-		cosObjects = append(cosObjects, *ocv1ac.ClusterObjectSetObject().
-			WithType(ocv1.ObjectTypeInlineManifest).WithInlineManifest(stripped).
-			WithCollisionProtection(ocv1.CollisionProtectionNone))
-	}
-
-	phases := PhaseSort(cosObjects)
-
-	// Pack inline objects into Secrets to stay within etcd's size limit (R2.4).
-	// SecretPacker gzip-compresses large objects and splits across multiple Secrets
-	// when the combined size would exceed 900 KiB per Secret.
-	// TODO: consider exporting secretPacker so consumers can configure whether to use
-	// Secret-backed refs or inline objects (useful for small bundles or testing).
-	packer := &secretPacker{
-		RevisionName:    packingName,
-		OwnerName:       opts.ClusterExtensionName,
-		SystemNamespace: opts.SystemNamespace,
-	}
-	packed, err := packer.pack(phases)
+	phases, packed, err := buildMigrationPhases(opts, info, packingName)
 	if err != nil {
-		return resources, fmt.Errorf("failed to pack COS objects into Secrets: %w", err)
+		return resources, err
 	}
 	cleanupSecrets := func() error {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -744,19 +728,6 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 		resources.secrets = append(resources.secrets, *secret)
 	}
 
-	// Replace inline objects with Secret refs in the phases.
-	for pos, ref := range packed.Refs {
-		phaseIdx, objIdx := pos[0], pos[1]
-		localRef := ref
-		phases[phaseIdx].Objects[objIdx].InlineManifest = nil
-		phases[phaseIdx].Objects[objIdx].WithType(ocv1.ObjectTypeSecretReference)
-		phases[phaseIdx].Objects[objIdx].SecretRef = &ocv1ac.SecretSourceRefApplyConfiguration{
-			Name:      &localRef.Name,
-			Namespace: &localRef.Namespace,
-			Key:       &localRef.Key,
-		}
-	}
-
 	if opts.UseClusterObjectDeployment {
 		err := m.createClusterObjectDeployment(ctx, opts, info, phases, invocationMarker, resources)
 		if err != nil && resources.cod == nil {
@@ -765,40 +736,9 @@ func (m *Migrator) createClusterObjectSet(ctx context.Context, opts Options, inf
 		return resources, err
 	}
 
-	cosSpec := ocv1ac.ClusterObjectSetSpec().
-		WithGroup(opts.ClusterExtensionName).
-		WithRevision(1).
-		WithCollisionProtection(ocv1.CollisionProtectionNone).
-		WithLifecycleState(ocv1.ClusterObjectSetLifecycleStateActive).
-		WithPhases(phases...)
-
-	cosAnnotations := map[string]string{
-		MigratedFromSubscriptionAnnotation: fmt.Sprintf("%s/%s", opts.SubscriptionNamespace, opts.SubscriptionName),
-		LabelPackageName:                   info.PackageName,
-		LabelBundleName:                    info.BundleName,
-		LabelBundleVersion:                 info.Version,
-		migrationInvocationAnnotation:      invocationMarker,
-	}
-	if info.BundleImage != "" {
-		cosAnnotations[LabelBundleReference] = info.BundleImage
-	}
-
-	cos := ocv1ac.ClusterObjectSet(cosName).
-		WithSpec(cosSpec).
-		WithLabels(map[string]string{
-			LabelOwnerKind:           ocv1.ClusterExtensionKind,
-			LabelOwnerName:           opts.ClusterExtensionName,
-			controllerManagedByLabel: "object-controller",
-		}).
-		WithAnnotations(cosAnnotations)
-
-	cosData, err := json.Marshal(cos)
+	cosObj, err := buildClusterObjectSet(opts, info, phases, invocationMarker)
 	if err != nil {
-		return resources, failWithSecretCleanup(fmt.Errorf("failed to marshal COS: %w", err))
-	}
-	cosObj := &ocv1.ClusterObjectSet{}
-	if err := json.Unmarshal(cosData, cosObj); err != nil {
-		return resources, failWithSecretCleanup(fmt.Errorf("failed to decode COS: %w", err))
+		return resources, failWithSecretCleanup(err)
 	}
 
 	// A migration owns only a newly created revision. Applying an existing COS

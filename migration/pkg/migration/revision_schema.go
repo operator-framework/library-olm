@@ -1,67 +1,126 @@
 package migration
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
-	"slices"
 
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/uuid"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	ocv1 "github.com/operator-framework/operator-controller/api/v1"
+	ocv1ac "github.com/operator-framework/operator-controller/applyconfigurations/api/v1"
 )
 
-// validateRevisionSchema rejects incompatible experimental APIs before migration
-// deletes OLMv0 resources. It validates capabilities, not controller versions.
-func validateRevisionSchema(crd *apiextensionsv1.CustomResourceDefinition, deployment bool) error {
-	for _, version := range crd.Spec.Versions {
-		if version.Name != ocv1.GroupVersion.Version || !version.Served || version.Schema == nil || version.Schema.OpenAPIV3Schema == nil {
-			continue
-		}
-		spec := version.Schema.OpenAPIV3Schema.Properties["spec"]
-		if deployment {
-			spec = spec.Properties["template"].Properties["spec"]
-		}
-		phases := spec.Properties["phases"]
-		if phases.Items == nil || phases.Items.Schema == nil {
-			break
-		}
-		objects := phases.Items.Schema.Properties["objects"]
-		if objects.Items == nil || objects.Items.Schema == nil {
-			break
-		}
-		fields := objects.Items.Schema.Properties
-		typeField := fields["type"]
-		accepts := func(value string) bool {
-			return typeField.Type == "string" && (len(typeField.Enum) == 0 || slices.ContainsFunc(typeField.Enum, func(e apiextensionsv1.JSON) bool { return string(e.Raw) == fmt.Sprintf("%q", value) }))
-		}
-		if preservesInlineManifest(fields["inlineManifest"]) && preservesSecretReference(fields["secretRef"]) &&
-			accepts(string(ocv1.ObjectTypeInlineManifest)) && accepts(string(ocv1.ObjectTypeSecretReference)) {
-			return nil
-		}
-		break
+// validateMigrationRevision asks the API server to validate the proposed staging
+// object without persisting it. Strict field validation rejects obsolete schemas
+// instead of silently pruning revision entries. This does not execute controllers
+// or validate the contents of the referenced Secrets as Kubernetes resources.
+func (m *Migrator) validateMigrationRevision(ctx context.Context, opts Options, info *MigrationInfo) error {
+	packingName := opts.ClusterExtensionName + "-1"
+	if opts.UseClusterObjectDeployment {
+		packingName = opts.ClusterExtensionName
 	}
-	return fmt.Errorf("CRD %s must serve %s with typed inlineManifest/secretRef revision entries; install matching experimental operator-controller definitions", crd.Name, ocv1.GroupVersion.Version)
+	phases, _, err := buildMigrationPhases(opts, info, packingName)
+	if err != nil {
+		return err
+	}
+	marker := string(uuid.NewUUID())
+	var candidate client.Object
+	if opts.UseClusterObjectDeployment {
+		candidate, err = buildClusterObjectDeployment(opts, info, phases, marker)
+	} else {
+		candidate, err = buildClusterObjectSet(opts, info, phases, marker)
+	}
+	if err != nil {
+		return err
+	}
+	if err := m.Client.Create(ctx, candidate, client.DryRunAll, client.FieldValidation(metav1.FieldValidationStrict)); err != nil {
+		return fmt.Errorf("validate migration revision with server-side dry run: %w", err)
+	}
+	return nil
 }
 
-// preservesInlineManifest requires an opaque embedded resource, so arbitrary
-// nested operator manifests cannot be pruned by a partial schema.
-func preservesInlineManifest(field apiextensionsv1.JSONSchemaProps) bool {
-	return field.Type == "object" && field.XEmbeddedResource && field.XPreserveUnknownFields != nil && *field.XPreserveUnknownFields && len(field.Properties) == 0 && field.AdditionalProperties == nil
-}
-
-// preservesSecretReference accepts declared string fields or preserved unknown
-// fields. Explicit declarations take precedence over unknown-field preservation.
-func preservesSecretReference(field apiextensionsv1.JSONSchemaProps) bool {
-	if field.Type != "object" {
-		return false
+// buildMigrationPhases prepares packed references without writing Secrets.
+func buildMigrationPhases(opts Options, info *MigrationInfo, packingName string) ([]*ocv1ac.ClusterObjectSetPhaseApplyConfiguration, *packResult, error) {
+	cosObjects := make([]ocv1ac.ClusterObjectSetObjectApplyConfiguration, 0, len(info.CollectedObjects))
+	for _, obj := range info.CollectedObjects {
+		stripped := stripResource(obj)
+		cosObjects = append(cosObjects, *ocv1ac.ClusterObjectSetObject().
+			WithType(ocv1.ObjectTypeInlineManifest).WithInlineManifest(stripped).
+			WithCollisionProtection(ocv1.CollisionProtectionNone))
 	}
-	for _, name := range []string{"name", "namespace", "key"} {
-		if property, exists := field.Properties[name]; exists {
-			if property.Type != "string" {
-				return false
-			}
-		} else if field.XPreserveUnknownFields == nil || !*field.XPreserveUnknownFields || field.AdditionalProperties != nil {
-			return false
+
+	phases := PhaseSort(cosObjects)
+
+	// Pack inline objects into Secrets to stay within etcd's size limit (R2.4).
+	// SecretPacker gzip-compresses large objects and splits across multiple Secrets
+	// when the combined size would exceed 900 KiB per Secret.
+	// TODO: consider exporting secretPacker so consumers can configure whether to use
+	// Secret-backed refs or inline objects (useful for small bundles or testing).
+	packer := &secretPacker{
+		RevisionName:    packingName,
+		OwnerName:       opts.ClusterExtensionName,
+		SystemNamespace: opts.SystemNamespace,
+	}
+	packed, err := packer.pack(phases)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to pack COS objects into Secrets: %w", err)
+	}
+	// Replace inline objects with Secret refs in the phases.
+	for pos, ref := range packed.Refs {
+		phaseIdx, objIdx := pos[0], pos[1]
+		localRef := ref
+		phases[phaseIdx].Objects[objIdx].InlineManifest = nil
+		phases[phaseIdx].Objects[objIdx].WithType(ocv1.ObjectTypeSecretReference)
+		phases[phaseIdx].Objects[objIdx].SecretRef = &ocv1ac.SecretSourceRefApplyConfiguration{
+			Name:      &localRef.Name,
+			Namespace: &localRef.Namespace,
+			Key:       &localRef.Key,
 		}
 	}
-	return true
+
+	return phases, packed, nil
+}
+
+// buildClusterObjectSet constructs the same candidate for validation and creation.
+func buildClusterObjectSet(opts Options, info *MigrationInfo, phases []*ocv1ac.ClusterObjectSetPhaseApplyConfiguration, marker string) (*ocv1.ClusterObjectSet, error) {
+	cosSpec := ocv1ac.ClusterObjectSetSpec().
+		WithGroup(opts.ClusterExtensionName).
+		WithRevision(1).
+		WithCollisionProtection(ocv1.CollisionProtectionNone).
+		WithLifecycleState(ocv1.ClusterObjectSetLifecycleStateActive).
+		WithPhases(phases...)
+
+	cosAnnotations := map[string]string{
+		MigratedFromSubscriptionAnnotation: fmt.Sprintf("%s/%s", opts.SubscriptionNamespace, opts.SubscriptionName),
+		LabelPackageName:                   info.PackageName,
+		LabelBundleName:                    info.BundleName,
+		LabelBundleVersion:                 info.Version,
+		migrationInvocationAnnotation:      marker,
+	}
+	if info.BundleImage != "" {
+		cosAnnotations[LabelBundleReference] = info.BundleImage
+	}
+
+	cos := ocv1ac.ClusterObjectSet(opts.ClusterExtensionName + "-1").
+		WithSpec(cosSpec).
+		WithLabels(map[string]string{
+			LabelOwnerKind:           ocv1.ClusterExtensionKind,
+			LabelOwnerName:           opts.ClusterExtensionName,
+			controllerManagedByLabel: "object-controller",
+		}).
+		WithAnnotations(cosAnnotations)
+
+	cosData, err := json.Marshal(cos)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal COS: %w", err)
+	}
+	cosObj := &ocv1.ClusterObjectSet{}
+	if err := json.Unmarshal(cosData, cosObj); err != nil {
+		return nil, fmt.Errorf("failed to decode COS: %w", err)
+	}
+
+	return cosObj, nil
 }

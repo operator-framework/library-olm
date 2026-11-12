@@ -379,4 +379,4 @@ unreferenced source would be deleted without changing it.
 - Binary packaging / `oc` plugin / container images — deferred to the downstream TP phase ([OCPSTRAT-2692](https://redhat.atlassian.net/browse/OCPSTRAT-2692)).
 - Console UI.
 
-Revision preflight rejects deleting or incompatible COS/COD definitions before changing OLMv0 resources. Schemas must preserve opaque inline manifests and Secret-reference name, namespace, and key fields. Rollback permits verified newer sibling handoffs while retaining resource-UID, owner, and management-label checks.
+Revision preflight rejects deleting or unavailable COS/COD APIs. Gather (including CLI dry-run) and migration validate the prepared revision with a strict server-side dry-run create before removing OLMv0 management. Validation and creation share the same revision and Secret-reference builders; dry-run does not persist revisions or packed Secrets. The API server validates schema, admission, and permissions, but does not run controller-level validation of referenced workloads. Rollback permits verified newer sibling handoffs while retaining resource-UID, owner, and management-label checks.

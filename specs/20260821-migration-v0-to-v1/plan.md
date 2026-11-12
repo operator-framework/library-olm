@@ -236,4 +236,15 @@ Phase 1 (4717) ──► Phase 2 (4718) ──► Phase 3 (4719) ──► Phase
 Phase 7 (4723, operator-controller): APIService-owning operators remain unsupported; C3 is permanent
 ```
 
-Revision preflight rejects deleting or incompatible COS/COD definitions before changing OLMv0 resources. Schemas must preserve opaque inline manifests and Secret-reference name, namespace, and key fields. Rollback permits verified newer sibling handoffs while retaining resource-UID, owner, and management-label checks.
+Revision preflight rejects deleting or unavailable COS/COD APIs. Gather (including CLI dry-run) and migration validate the prepared revision with a strict server-side dry-run create before removing OLMv0 management. Validation and creation share the same revision and Secret-reference builders; dry-run does not persist revisions or packed Secrets. The API server validates schema, admission, and permissions, but does not run controller-level validation of referenced workloads. Rollback permits verified newer sibling handoffs while retaining resource-UID, owner, and management-label checks.
+
+
+## Follow-up: shared revision content conversion
+
+Centralize conversion from supported bundle formats and collected migration
+resources to `ClusterObjectSetContent` in library-olm. Migration's `PhaseSort`
+and operator-controller's internal phase construction currently duplicate
+ordering and content-conversion logic. Define a reusable converter with explicit
+inputs, shared phase-ordering tests, and adapters for both callers. Keep
+controller reconciliation, migration ownership, and Secret persistence outside
+the converter. This is follow-up work, not part of the current API update.

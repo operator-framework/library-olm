@@ -16,7 +16,7 @@ git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
 
 # Reuse upstream image names, build targets, manifest generation, and installer.
 # Loading into the existing cluster avoids upstream's destructive cluster target.
-# setup.sh installs/repairs the live catalog independently on every invocation.
+# setup.sh installs the live catalog after controller installation.
 export KUBECONFIG
 KUBECONFIG=$(realpath "$E2E_KUBECONFIG")
 # The generated Helm manifest uses these image names; do not inherit caller

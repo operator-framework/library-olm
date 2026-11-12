@@ -82,7 +82,7 @@ setup, so it does not rely on a retained Quay digest or a mutable external catal
 
 ## Bootstrap
 
-1. For the live suite, run `make migration/e2e-setup` to create (or reuse) an isolated kind cluster named `library-olm-e2e` using
+1. For the live suite, run `make migration/e2e-setup` to create (or use an empty) an isolated kind cluster named `library-olm-e2e` using
    [`test/e2e/migration/kind-config.yaml`](../../test/e2e/migration/kind-config.yaml), exporting an explicit
    Kind-generated kubeconfig at `.kubeconfig/library-olm-e2e`. `E2E_KUBECONFIG` is only
    an optional override for that generated output path.
@@ -90,7 +90,7 @@ setup, so it does not rely on a retained Quay digest or a mutable external catal
    `catalog-operator` deployments to be Available.
 3. Live only: build and install the pinned experimental operator-controller and wait for its deployment,
    catalogd, cert provider, and required CRDs to be established.
-4. For the fixture suite, run `make migration/e2e-fixture-setup` to create (or reuse) the separate
+4. For the fixture suite, run `make migration/e2e-fixture-setup` to create (or use an empty) the separate
    `library-olm-fixture-e2e` cluster and generate `.kubeconfig/library-olm-fixture-e2e`. This
    path applies OLMv0 CRDs without installing OLMv0 controllers, installs the pinned experimental
    operator-controller release, builds bundle and FBC images from committed snapshots, publishes
@@ -368,19 +368,20 @@ independently and in parallel with the live suite.
 
 ### In-cluster Job test
 
-This focused test is independent of coverage collection. It provisions (or reuses) the fixture
+This focused test is independent of coverage collection. After fixture setup, it uses the fixture
 cluster, builds and loads a locally built, uninstrumented image into Kind, then runs catalog and operator migration
 from a Job using projected ServiceAccount credentials (with a test-only `cluster-admin` binding).
 It intentionally retains the Job namespace for log inspection; the next invocation removes it
 before creating a fresh Job.
 
 ```bash
+make migration/e2e-fixture-setup
 make migration/test-e2e-in-cluster-job
 E2E_CLUSTER_NAME=library-olm-fixture-e2e make migration/e2e-teardown
 ```
 
-Revision preflight rejects deleting or incompatible COS/COD definitions before changing OLMv0 resources. Schemas must preserve opaque inline manifests and Secret-reference name, namespace, and key fields. Rollback permits verified newer sibling handoffs while retaining resource-UID, owner, and management-label checks.
+Revision preflight rejects deleting or unavailable COS/COD APIs. Gather (including CLI dry-run) and migration validate the prepared revision with a strict server-side dry-run create before removing OLMv0 management. Validation and creation share the same revision and Secret-reference builders; dry-run does not persist revisions or packed Secrets. The API server validates schema, admission, and permissions, but does not run controller-level validation of referenced workloads. Rollback permits verified newer sibling handoffs while retaining resource-UID, owner, and management-label checks.
 
-Complete reused installations skip controller building and image loading after schema validation. Setup repairs missing controller deployments or CRDs only after validating every existing revision schema. Recreate the cluster to change the controller commit. Every setup waits for object-controller, operator-controller, and catalogd and repairs the live catalog.
+Setup refuses existing OLM namespaces or APIs, including partial installations. Run `E2E_CLUSTER_NAME=<cluster-name> make migration/e2e-teardown` before repeating setup. It installs the pinned controller from scratch and waits for the revision APIs, object-controller, operator-controller, and catalogd. Test targets reuse the prepared cluster without invoking setup.
 
 The live namespace-deletion target uses Redis. The ecr-secret-operator bundle includes a custom-resource sample with `spec.aws_iam_secret`, which is absent from its CRD schema and can block OLMv1 preflight in a new namespace. Ecr-secret-operator remains in the live migration matrix; the focused Redis scenario preserves all source-namespace deletion and label-transfer assertions.

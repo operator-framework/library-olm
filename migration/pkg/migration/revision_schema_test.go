@@ -2,104 +2,80 @@ package migration
 
 import (
 	"context"
-	"encoding/json"
-	"strings"
+	"errors"
+	"reflect"
 	"testing"
 
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+	ocv1 "github.com/operator-framework/operator-controller/api/v1"
 )
 
-// testRevisionSchema builds the current COS or COD revision-entry schema for preflight tests.
-func testRevisionSchema(deployment bool) *apiextensionsv1.CustomResourceValidation {
-	var schema apiextensionsv1.JSONSchemaProps
-	if err := json.Unmarshal([]byte(`{"properties":{"spec":{"properties":{"phases":{"items":{"properties":{"objects":{"items":{"properties":{"type":{"type":"string","enum":["InlineManifest","SecretReference"]},"inlineManifest":{"type":"object","x-kubernetes-embedded-resource":true,"x-kubernetes-preserve-unknown-fields":true},"secretRef":{"type":"object","properties":{"name":{"type":"string"},"namespace":{"type":"string"},"key":{"type":"string"}}}}}}}}}}}}}`), &schema); err != nil {
-		panic(err)
-	}
-	if deployment {
-		schema.Properties["spec"] = apiextensionsv1.JSONSchemaProps{Properties: map[string]apiextensionsv1.JSONSchemaProps{"template": {Properties: map[string]apiextensionsv1.JSONSchemaProps{"spec": schema.Properties["spec"]}}}}
-	}
-	return &apiextensionsv1.CustomResourceValidation{OpenAPIV3Schema: &schema}
-}
-
-// TestRevisionSchemaPreflight verifies incompatible schemas are rejected before resource creation or deletion.
-func TestRevisionSchemaPreflight(t *testing.T) {
-	for _, name := range []string{clusterObjectSetCRDName, clusterObjectDeploymentCRDName} {
-		for _, mutation := range []string{"valid", "no schema", "unserved", "old fields", "wrong union", "pruned reference", "wrong reference type", "pruned inline", "nested pruning", "preserved reference", "restricted additional reference", "deleting"} {
-			t.Run(name+"/"+mutation, func(t *testing.T) {
-				cos, cod := establishedClusterObjectSetCRD(), establishedClusterObjectDeploymentCRD()
-				crd := cos
-				if name == cod.Name {
-					crd = cod
-				}
-				switch mutation {
-				case "no schema":
-					crd.Spec.Versions[0].Schema = nil
-				case "unserved":
-					crd.Spec.Versions[0].Served = false
-				case "deleting":
-					now := metav1.Now()
-					crd.DeletionTimestamp = &now
-					crd.Finalizers = []string{"test.example/retain"}
-				case "old fields", "wrong union", "pruned reference", "wrong reference type", "pruned inline", "nested pruning", "preserved reference", "restricted additional reference":
-					spec := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"]
-					if name == cod.Name {
-						spec = spec.Properties["template"].Properties["spec"]
-					}
-					fields := spec.Properties["phases"].Items.Schema.Properties["objects"].Items.Schema.Properties
-					switch mutation {
-					case "old fields":
-						delete(fields, "inlineManifest")
-					case "wrong union":
-						fields["type"] = apiextensionsv1.JSONSchemaProps{Type: "string", Enum: []apiextensionsv1.JSON{{Raw: []byte(`"Old"`)}}}
-					case "pruned reference":
-						delete(fields["secretRef"].Properties, "key")
-					case "wrong reference type":
-						fields["secretRef"].Properties["name"] = apiextensionsv1.JSONSchemaProps{Type: "integer"}
-					case "pruned inline":
-						fields["inlineManifest"] = apiextensionsv1.JSONSchemaProps{Type: "object"}
-					case "nested pruning":
-						inline := fields["inlineManifest"]
-						inline.Properties = map[string]apiextensionsv1.JSONSchemaProps{"spec": {Type: "object"}}
-						fields["inlineManifest"] = inline
-					case "preserved reference", "restricted additional reference":
-						preserve := true
-						reference := apiextensionsv1.JSONSchemaProps{Type: "object", XPreserveUnknownFields: &preserve}
-						if mutation == "restricted additional reference" {
-							reference.AdditionalProperties = &apiextensionsv1.JSONSchemaPropsOrBool{Allows: true, Schema: &apiextensionsv1.JSONSchemaProps{Type: "integer"}}
-						}
-						fields["secretRef"] = reference
-					}
-				}
-				m := migrationTestClient(t, cos, cod)
+// TestRevisionServerDryRun checks the real candidate and strict non-persisting
+// request options, and preserves server validation and authorization failures.
+func TestRevisionServerDryRun(t *testing.T) {
+	rejection := errors.New("API server rejected candidate")
+	for _, deployment := range []bool{false, true} {
+		for _, serverErr := range []error{nil, rejection} {
+			name := "COS"
+			if deployment {
+				name = "COD"
+			}
+			if serverErr != nil {
+				name += "/rejected"
+			}
+			t.Run(name, func(t *testing.T) {
+				m := migrationTestClient(t)
+				calls := 0
 				m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{
-					Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
-						t.Fatal("unexpected create during schema preflight")
-						return nil
+					Create: func(ctx context.Context, c client.WithWatch, obj client.Object, options ...client.CreateOption) error {
+						calls++
+						opts := (&client.CreateOptions{}).ApplyOptions(options)
+						if !reflect.DeepEqual(opts.DryRun, []string{metav1.DryRunAll}) || opts.FieldValidation != metav1.FieldValidationStrict {
+							t.Fatalf("unsafe create options: %+v", opts)
+						}
+						var phases []ocv1.ClusterObjectSetPhase
+						switch candidate := obj.(type) {
+						case *ocv1.ClusterObjectSet:
+							if deployment || candidate.Name != "example-1" {
+								t.Fatalf("unexpected COS: %+v", candidate)
+							}
+							phases = candidate.Spec.Phases
+						case *ocv1.ClusterObjectDeployment:
+							if !deployment || candidate.Name != "example" {
+								t.Fatalf("unexpected COD: %+v", candidate)
+							}
+							phases = candidate.Spec.Template.Spec.Phases
+						default:
+							t.Fatalf("unexpected write of %T", obj)
+						}
+						if len(phases) != 1 || len(phases[0].Objects) != 1 {
+							t.Fatalf("phases = %+v", phases)
+						}
+						object := phases[0].Objects[0]
+						if object.Type != ocv1.ObjectTypeSecretReference || object.SecretRef.Namespace != "controller" || object.SecretRef.Key == "" {
+							t.Fatalf("unpacked candidate: %+v", object)
+						}
+						return serverErr
 					},
 					Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
-						t.Fatal("unexpected deletion during schema preflight")
+						t.Fatal("dry run deleted an object")
 						return nil
 					},
 				})
-				_, err := m.PrepareClusterObjectSet(context.Background(), Options{ClusterExtensionName: "example", SystemNamespace: "controller"})
-				if mutation == "valid" || mutation == "preserved reference" {
-					if err != nil {
-						t.Fatal(err)
-					}
-					return
+				opts := Options{ClusterExtensionName: "example", SystemNamespace: "controller", UseClusterObjectDeployment: deployment}
+				info := &MigrationInfo{CollectedObjects: []unstructured.Unstructured{{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "config", "namespace": "operators"}, "data": map[string]interface{}{"key": "value"}}}}}
+				err := m.validateMigrationRevision(t.Context(), opts, info)
+				if !errors.Is(err, serverErr) || calls != 1 {
+					t.Fatalf("calls=%d, error=%v", calls, err)
 				}
-				expected := "typed inlineManifest/secretRef"
-				if mutation == "deleting" {
-					expected = "deleted"
-				}
-				if err == nil || !strings.Contains(err.Error(), expected) {
-					t.Fatalf("expected incompatible schema, got %v", err)
-				}
-				if _, err := m.Gather(context.Background(), Options{ClusterExtensionName: "example"}); err == nil || !strings.Contains(err.Error(), expected) {
-					t.Fatalf("Gather bypassed schema preflight: %v", err)
+				var secrets corev1.SecretList
+				if err := m.Client.List(t.Context(), &secrets); err != nil || len(secrets.Items) != 0 {
+					t.Fatalf("dry run persisted Secrets: %v, %+v", err, secrets.Items)
 				}
 			})
 		}

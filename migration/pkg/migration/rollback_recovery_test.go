@@ -490,8 +490,26 @@ func TestCleanupConflictReportsCSVAndArtifactFailures(t *testing.T) {
 
 // TestRollbackSnapshotAllowsVerifiedSiblingHandoff permits verified adoption races while rejecting foreign owners and replaced resources.
 func TestRollbackSnapshotAllowsVerifiedSiblingHandoff(t *testing.T) {
-	for _, scenario := range []string{"sibling handoff", "unlisted revision", "foreign controller", "changed label", "replaced object", "sibling omits object", "different group"} {
-		t.Run(scenario, func(t *testing.T) {
+	foreignOwner := *metav1.NewControllerRef(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "foreign", UID: "foreign"}}, corev1.SchemeGroupVersion.WithKind("ConfigMap"))
+	for _, scenario := range []struct {
+		name             string
+		siblingGroup     string
+		siblingHasObject bool
+		revision         string
+		managedBy        string
+		uid              types.UID
+		owners           []metav1.OwnerReference
+		wantError        bool
+	}{
+		{name: "sibling handoff", siblingGroup: "example", siblingHasObject: true, revision: "3", managedBy: "olm.operatorframework.io", uid: "resource"},
+		{name: "unlisted revision", siblingGroup: "example", siblingHasObject: true, revision: "4", managedBy: "olm.operatorframework.io", uid: "resource", wantError: true},
+		{name: "foreign controller", siblingGroup: "example", siblingHasObject: true, revision: "3", managedBy: "olm.operatorframework.io", uid: "resource", owners: []metav1.OwnerReference{foreignOwner}, wantError: true},
+		{name: "changed label", siblingGroup: "example", siblingHasObject: true, revision: "3", managedBy: "foreign", uid: "resource", wantError: true},
+		{name: "replaced object", siblingGroup: "example", siblingHasObject: true, revision: "3", managedBy: "olm.operatorframework.io", uid: "replacement", wantError: true},
+		{name: "sibling omits object", siblingGroup: "example", siblingHasObject: false, revision: "3", managedBy: "olm.operatorframework.io", uid: "resource", wantError: true},
+		{name: "different group", siblingGroup: "other", siblingHasObject: true, revision: "3", managedBy: "olm.operatorframework.io", uid: "resource", wantError: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
 			ctx := context.Background()
 			manifest := unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "config", "namespace": "source"}}}
 			first := ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "example-2", UID: "revision-2"}, Spec: ocv1.ClusterObjectSetSpec{Group: "example", Revision: 2, Phases: []ocv1.ClusterObjectSetPhase{{Name: "deploy", Objects: []ocv1.ClusterObjectSetObject{{Type: ocv1.ObjectTypeInlineManifest, InlineManifest: manifest}}}}}}
@@ -499,10 +517,8 @@ func TestRollbackSnapshotAllowsVerifiedSiblingHandoff(t *testing.T) {
 			second.Name = "example-3"
 			second.UID = "revision-3"
 			second.Spec.Revision = 3
-			if scenario == "different group" {
-				second.Spec.Group = "other"
-			}
-			if scenario == "sibling omits object" {
+			second.Spec.Group = scenario.siblingGroup
+			if !scenario.siblingHasObject {
 				second.Spec.Phases = nil
 			}
 			live := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "source", UID: "resource", OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(&first, ocv1.GroupVersion.WithKind(ocv1.ClusterObjectSetKind))}, Annotations: map[string]string{boxcutterRevisionAnnotation: "2"}, Labels: map[string]string{boxcutterManagedByLabel: "olm.operatorframework.io"}}}
@@ -522,23 +538,15 @@ func TestRollbackSnapshotAllowsVerifiedSiblingHandoff(t *testing.T) {
 				t.Fatalf("lost sibling identities: %+v, %v", mergedSnapshot, mergeErr)
 			}
 			// Adoption completes after the snapshot; GC then removes the verified owner.
-			live.OwnerReferences = nil
-			live.Annotations[boxcutterRevisionAnnotation] = "3"
-			switch scenario {
-			case "unlisted revision":
-				live.Annotations[boxcutterRevisionAnnotation] = "4"
-			case "foreign controller":
-				live.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "foreign", UID: "foreign"}}, corev1.SchemeGroupVersion.WithKind("ConfigMap"))}
-			case "changed label":
-				live.Labels[boxcutterManagedByLabel] = "foreign"
-			case "replaced object":
-				live.UID = "replacement"
-			}
+			live.OwnerReferences = scenario.owners
+			live.Annotations[boxcutterRevisionAnnotation] = scenario.revision
+			live.Labels[boxcutterManagedByLabel] = scenario.managedBy
+			live.UID = scenario.uid
 			if err := m.Client.Update(ctx, live); err != nil {
 				t.Fatal(err)
 			}
 			err = m.releaseRevisionObjects(ctx, snapshot)
-			if scenario != "sibling handoff" {
+			if scenario.wantError {
 				if err == nil {
 					t.Fatal("released unverified object")
 				}

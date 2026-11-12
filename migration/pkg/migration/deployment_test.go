@@ -496,10 +496,9 @@ func (c *deploymentDeletionClient) Delete(ctx context.Context, obj client.Object
 	return c.Client.Delete(ctx, obj, opts...)
 }
 
-// establishedClusterObjectDeploymentCRD returns a served COD schema suitable for preflight tests.
+// establishedClusterObjectDeploymentCRD returns an established COD API for fake-client lifecycle tests.
 func establishedClusterObjectDeploymentCRD() *apiextensionsv1.CustomResourceDefinition {
 	crd := establishedClusterObjectSetCRD()
 	crd.Name = clusterObjectDeploymentCRDName
-	crd.Spec.Versions[0].Schema = testRevisionSchema(true)
 	return crd
 }
