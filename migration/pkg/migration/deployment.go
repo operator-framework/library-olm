@@ -93,7 +93,11 @@ func (m *Migrator) createClusterObjectDeployment(ctx context.Context, opts Optio
 	if err := m.waitForDeployment(ctx, cod); err != nil {
 		return err
 	}
-	return m.protectDeploymentForAdoption(ctx, cod)
+	if err := m.protectDeploymentForAdoption(ctx, cod); err != nil {
+		return err
+	}
+	// Finish the protected staging rollout before CE can introduce catalog content.
+	return m.waitForDeployment(ctx, cod)
 }
 
 // protectDeploymentForAdoption atomically enables collision protection and CE

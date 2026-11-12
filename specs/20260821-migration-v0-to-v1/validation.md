@@ -180,3 +180,5 @@ must report `RevisionObjectCollision` without changing its UID, data, labels, or
 The protection transition may create an intermediate protected COS before the catalog
 revision; tests must validate every later revision uses `Prevent` without assuming
 that the catalog revision is always revision 2.
+
+COD-only migration waits for the protected staging rollout to complete after changing the template to `Prevent`, before creating the ClusterExtension. Stale initial-generation readiness must not authorize catalog handoff.

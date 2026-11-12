@@ -332,3 +332,6 @@ The protection-only template update may create an intermediate protected revisio
 an unrelated existing object. Both cases collect package coverage and run in the
 existing handoff CI jobs. Unit regressions cover readiness, identity changes,
 patch conflicts, uncertain patch outcomes, and refusal to create a CE on failure.
+
+
+COD-only migration waits for the protected staging rollout to complete after changing the template to `Prevent`, before creating the ClusterExtension. Stale initial-generation readiness must not authorize catalog handoff.
