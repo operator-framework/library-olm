@@ -833,16 +833,30 @@ func TestSystemManagedNamespaceMigration(t *testing.T) {
 	if err := json.Unmarshal([]byte(namespaceJSON), &managedNamespace); err != nil {
 		t.Fatalf("decode system-managed namespace: %v", err)
 	}
-	catalogCOS := subscription + "-2"
-	ownedByCatalogCOS := false
-	for _, owner := range managedNamespace.OwnerReferences {
-		if owner.Kind == ocv1.ClusterObjectSetKind && owner.Name == catalogCOS {
-			ownedByCatalogCOS = true
-			break
-		}
+	owner := metav1.GetControllerOf(&managedNamespace)
+	if owner == nil || owner.Kind != ocv1.ClusterObjectSetKind || owner.APIVersion != ocv1.GroupVersion.String() {
+		t.Fatalf("system-managed namespace has no COS controller: %#v", managedNamespace.OwnerReferences)
 	}
-	if !ownedByCatalogCOS {
-		t.Fatalf("system-managed namespace %q ownerReferences = %#v, want catalog ClusterObjectSet %q", targetNamespace, managedNamespace.OwnerReferences, catalogCOS)
+	_, kubeClient, _ := newMigrator(t)
+	var revision ocv1.ClusterObjectSet
+	if err := kubeClient.Get(t.Context(), client.ObjectKey{Name: owner.Name}, &revision); err != nil {
+		t.Fatal(err)
+	}
+	if revision.UID != owner.UID || revision.Spec.Group != subscription || revision.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
+		t.Fatalf("namespace owner is not a protected revision of %s: %+v", subscription, revision)
+	}
+	var extension ocv1.ClusterExtension
+	if err := kubeClient.Get(t.Context(), client.ObjectKey{Name: subscription}, &extension); err != nil {
+		t.Fatal(err)
+	}
+	if !metav1.IsControlledBy(&revision, &extension) {
+		var deployment ocv1.ClusterObjectDeployment
+		if err := kubeClient.Get(t.Context(), client.ObjectKey{Name: subscription}, &deployment); err != nil {
+			t.Fatal(err)
+		}
+		if !metav1.IsControlledBy(&revision, &deployment) || !metav1.IsControlledBy(&deployment, &extension) {
+			t.Fatal("namespace revision is not managed by the migrated ClusterExtension")
+		}
 	}
 	targetDeployments, err := output("kubectl", "get", "deployment", "-n", targetNamespace, "-o", "name")
 	if err != nil || strings.TrimSpace(targetDeployments) == "" {

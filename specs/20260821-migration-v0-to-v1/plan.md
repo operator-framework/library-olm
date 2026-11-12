@@ -333,3 +333,5 @@ creation, before rollout/handoff failures can strand the operator. Preserve them
 on failed or uncertain handoffs and refuse automatic OLMv0 restart. Regression
 tests must decode the server-side backup after discarding the original plan and
 verify it can restore the original Subscription spec after safe target release.
+
+Revision collision observations during COD handoff are retried within the existing rollout timeout. Only current-generation completion and availability allow migration to continue; persistent collisions fail with the controller diagnostic and preserve staged recovery resources.

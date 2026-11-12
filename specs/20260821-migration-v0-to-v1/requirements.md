@@ -185,7 +185,7 @@ Reject unverified controller identities. Definitively rejected COS/COD creates
 ambiguous creation outcomes continue to require explicit recovery.
 Carry bundle and migration annotations and extension identity labels through
 `spec.template.metadata` onto generated COS revisions. Report current-generation
-terminal `Progressing=False` conditions other than successful rollout completion immediately, preserving the
+terminal `Progressing=False` conditions other than successful rollout completion or retryable revision collisions immediately, preserving the
 controller's diagnostic message; ignore stale-generation failure conditions.
 
 ---
@@ -395,3 +395,5 @@ creation, before rollout/handoff failures can strand the operator. Preserve them
 on failed or uncertain handoffs and refuse automatic OLMv0 restart. Regression
 tests must decode the server-side backup after discarding the original plan and
 verify it can restore the original Subscription spec after safe target release.
+
+Revision collision observations during COD handoff are retried within the existing rollout timeout. Only current-generation completion and availability allow migration to continue; persistent collisions fail with the controller diagnostic and preserve staged recovery resources.
