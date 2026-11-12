@@ -413,13 +413,15 @@ staging resource using the same backup annotations as the CE. These annotations
 are written with resource creation, before any rollout wait or handoff can fail,
 and are propagated to COD-generated revisions. This does not depend on `--backup`.
 
-Export the retained COD before removing any staging resources. If COD creation
-failed after a directly staged COS, export that COS instead:
+Export the retained COD before removing any staging resources. If the COD is no
+longer available but an orphaned COD-generated COS retains the migration backup
+annotations, export that revision instead. Failed COD creation does not leave a
+directly staged COS: this migration path creates revisions only through a COD.
 
 ```bash
 kubectl get clusterobjectdeployment "$ce_name" -o json > staging.json
-# Alternative when only the initial COS exists:
-# kubectl get clusterobjectset "${ce_name}-1" -o json > staging.json
+# Alternative: set cos_name to the orphaned COD-generated revision retaining the backup.
+# kubectl get clusterobjectset "$cos_name" -o json > staging.json
 jq -e '
   .metadata.annotations as $a |
   ($a["olm.operatorframework.io/migrated-from-subscription"] | split("/")) as $source |
