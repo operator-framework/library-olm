@@ -102,24 +102,16 @@ jobs:
     timeout-minutes: 90
     env:
       E2E_FIXTURE_CLUSTER_NAME: library-olm-cod-e2e
-      E2E_FIXTURE_KUBECONFIG: ${{ github.workspace }}/operator-controller/.kubeconfig/library-olm-cod-e2e.kubeconfig
+      E2E_FIXTURE_KUBECONFIG: ${{ github.workspace }}/.kubeconfig/library-olm-cod-e2e.kubeconfig
       E2E_COVERAGE_DIR: ${{ github.workspace }}/artifacts/e2e/coverage/cod
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/checkout@v7
-        with:
-          repository: operator-framework/operator-controller
-          ref: 9dd683afa190a67bc6c719abbafa97faa2d68b96
-          path: operator-controller
-          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - name: Build and deploy pinned COD-capable controller
-        run: make -C operator-controller run-experimental KIND_CLUSTER_NAME=library-olm-cod-e2e K8S_VERSION=1.37
-      - name: Install committed OLMv0 fixtures and catalog
+      - name: Install pinned controller, OLMv0 APIs, and fixture catalog
         run: make migration/e2e-fixture-setup
       - name: Verify COD handoff and catalog revision
         run: make migration/test-e2e-cos-supersession

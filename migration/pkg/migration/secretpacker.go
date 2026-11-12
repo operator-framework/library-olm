@@ -91,6 +91,8 @@ func (p *secretPacker) pack(phases []*ocv1ac.ClusterObjectSetPhaseApplyConfigura
 
 	for phaseIdx, phase := range phases {
 		for objIdx, obj := range phase.Objects {
+			// The generated apply configuration uses *ObjectType to represent an
+			// unset field; the API object's Type field is a non-pointer ObjectType.
 			if obj.Type == nil {
 				return nil, fmt.Errorf("object in phase %d index %d has no type", phaseIdx, objIdx)
 			}
