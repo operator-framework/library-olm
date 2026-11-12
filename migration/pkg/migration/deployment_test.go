@@ -128,7 +128,6 @@ func TestDeploymentInvalidSpecification(t *testing.T) {
 
 func TestDeploymentTerminalRevisionFailures(t *testing.T) {
 	for _, reason := range []string{
-		ocv1.ClusterObjectDeploymentReasonRevisionObjectCollision,
 		ocv1.ClusterObjectDeploymentReasonRevisionInvalidSpecification,
 		ocv1.ClusterObjectDeploymentReasonUnmanagedRevision,
 		"FutureTerminalReason",
@@ -746,6 +745,43 @@ func TestProtectedCODRetriesStatusConflict(t *testing.T) {
 				}
 			} else if err != nil || attempts != 2 || created.Labels[controllerManagedByLabel] != "operator-controller" {
 				t.Fatalf("status conflict not retried: attempts=%d err=%v", attempts, err)
+			}
+		})
+	}
+}
+
+func TestDeploymentCollisionWait(t *testing.T) {
+	for _, resolves := range []bool{false, true} {
+		t.Run(fmt.Sprint("resolves=", resolves), func(t *testing.T) {
+			created := readyDeployment()
+			current := created.DeepCopy()
+			current.Status.Conditions[0].Reason = ocv1.ClusterObjectDeploymentReasonRevisionObjectCollision
+			current.Status.Conditions[0].Message = "existing object is still owned"
+			m := migrationTestClient(t, current)
+			reads := 0
+			m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if err := c.Get(ctx, key, obj, opts...); err != nil {
+					return err
+				}
+				reads++
+				if resolves && reads > 1 {
+					obj.(*ocv1.ClusterObjectDeployment).Status = created.Status
+				}
+				return nil
+			}})
+			timeout := 50 * time.Millisecond
+			if resolves {
+				timeout = 2 * cosWaitPollInterval
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), timeout)
+			defer cancel()
+			err := m.waitForDeployment(ctx, created)
+			if resolves {
+				if err != nil || reads < 2 {
+					t.Fatalf("transient collision did not resolve: %v", err)
+				}
+			} else if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "existing object is still owned") {
+				t.Fatalf("persistent collision lost deadline or diagnostic: %v", err)
 			}
 		})
 	}

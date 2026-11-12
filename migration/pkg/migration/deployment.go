@@ -3,6 +3,7 @@ package migration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -138,7 +139,8 @@ func (m *Migrator) protectDeploymentForAdoption(ctx context.Context, created *oc
 
 // waitForDeployment waits for the created deployment to complete its current rollout and become available.
 func (m *Migrator) waitForDeployment(ctx context.Context, created *ocv1.ClusterObjectDeployment) error {
-	return wait.PollUntilContextTimeout(ctx, cosWaitPollInterval, cosWaitTimeout, true, func(ctx context.Context) (bool, error) {
+	var collision error
+	err := wait.PollUntilContextTimeout(ctx, cosWaitPollInterval, cosWaitTimeout, true, func(ctx context.Context) (bool, error) {
 		var cod ocv1.ClusterObjectDeployment
 		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(created), &cod); err != nil {
 			return false, err
@@ -146,11 +148,18 @@ func (m *Migrator) waitForDeployment(ctx context.Context, created *ocv1.ClusterO
 		if cod.UID != created.UID || cod.Generation != created.Generation || cod.DeletionTimestamp != nil {
 			return false, fmt.Errorf("migration ClusterObjectDeployment %s was replaced, changed or deleted", cod.Name)
 		}
+		collision = nil
 		progress := apimeta.FindStatusCondition(cod.Status.Conditions, ocv1.ClusterObjectDeploymentTypeProgressing)
 		available := apimeta.FindStatusCondition(cod.Status.Conditions, ocv1.ClusterObjectDeploymentTypeAvailable)
 		if progress != nil && progress.ObservedGeneration == cod.Generation {
 			if progress.Status == metav1.ConditionFalse && progress.Reason != ocv1.ClusterObjectDeploymentReasonNewClusterObjectSetProgressed {
-				return false, fmt.Errorf("ClusterObjectDeployment %s rollout failed (%s): %s", cod.Name, progress.Reason, progress.Message)
+				failure := fmt.Errorf("ClusterObjectDeployment %s rollout failed (%s): %s", cod.Name, progress.Reason, progress.Message)
+				if progress.Reason != ocv1.ClusterObjectDeploymentReasonRevisionObjectCollision {
+					return false, failure
+				}
+				// Ownership can briefly collide while sibling revisions hand off.
+				// Continue observing; only actual completion permits migration.
+				collision = failure
 			}
 			if progress.Status == metav1.ConditionFalse && progress.Reason == ocv1.ClusterObjectDeploymentReasonNewClusterObjectSetProgressed &&
 				available != nil && available.ObservedGeneration == cod.Generation && available.Status == metav1.ConditionTrue {
@@ -160,6 +169,10 @@ func (m *Migrator) waitForDeployment(ctx context.Context, created *ocv1.ClusterO
 		m.progress(ProgressEvent{Step: ProgressStepCreate, Status: ProgressWaiting, Message: fmt.Sprintf("Waiting for ClusterObjectDeployment %s rollout completion and availability", cod.Name)})
 		return false, nil
 	})
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return errors.Join(err, collision)
+	}
+	return err
 }
 
 // rollbackDeployment permits the COD API to be absent, but never hides

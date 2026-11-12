@@ -437,3 +437,5 @@ The ordinary rollback CLI requires a CE and does not automate this pre-CE recove
 Library callers can decode the saved spec into `Backup.Subscription` and use
 `RecoverFromBackup` after safely releasing the target. Keep the exported files until
 recovery has succeeded.
+
+Revision collision observations during COD handoff are retried within the existing rollout timeout. Only current-generation completion and availability allow migration to continue; persistent collisions fail with the controller diagnostic and preserve staged recovery resources.

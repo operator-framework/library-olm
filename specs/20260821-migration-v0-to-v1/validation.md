@@ -34,7 +34,7 @@ kind cluster with both OLMv0 and OLMv1 installed.
   Assert inline and Secret-backed object encodings using the current COS/COD
   definitions, including workload preservation during rollback. Older experimental
   schemas are outside the compatibility requirements.
-  Assert prompt failures for all current-generation terminal `Progressing=False` reasons except successful completion, including revision collisions and invalid revisions; preserve the controller's reason and message. Definitive COD create rejections restore OLMv0 and report that the target cannot be active; timeouts and transport failures refuse automatic recovery.
+  Assert prompt failures for all current-generation terminal `Progressing=False` reasons except successful completion and retryable revision collisions, including invalid revisions; preserve the controller's reason and message. Definitive COD create rejections restore OLMv0 and report that the target cannot be active; timeouts and transport failures refuse automatic recovery.
   Rollback persists verified COD UIDs before deletion and accepts matching dangling references even after restarting rollback. Unknown UIDs remain rejected, and failure to persist verified identity prevents COD deletion.
 
 ## V2. Eligibility matrix (one case per check, R3)
@@ -173,3 +173,5 @@ creation, before rollout/handoff failures can strand the operator. Preserve them
 on failed or uncertain handoffs and refuse automatic OLMv0 restart. Regression
 tests must decode the server-side backup after discarding the original plan and
 verify it can restore the original Subscription spec after safe target release.
+
+Revision collision observations during COD handoff are retried within the existing rollout timeout. Only current-generation completion and availability allow migration to continue; persistent collisions fail with the controller diagnostic and preserve staged recovery resources.
