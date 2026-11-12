@@ -236,15 +236,75 @@ Phase 1 (4717) ──► Phase 2 (4718) ──► Phase 3 (4719) ──► Phase
 Phase 7 (4723, operator-controller): APIService-owning operators remain unsupported; C3 is permanent
 ```
 
-Revision preflight rejects deleting or unavailable COS/COD APIs. Gather (including CLI dry-run) and migration validate the prepared revision with a strict server-side dry-run create before removing OLMv0 management. Validation and creation share the same revision and Secret-reference builders; dry-run does not persist revisions or packed Secrets. The API server validates schema, admission, and permissions, but does not run controller-level validation of referenced workloads. Rollback permits verified newer sibling handoffs while retaining resource-UID, owner, and management-label checks.
+Readiness reporting includes a lightweight COS API availability check; this is diagnostic, not a guarantee that a later write will succeed. Preparation does not repeat that COS CRD check. COD discovery remains necessary to select the revision manager. Gather (including CLI dry-run) and migration validate the prepared revision with a strict server-side dry-run create before removing OLMv0 management. Validation and creation share the same revision and Secret-reference builders; dry-run does not persist revisions or packed Secrets. The API server validates schema, admission, and permissions, but does not run controller-level validation of referenced workloads. Rollback permits verified newer sibling handoffs while retaining resource-UID, owner, and management-label checks.
 
 
-## Follow-up: shared revision content conversion
+## Follow-ups from the COS/COD compatibility review
 
-Centralize conversion from supported bundle formats and collected migration
-resources to `ClusterObjectSetContent` in library-olm. Migration's `PhaseSort`
-and operator-controller's internal phase construction currently duplicate
-ordering and content-conversion logic. Define a reusable converter with explicit
-inputs, shared phase-ordering tests, and adapters for both callers. Keep
-controller reconciliation, migration ownership, and Secret persistence outside
-the converter. This is follow-up work, not part of the current API update.
+These items remain outside PR93's initial compatibility scope. Keep them open
+until their implementation and validation are complete; a review response alone
+is not completion.
+
+### Protected handoff to ClusterExtension
+
+- [ ] Complete either [PR95 (COD-only)](https://github.com/operator-framework/library-olm/pull/95)
+  or [PR97 (COS+COD)](https://github.com/operator-framework/library-olm/pull/97).
+  These are alternative approaches, not sequential requirements.
+- COD-only: create an adoption-disabled COD with `collisionProtection: None`,
+  wait for its initial rollout, then atomically enable `Prevent`, remove
+  phase/object overrides, and enable CE adoption. Complete the protected rollout
+  before creating the CE.
+- COS+COD: complete initial COS adoption with `None` before creating the protected
+  COD with `Prevent`, then allow the CE handoff.
+- Validate that initial resources are adopted, later unrelated-object collisions
+  are rejected, and failed handoffs preserve recovery information.
+
+Source: [handoff safety review](https://github.com/operator-framework/library-olm/pull/93#discussion_r4556776332).
+
+### Explicit migration annotation cleanup
+
+- [ ] Design an explicit API/CLI operation for users who no longer need migration
+  recovery metadata. Do not remove annotations automatically after migration;
+  users may still need rollback, and historical values can become stale.
+- Classify provenance, invocation identity, backup data, and bundle metadata by
+  resource and consumer. Determine which fields can be removed safely and how
+  removing them affects rollback. Preserve metadata still used by controllers.
+- Define dry-run output and explicit user acknowledgment for any loss of recovery
+  capability. Test resource ownership checks, repeated cleanup, and preservation
+  of active workloads and controller-owned metadata.
+- Keep this operation distinct from the existing cleanup of OLMv0 conflicts.
+
+Source: [annotation retention discussion](https://github.com/operator-framework/library-olm/pull/93#discussion_r4556715778).
+
+### Align owner labels with upstream controllers
+
+- [ ] Revisit `LabelOwnerKind`, `LabelOwnerName`, and managed-by labels once
+  operator-controller/object-controller settle their requirements.
+- Until then, retain alignment with the pinned controller on COD metadata, COD
+  template metadata, and directly created COS resources. Do not remove labels
+  preemptively.
+- Coordinate any change with adoption, resource discovery, rollback, and cleanup
+  tests so removing a label does not break identity or ownership checks.
+
+Sources: [COD labels](https://github.com/operator-framework/library-olm/pull/93#discussion_r4556739359),
+[template labels](https://github.com/operator-framework/library-olm/pull/93#discussion_r4556747596),
+[COS labels](https://github.com/operator-framework/library-olm/pull/93#discussion_r4556851701).
+
+### Shared revision content conversion and typed construction
+
+- [ ] Centralize conversion from supported bundle formats and collected migration
+  resources to `ClusterObjectSetContent` in library-olm. Migration's `PhaseSort`
+  and operator-controller's internal phase construction currently duplicate
+  ordering and content-conversion logic.
+- Define a reusable converter with explicit inputs, shared phase-ordering tests,
+  and adapters for both callers. Keep controller reconciliation, migration
+  ownership, and Secret persistence outside the converter.
+- [ ] Replace the apply-configuration JSON marshal/unmarshal round-trip with a
+  consistent typed-object construction path. Address phase sorting and Secret
+  packing together rather than adding a manual conversion layer solely at the
+  COD constructor. Assess changes to exported APIs such as `PhaseSort` explicitly.
+- Preserve shared builders for server-side dry-run and actual creation, and test
+  inline manifests, packed references, optional fields, labels, and annotations.
+
+Sources: [shared converter](https://github.com/operator-framework/library-olm/pull/93#discussion_r4554296554),
+[typed construction](https://github.com/operator-framework/library-olm/pull/93#discussion_r4556794570).

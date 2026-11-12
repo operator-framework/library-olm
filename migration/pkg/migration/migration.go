@@ -258,15 +258,13 @@ func (m *Migrator) migrate(ctx context.Context, opts Options, nextStep func(Prog
 	return nil
 }
 
-// PrepareClusterObjectSet validates that this cluster can accept the OLMv1
-// objects migration creates and resolves where SecretPacker data belongs. It
-// must run before PrepareForMigration, which deletes OLMv0 management objects.
+// PrepareClusterObjectSet checks target ownership, selects the revision manager,
+// and resolves where SecretPacker data belongs. Gather and Migrate validate the
+// prepared revision with a server-side dry run. Preparation must run before
+// PrepareForMigration, which deletes OLMv0 management objects.
 func (m *Migrator) PrepareClusterObjectSet(ctx context.Context, opts Options) (Options, error) {
 	opts.ApplyDefaults()
 	if err := m.ensureClusterExtensionAbsent(ctx, opts.ClusterExtensionName); err != nil {
-		return opts, err
-	}
-	if err := m.ensureClusterObjectSetCRD(ctx); err != nil {
 		return opts, err
 	}
 	useCOD, err := m.hasClusterObjectDeploymentCRD(ctx)
@@ -343,8 +341,9 @@ func (m *Migrator) ensureSystemManagedNamespaceSupport(ctx context.Context) erro
 	return fmt.Errorf("system-managed install namespace requires a ClusterExtension CRD schema that declares optional spec.namespace")
 }
 
-// ensureClusterObjectSetCRD requires an established, non-deleting COS API.
-// The prepared revision is validated separately through a server-side dry run.
+// ensureClusterObjectSetCRD provides a lightweight API availability diagnostic
+// for CheckReadiness. It cannot guarantee a later write will succeed; Gather and
+// Migrate validate the prepared revision through a server-side dry run.
 func (m *Migrator) ensureClusterObjectSetCRD(ctx context.Context) error {
 	var crd apiextensionsv1.CustomResourceDefinition
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: clusterObjectSetCRDName}, &crd); err != nil {
