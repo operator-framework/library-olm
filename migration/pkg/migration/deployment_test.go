@@ -656,7 +656,7 @@ func TestProtectedCODHandoff(t *testing.T) {
 // TestProtectedCODFailurePreservesStaging refuses CE creation and OLMv0 recovery
 // after an initial rollout timeout or an uncertain protection-patch outcome.
 func TestProtectedCODFailurePreservesStaging(t *testing.T) {
-	for _, mode := range []string{"wait timeout", "patch rejected", "patch response lost"} {
+	for _, mode := range []string{"wait timeout", "patch rejected", "patch response lost", "protected rollout timeout"} {
 		t.Run(mode, func(t *testing.T) {
 			m := migrationTestClient(t, establishedClusterObjectDeploymentCRD())
 			patchAttempted := false
@@ -678,6 +678,14 @@ func TestProtectedCODFailurePreservesStaging(t *testing.T) {
 				},
 				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, p client.Patch, opts ...client.PatchOption) error {
 					patchAttempted = true
+					if mode == "protected rollout timeout" {
+						if err := c.Patch(ctx, obj, p, opts...); err != nil {
+							return err
+						}
+						cod := obj.(*ocv1.ClusterObjectDeployment)
+						cod.Generation++ // The initial rollout status is now stale.
+						return c.Update(ctx, cod)
+					}
 					if mode == "patch response lost" {
 						if err := c.Patch(ctx, obj, p, opts...); err != nil {
 							return err
@@ -692,6 +700,9 @@ func TestProtectedCODFailurePreservesStaging(t *testing.T) {
 			if err == nil || !result.TargetMayBeActive {
 				t.Fatalf("result=%+v error=%v", result, err)
 			}
+			if mode == "protected rollout timeout" && (!patchAttempted || !errors.Is(err, context.DeadlineExceeded)) {
+				t.Fatalf("did not wait for protected rollout: %v", err)
+			}
 			if mode == "wait timeout" && patchAttempted {
 				t.Fatal("enabled adoption before readiness")
 			}
@@ -699,7 +710,7 @@ func TestProtectedCODFailurePreservesStaging(t *testing.T) {
 			if err := m.Client.Get(t.Context(), client.ObjectKey{Name: "example"}, &cod); err != nil {
 				t.Fatal(err)
 			}
-			if mode != "patch response lost" && cod.Labels[controllerManagedByLabel] != "" {
+			if mode != "patch response lost" && mode != "protected rollout timeout" && cod.Labels[controllerManagedByLabel] != "" {
 				t.Fatal("failed handoff enabled adoption")
 			}
 			if mode == "patch response lost" && (cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent || cod.Labels[controllerManagedByLabel] != "operator-controller") {
