@@ -25,18 +25,18 @@ the COD controller stamps its own generated revisions.
 Unit regressions cover definitive create rejection recovery, terminal rollout
 diagnostics, and rollback retries with dangling references to verified COD UIDs.
 
-Migration automatically creates a COD named after the CE when the COD CRD exists;
+Migration creates an initial COS with `None`, waits for completed adoption and
+readiness, then creates a COD named after the CE with `Prevent` when the COD CRD exists;
 otherwise it directly creates a COS using the current API definitions.
 A present but unready COD CRD or a discovery error blocks migration rather than falling back.
 COD migration requires the COD API/controller and the COD-backed CE applier merged in
 operator-controller PR #3058. The library's pinned API dependency alone does not
 install that controller. Unit tests exercise creation, preflight, readiness and
 rollback ownership and invalid-template diagnostics. The existing handoff scenario
-also checks COD identity preservation, CE ownership of the COD, and COD ownership of both
-revisions when a COD-capable controller is installed. On 2026-10-29 those assertions
-passed against operator-controller main `255a4026` in kind. A separate full CLI fixture
-conversion and acknowledged rollback preserved the operator Deployment UID and its one
-available replica, restored the Subscription, and removed the COD and both COS revisions.
+also checks COD identity preservation, CE ownership of the COD, and COD ownership of
+all revisions. The initial migration revision uses `None`; protected staging and
+catalog revisions use `Prevent`. A negative rollout test verifies that a newly
+introduced, unrelated existing object is not adopted or modified.
 The `migration/test-e2e-cod-rollback` target now automates those rollback assertions and
 collects CLI coverage. A separate CI job builds and installs operator-controller from
 pinned commit `dae9b613163a8fc5df36e3b9ad5a770a64c0048c`, then runs the handoff and
@@ -211,9 +211,10 @@ live, COS-supersession, and COD tests publish coverage inputs; a dependent cover
 their combined report. The Job intentionally does not upload diagnostics or coverage artifacts.
 
 The supersession check is deliberately separate from the conversion matrix. With the pinned
-experimental controller, migration creates revision 1 with collision protection `None`;
-creating the ClusterExtension results in a controller-owned, catalog-derived revision 2 with
-collision protection `Prevent`. The check requires both revisions to succeed.
+experimental controller, migration creates revision 1 with collision protection `None`
+and waits for it to complete adoption. The COD creates protected staging revision 2;
+creating the ClusterExtension then produces a catalog-derived protected revision.
+The check requires initial adoption to complete and the catalog revision to succeed.
 
 ## CI rollout
 
@@ -387,3 +388,48 @@ Setup refuses existing OLM namespaces or APIs, including partial installations. 
 The live namespace-deletion target uses Redis. The ecr-secret-operator bundle includes a custom-resource sample with `spec.aws_iam_secret`, which is absent from its CRD schema and can block OLMv1 preflight in a new namespace. Ecr-secret-operator remains in the live migration matrix; the focused Redis scenario preserves all source-namespace deletion and label-transfer assertions.
 
 Rollback persists verified resource identities and UIDs on the restored Subscription before deleting the CE backup. Remigration includes still-unowned retained resources (including catalog-generated RBAC) omitted from the OLMv0 inventory; missing resources are skipped, replacements and newly controlled resources are rejected, and normal collection is deduplicated.
+
+### Alternative COS + COD handoff
+
+`make migration/test-e2e-cos-supersession` also runs
+`TestCODProtectedRolloutCollision`. With the pinned controller, migration creates
+revision 1 with `None`, waits for completed adoption and readiness, then creates a COD with `Prevent`; the COD
+adopts revision 1 and creates protected revision 2. CE adoption retains the COD
+UID and creates the catalog revision. The collision test adds an unrelated
+existing ConfigMap to a later COD template and requires a collision while that
+ConfigMap remains unchanged. Both tests collect package coverage in the existing
+handoff profile and run in the handoff CI jobs.
+
+### Recovering a handoff that stopped before CE creation
+
+Migration stores the original Subscription and OperatorGroup specs on its retained
+staging resource using the same backup annotations as the CE. These annotations
+are written with resource creation, before any rollout wait or handoff can fail,
+and are propagated to COD-generated revisions. This does not depend on `--backup`.
+
+Export the retained COD before removing any staging resources. If COD creation
+failed after a directly staged COS, export that COS instead:
+
+```bash
+kubectl get clusterobjectdeployment "$ce_name" -o json > staging.json
+# Alternative when only the initial COS exists:
+# kubectl get clusterobjectset "${ce_name}-1" -o json > staging.json
+jq -e '
+  .metadata.annotations as $a |
+  ($a["olm.operatorframework.io/migrated-from-subscription"] | split("/")) as $source |
+  {apiVersion: "operators.coreos.com/v1alpha1", kind: "Subscription",
+   metadata: {namespace: $source[0], name: $source[1]},
+   spec: ($a["olm.operatorframework.io/migration-subscription-backup"] | fromjson)}
+' staging.json > subscription-recovery.json
+jq -e '.metadata.annotations["olm.operatorframework.io/migration-operatorgroup-backup"] | fromjson' staging.json > operatorgroup-spec-recovery.json
+```
+
+Exporting does not restore OLMv0. Before restoring the Subscription, stop the target
+controllers, release their workload ownership, and verify the source namespace and
+OperatorGroup are usable; otherwise OLMv0 and OLMv1 could reconcile concurrently.
+The ordinary rollback CLI requires a CE and does not automate this pre-CE recovery.
+Library callers can decode the saved spec into `Backup.Subscription` and use
+`RecoverFromBackup` after safely releasing the target. Keep the exported files until
+recovery has succeeded.
+
+Revision collision observations during COD handoff are retried within the existing rollout timeout. Only current-generation completion and availability allow migration to continue; persistent collisions fail with the controller diagnostic and preserve staged recovery resources.

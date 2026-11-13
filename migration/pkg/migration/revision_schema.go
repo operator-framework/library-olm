@@ -27,18 +27,29 @@ func (m *Migrator) validateMigrationRevision(ctx context.Context, opts Options, 
 		return err
 	}
 	marker := string(uuid.NewUUID())
-	var candidate client.Object
-	if opts.UseClusterObjectDeployment {
-		candidate, err = buildClusterObjectDeployment(opts, info, phases, marker)
-	} else {
-		candidate, err = buildClusterObjectSet(opts, info, phases, marker)
-	}
+	cos, err := buildClusterObjectSet(opts, info, phases, marker)
 	if err != nil {
 		return err
 	}
-	if err := m.Client.Create(ctx, candidate, client.DryRunAll, client.FieldValidation(metav1.FieldValidationStrict)); err != nil {
-		return fmt.Errorf("validate migration revision with server-side dry run: %w", err)
+	if err := m.Client.Create(ctx, cos, client.DryRunAll, client.FieldValidation(metav1.FieldValidationStrict)); err != nil {
+		return fmt.Errorf("validate migration ClusterObjectSet with server-side dry run: %w", err)
 	}
+	if opts.UseClusterObjectDeployment {
+		for _, phase := range phases {
+			phase.CollisionProtection = nil
+			for i := range phase.Objects {
+				phase.Objects[i].CollisionProtection = nil
+			}
+		}
+		cod, err := buildClusterObjectDeployment(opts, info, phases, marker)
+		if err != nil {
+			return err
+		}
+		if err := m.Client.Create(ctx, cod, client.DryRunAll, client.FieldValidation(metav1.FieldValidationStrict)); err != nil {
+			return fmt.Errorf("validate migration ClusterObjectDeployment with server-side dry run: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -100,6 +111,7 @@ func buildClusterObjectSet(opts Options, info *MigrationInfo, phases []*ocv1ac.C
 		LabelBundleVersion:                 info.Version,
 		migrationInvocationAnnotation:      marker,
 	}
+	addStagingBackup(cosAnnotations, info)
 	if info.BundleImage != "" {
 		cosAnnotations[LabelBundleReference] = info.BundleImage
 	}

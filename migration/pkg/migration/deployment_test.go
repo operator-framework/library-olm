@@ -3,6 +3,7 @@ package migration
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,6 +13,8 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -126,7 +129,6 @@ func TestDeploymentInvalidSpecification(t *testing.T) {
 
 func TestDeploymentTerminalRevisionFailures(t *testing.T) {
 	for _, reason := range []string{
-		ocv1.ClusterObjectDeploymentReasonRevisionObjectCollision,
 		ocv1.ClusterObjectDeploymentReasonRevisionInvalidSpecification,
 		ocv1.ClusterObjectDeploymentReasonUnmanagedRevision,
 		"FutureTerminalReason",
@@ -231,6 +233,10 @@ func TestRollbackDeploymentOwnership(t *testing.T) {
 type completingDeploymentClient struct{ client.Client }
 
 func (c completingDeploymentClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if cos, ok := obj.(*ocv1.ClusterObjectSet); ok {
+		cos.Status.CompletedAt = metav1.Now()
+		cos.Status.Conditions = []metav1.Condition{{Type: ocv1.ClusterObjectSetTypeReady, Status: metav1.ConditionTrue}}
+	}
 	if cod, ok := obj.(*ocv1.ClusterObjectDeployment); ok {
 		ready := readyDeployment()
 		cod.UID, cod.Generation, cod.Status = ready.UID, ready.Generation, ready.Status
@@ -268,7 +274,7 @@ func TestCreateDeploymentTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resources.cod == nil || resources.cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionNone {
+	if resources.cod == nil || resources.cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
 		t.Fatalf("unexpected deployment: %+v", resources.cod)
 	}
 	if resources.cod.Annotations[migrationInvocationAnnotation] != "invocation" {
@@ -501,4 +507,210 @@ func establishedClusterObjectDeploymentCRD() *apiextensionsv1.CustomResourceDefi
 	crd := establishedClusterObjectSetCRD()
 	crd.Name = clusterObjectDeploymentCRDName
 	return crd
+}
+
+// TestCreateCOSBeforeProtectedCOD verifies staging waits for adoption before creating the COD
+// and that permissive phase/object overrides cannot leak into future rollouts.
+func TestCreateCOSBeforeProtectedCOD(t *testing.T) {
+	for _, rejectCOD := range []bool{false, true} {
+		t.Run(fmt.Sprint("rejectCOD=", rejectCOD), func(t *testing.T) {
+			m := migrationTestClient(t, establishedClusterObjectDeploymentCRD())
+			var order []string
+			denied := apierrors.NewForbidden(schema.GroupResource{Resource: "clusterobjectdeployments"}, "example", errors.New("denied"))
+			m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{
+				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					switch obj := obj.(type) {
+					case *ocv1.ClusterObjectSet:
+						order = append(order, "COS")
+						obj.UID = "initial"
+						obj.Status.CompletedAt = metav1.Now()
+						obj.Status.Conditions = []metav1.Condition{{Type: ocv1.ClusterObjectSetTypeReady, Status: metav1.ConditionTrue}}
+					case *ocv1.ClusterObjectDeployment:
+						order = append(order, "COD")
+						if rejectCOD {
+							return denied
+						}
+						ready := readyDeployment()
+						obj.UID, obj.Generation, obj.Status = ready.UID, ready.Generation, ready.Status
+					}
+					return c.Create(ctx, obj, opts...)
+				},
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			obj := unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "existing", "namespace": "ns"}}}
+			resources, err := m.createClusterObjectSet(ctx, Options{ClusterExtensionName: "example", SubscriptionNamespace: "ns", SubscriptionName: "sub"}, &MigrationInfo{CollectedObjects: []unstructured.Unstructured{obj}})
+			if !reflect.DeepEqual(order, []string{"COS", "COD"}) {
+				t.Fatalf("create order = %v, error %v", order, err)
+			}
+			if rejectCOD {
+				if !errors.Is(err, denied) {
+					t.Fatalf("error = %v", err)
+				}
+				if err := m.cleanupCreatedClusterObjectSet(ctx, resources); err == nil {
+					t.Fatal("allowed unsafe cleanup after COS creation")
+				}
+				if err := m.recoverCreatedMigrationResources(ctx, Options{}, &Backup{}, resources); err == nil {
+					t.Fatal("allowed OLMv0 recovery after COS creation")
+				}
+				var preserved ocv1.ClusterObjectSet
+				if err := m.Client.Get(ctx, client.ObjectKey{Name: "example-1"}, &preserved); err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resources.cos.Spec.CollisionProtection != ocv1.CollisionProtectionNone || resources.cos.Spec.Group != "example" || resources.cos.Spec.Revision != 1 {
+				t.Fatalf("invalid initial COS: %+v", resources.cos.Spec)
+			}
+			if resources.cos.Labels[controllerManagedByLabel] != "object-controller" {
+				t.Fatal("COS cannot be adopted")
+			}
+			if resources.cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
+				t.Fatal("COD must prevent collisions")
+			}
+			for _, phase := range resources.cod.Spec.Template.Spec.Phases {
+				if phase.CollisionProtection != "" {
+					t.Fatal("phase overrides COD protection")
+				}
+				for _, entry := range phase.Objects {
+					if entry.CollisionProtection != "" {
+						t.Fatal("object overrides COD protection")
+					}
+				}
+			}
+			if resources.cos.Spec.Phases[0].CollisionProtection != ocv1.CollisionProtectionNone {
+				t.Fatal("mutated initial COS while building COD")
+			}
+		})
+	}
+}
+
+// TestCreateMigrationResourcesSharesDefaults verifies COD and CE creation use the
+// same defaulted identity and namespace, while retaining explicit CE names.
+func TestCreateMigrationResourcesSharesDefaults(t *testing.T) {
+	for _, name := range []string{"", "custom"} {
+		t.Run("name="+name, func(t *testing.T) {
+			m := migrationTestClient(t, establishedClusterObjectDeploymentCRD())
+			m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{
+				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					switch resource := obj.(type) {
+					case *ocv1.ClusterObjectSet:
+						resource.Status.CompletedAt = metav1.Now()
+						resource.Status.Conditions = []metav1.Condition{{Type: ocv1.ClusterObjectSetTypeReady, Status: metav1.ConditionTrue}}
+					case *ocv1.ClusterObjectDeployment:
+						ready := readyDeployment()
+						resource.UID, resource.Generation, resource.Status = ready.UID, ready.Generation, ready.Status
+					case *ocv1.ClusterExtension:
+						resource.UID = "extension"
+						resource.Status.Conditions = []metav1.Condition{{Type: ocv1.TypeInstalled, Status: metav1.ConditionTrue}}
+					}
+					return c.Create(ctx, obj, opts...)
+				},
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			opts := Options{SubscriptionName: "subscription", SubscriptionNamespace: "source", ClusterExtensionName: name, SystemNamespace: "controller"}
+			if _, err := m.CreateMigrationResources(ctx, opts, &MigrationInfo{PackageName: "package", Channel: "stable"}, &Backup{}); err != nil {
+				t.Fatal(err)
+			}
+			expected := name
+			if expected == "" {
+				expected = "subscription"
+			}
+			var cod ocv1.ClusterObjectDeployment
+			if err := m.Client.Get(ctx, client.ObjectKey{Name: expected}, &cod); err != nil {
+				t.Fatal(err)
+			}
+			var ce ocv1.ClusterExtension
+			if err := m.Client.Get(ctx, client.ObjectKey{Name: expected}, &ce); err != nil {
+				t.Fatal(err)
+			}
+			if cod.Spec.Template.Metadata.Labels[LabelOwnerName] != expected || ce.Spec.Namespace != "source" {
+				t.Fatalf("inconsistent defaults: COD owner label=%q CE namespace=%q", cod.Spec.Template.Metadata.Labels[LabelOwnerName], ce.Spec.Namespace)
+			}
+		})
+	}
+}
+
+// TestIncompleteAdoptionPreventsProtectedCOD ensures no protected rollout or CE
+// can overtake an incomplete initial adoption, and preserves recovery state.
+func TestIncompleteAdoptionPreventsProtectedCOD(t *testing.T) {
+	for _, completed := range []bool{false, true} {
+		t.Run(fmt.Sprint("completed=", completed), func(t *testing.T) {
+			m := migrationTestClient(t, establishedClusterObjectDeploymentCRD())
+			m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{
+				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					switch resource := obj.(type) {
+					case *ocv1.ClusterObjectSet:
+						if completed {
+							resource.Status.CompletedAt = metav1.Now()
+						} else {
+							resource.Status.Conditions = []metav1.Condition{{Type: ocv1.ClusterObjectSetTypeReady, Status: metav1.ConditionTrue}}
+						}
+					case *ocv1.ClusterObjectDeployment, *ocv1.ClusterExtension:
+						t.Fatal("created protected target before initial COS completed and became ready")
+					}
+					return c.Create(ctx, obj, opts...)
+				},
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+			defer cancel()
+			sub, _ := healthySubscriptionFixtures()
+			result, err := m.CreateMigrationResources(ctx, Options{SubscriptionName: sub.Name, SubscriptionNamespace: sub.Namespace, ClusterExtensionName: "staged"}, &MigrationInfo{}, &Backup{Subscription: sub})
+			if !errors.Is(err, context.DeadlineExceeded) || !result.TargetMayBeActive {
+				t.Fatalf("expected retained target and timeout, got %+v, %v", result, err)
+			}
+			var cos ocv1.ClusterObjectSet
+			if err := m.Client.Get(t.Context(), client.ObjectKey{Name: "staged-1"}, &cos); err != nil {
+				t.Fatal(err)
+			}
+			if cos.Annotations[MigrationSubscriptionBackupAnnotation] == "" {
+				t.Fatal("retained COS has no recovery backup")
+			}
+			var restored operatorsv1alpha1.Subscription
+			if err := m.Client.Get(t.Context(), client.ObjectKeyFromObject(sub), &restored); !apierrors.IsNotFound(err) {
+				t.Fatalf("unexpected automatic recovery: %v", err)
+			}
+		})
+	}
+}
+
+func TestDeploymentCollisionWait(t *testing.T) {
+	for _, resolves := range []bool{false, true} {
+		t.Run(fmt.Sprint("resolves=", resolves), func(t *testing.T) {
+			created := readyDeployment()
+			current := created.DeepCopy()
+			current.Status.Conditions[0].Reason = ocv1.ClusterObjectDeploymentReasonRevisionObjectCollision
+			current.Status.Conditions[0].Message = "existing object is still owned"
+			m := migrationTestClient(t, current)
+			reads := 0
+			m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if err := c.Get(ctx, key, obj, opts...); err != nil {
+					return err
+				}
+				reads++
+				if resolves && reads > 1 {
+					obj.(*ocv1.ClusterObjectDeployment).Status = created.Status
+				}
+				return nil
+			}})
+			timeout := 50 * time.Millisecond
+			if resolves {
+				timeout = 2 * cosWaitPollInterval
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), timeout)
+			defer cancel()
+			err := m.waitForDeployment(ctx, created)
+			if resolves {
+				if err != nil || reads < 2 {
+					t.Fatalf("transient collision did not resolve: %v", err)
+				}
+			} else if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "existing object is still owned") {
+				t.Fatalf("persistent collision lost deadline or diagnostic: %v", err)
+			}
+		})
+	}
 }

@@ -310,3 +310,28 @@ Sources: [shared converter](https://github.com/operator-framework/library-olm/pu
 [typed construction](https://github.com/operator-framework/library-olm/pull/93#discussion_r4556794570).
 
 Rollback persists verified resource identities and UIDs on the restored Subscription before deleting the CE backup. Remigration includes still-unowned retained resources (including catalog-generated RBAC) omitted from the OLMv0 inventory; missing resources are skipped, replacements and newly controlled resources are rejected, and normal collection is deduplicated.
+
+
+### Alternative COS + COD handoff
+
+This draft evaluates COS + COD instead of COD-only staging. Create an adoptable
+initial COS with `None`, waits for it to complete adoption and become ready, then
+creates an adoptable COD with `Prevent`. The
+COD adopts the initial revision and creates a protected staging revision; the CE
+then adopts the same COD and rolls out catalog content. No permissive phase or
+object override may remain in the COD template. Failure after initial COS creation
+preserves staging resources rather than restarting OLMv0 automatically.
+
+The focused handoff suite covers the additional staging revision and a negative
+rollout collision. It remains part of the existing coverage-enabled handoff CI
+jobs. The direct-COS fallback inherited from the base remains unchanged; choosing
+the handoff protocol and removing the fallback are separate decisions.
+
+Recovery before CE creation must not rely only on an in-memory backup. Persist the
+original Subscription and OperatorGroup specs on retained staging resources at
+creation, before rollout/handoff failures can strand the operator. Preserve them
+on failed or uncertain handoffs and refuse automatic OLMv0 restart. Regression
+tests must decode the server-side backup after discarding the original plan and
+verify it can restore the original Subscription spec after safe target release.
+
+Revision collision observations during COD handoff are retried within the existing rollout timeout. Only current-generation completion and availability allow migration to continue; persistent collisions fail with the controller diagnostic and preserve staged recovery resources.
