@@ -2,7 +2,6 @@ package migration
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,21 +17,11 @@ import (
 // instead of silently pruning revision entries. This does not execute controllers
 // or validate the contents of the referenced Secrets as Kubernetes resources.
 func (m *Migrator) validateMigrationRevision(ctx context.Context, opts Options, info *MigrationInfo) error {
-	packingName := opts.ClusterExtensionName + "-1"
-	if opts.UseClusterObjectDeployment {
-		packingName = opts.ClusterExtensionName
-	}
-	phases, _, err := buildMigrationPhases(opts, info, packingName)
+	phases, _, err := buildMigrationPhases(opts, info, opts.ClusterExtensionName)
 	if err != nil {
 		return err
 	}
-	marker := string(uuid.NewUUID())
-	var candidate client.Object
-	if opts.UseClusterObjectDeployment {
-		candidate, err = buildClusterObjectDeployment(opts, info, phases, marker)
-	} else {
-		candidate, err = buildClusterObjectSet(opts, info, phases, marker)
-	}
+	candidate, err := buildClusterObjectDeployment(opts, info, phases, string(uuid.NewUUID()))
 	if err != nil {
 		return err
 	}
@@ -82,45 +71,4 @@ func buildMigrationPhases(opts Options, info *MigrationInfo, packingName string)
 	}
 
 	return phases, packed, nil
-}
-
-// buildClusterObjectSet constructs the same candidate for validation and creation.
-func buildClusterObjectSet(opts Options, info *MigrationInfo, phases []*ocv1ac.ClusterObjectSetPhaseApplyConfiguration, marker string) (*ocv1.ClusterObjectSet, error) {
-	cosSpec := ocv1ac.ClusterObjectSetSpec().
-		WithGroup(opts.ClusterExtensionName).
-		WithRevision(1).
-		WithCollisionProtection(ocv1.CollisionProtectionNone).
-		WithLifecycleState(ocv1.ClusterObjectSetLifecycleStateActive).
-		WithPhases(phases...)
-
-	cosAnnotations := map[string]string{
-		MigratedFromSubscriptionAnnotation: fmt.Sprintf("%s/%s", opts.SubscriptionNamespace, opts.SubscriptionName),
-		LabelPackageName:                   info.PackageName,
-		LabelBundleName:                    info.BundleName,
-		LabelBundleVersion:                 info.Version,
-		migrationInvocationAnnotation:      marker,
-	}
-	if info.BundleImage != "" {
-		cosAnnotations[LabelBundleReference] = info.BundleImage
-	}
-
-	cos := ocv1ac.ClusterObjectSet(opts.ClusterExtensionName + "-1").
-		WithSpec(cosSpec).
-		WithLabels(map[string]string{
-			LabelOwnerKind:           ocv1.ClusterExtensionKind,
-			LabelOwnerName:           opts.ClusterExtensionName,
-			controllerManagedByLabel: "object-controller",
-		}).
-		WithAnnotations(cosAnnotations)
-
-	cosData, err := json.Marshal(cos)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal COS: %w", err)
-	}
-	cosObj := &ocv1.ClusterObjectSet{}
-	if err := json.Unmarshal(cosData, cosObj); err != nil {
-		return nil, fmt.Errorf("failed to decode COS: %w", err)
-	}
-
-	return cosObj, nil
 }

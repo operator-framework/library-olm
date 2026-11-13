@@ -19,7 +19,7 @@ import (
 // request options, and preserves server validation and authorization failures.
 func TestRevisionServerDryRun(t *testing.T) {
 	rejection := errors.New("API server rejected candidate")
-	for _, deployment := range []bool{false, true} {
+	for _, deployment := range []bool{true} {
 		for _, serverErr := range []error{nil, rejection} {
 			name := "COS"
 			if deployment {
@@ -67,7 +67,7 @@ func TestRevisionServerDryRun(t *testing.T) {
 						return nil
 					},
 				})
-				opts := Options{ClusterExtensionName: "example", SystemNamespace: "controller", UseClusterObjectDeployment: deployment}
+				opts := Options{ClusterExtensionName: "example", SystemNamespace: "controller"}
 				info := &MigrationInfo{CollectedObjects: []unstructured.Unstructured{{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "config", "namespace": "operators"}, "data": map[string]interface{}{"key": "value"}}}}}
 				err := m.validateMigrationRevision(t.Context(), opts, info)
 				if !errors.Is(err, serverErr) || calls != 1 {

@@ -121,12 +121,11 @@ breaking API changes permitted while `v0`. Two binaries. Prow + GitHub Actions C
 old `ClusterExtensionRevision` name throughout; all references must be updated to
 `ClusterObjectSet` / `ClusterObjectSetList`.
 
-**R2.3** — The migration tool **creates** the COS, then **waits** for the COS controller
-to set `status.completedAt`, then creates the `ClusterExtension`.
-the controller creates a subsequent catalog-derived COS revision rather than adopting the
-migration COS. The tool **must not** write
-status on any OLMv1 API. No operator-controller changes are required (verified — see
-[plan.md](plan.md) prerequisite).
+**R2.3** — The migration tool creates a COD and waits for its current-generation
+rollout to complete and become available before creating the ClusterExtension.
+The COD controller creates migration COS revisions; the library never creates a
+COS directly. The CE adopts the same COD and its catalog template produces a new
+revision. The tool must not write status on any OLMv1 API.
 
 **R2.4** — Collected objects are stored via boxcutter's **SecretPacker** (Secret-backed,
 not inline in the COS spec) to support large bundles, with
@@ -151,25 +150,27 @@ The CE also carries:
 The directory is created if it does not exist. Failure to list associated plans warns and retains the profiled current plan. Backup does not gate migration — it is informational and aids manual recovery if the CE annotation backup is insufficient. If the directory write fails, `convert` warns and continues (the CE annotation backup is the authoritative recovery path).
 
 **R2.7 — Boxcutter phase 2.** Support one `ClusterObjectDeployment` (COD) per
-ClusterExtension, with controller-managed COS revisions. The initial implementation is
-selected automatically when the COD CRD exists; when absent, the direct COS
-workflow uses the current COS definitions. Discovery errors must fail rather than silently fall back. COD migration requires an established
+ClusterExtension, with controller-managed COS revisions. COD is the only migration path. Missing, deleting, unestablished, or unreadable COD CRDs block check, dry-run, and migration before OLMv0 resources change. COD migration requires an established
 COD CRD and operator-controller's COD-backed ClusterExtension applier (upstream PR #3058).
-Create the deployment with collision protection `None`, wait for current-generation rollout
-completion and availability, then create the CE to hand management to operator-controller.
-Set `apps.kubernetes.io/managed-by: operator-controller` on the COD itself so
-operator-controller retains its rollout data and can adopt it while ownerless.
+Create the deployment with collision protection `None` and no CE-adoption label.
+Wait for current-generation rollout completion and availability, then atomically
+change protection to `Prevent` and add `apps.kubernetes.io/managed-by: operator-controller`.
+Remove phase/object protection overrides in that same resource-version-guarded patch.
+Recheck UID, generation, migration invocation, readiness, and absence of controller
+ownership before patching. Only after a successful patch create the CE. Failures
+preserve the potentially active COD and its Secrets and refuse automatic OLMv0 recovery.
+Later rollouts must reject unrelated existing objects rather than blindly adopt them.
 Preserve the same COD UID through adoption; owner-kind and
 owner-name metadata alone do not authorize adoption. The adoption label is not
 required on the COS template or operator workload objects.
-Directly created migration COS revisions carry `apps.kubernetes.io/managed-by:
-object-controller` so a COD can adopt an ownerless revision in its group.
+Controller-created migration COS revisions carry `apps.kubernetes.io/managed-by:
+object-controller`.
 COD-generated COS revisions receive this label from object-controller. The two
 manager values apply to different resources and must not be interchanged.
 Use the current revision object union (`type: InlineManifest` with `inlineManifest`,
 or `type: SecretReference` with `secretRef`). COS and COD are experimental APIs;
 compatibility with older COS/COD schemas and COS `Succeeded`/`Available` conditions is not supported. COS completion uses `status.completedAt`, and workload readiness uses `Ready=True`. Install a controller
-with matching API definitions before migration.
+with matching API definitions before migration. The COS and COD prerequisites must reject deleting CRDs and schemas that prune inline manifests or Secret-reference name, namespace, and key fields. Check the served COS/COD schemas for typed revision entries during readiness and preflight; reject incompatible definitions before any OLMv0 mutation.
 Reject existing deployments/revision groups before destructive work. Rollback must stop the
 deployment with orphan deletion before removing revisions and restoring OLMv0 management.
 Persist verified deployment UIDs on the CE before deletion so late revisions with
@@ -179,7 +180,7 @@ Reject unverified controller identities. Definitively rejected COS/COD creates
 ambiguous creation outcomes continue to require explicit recovery.
 Carry bundle and migration annotations and extension identity labels through
 `spec.template.metadata` onto generated COS revisions. Report current-generation
-terminal `Progressing=False` conditions other than successful rollout completion immediately, preserving the
+terminal `Progressing=False` conditions other than successful rollout completion or retryable revision collisions immediately, preserving the
 controller's diagnostic message; ignore stale-generation failure conditions.
 
 ---
@@ -379,6 +380,17 @@ unreferenced source would be deleted without changing it.
 - Binary packaging / `oc` plugin / container images — deferred to the downstream TP phase ([OCPSTRAT-2692](https://redhat.atlassian.net/browse/OCPSTRAT-2692)).
 - Console UI.
 
-Readiness reporting includes a lightweight COS API availability check; this is diagnostic, not a guarantee that a later write will succeed. Preparation does not repeat that COS CRD check. COD discovery remains necessary to select the revision manager. Gather (including CLI dry-run) and migration validate the prepared revision with a strict server-side dry-run create before removing OLMv0 management. Validation and creation share the same revision and Secret-reference builders; dry-run does not persist revisions or packed Secrets. The API server validates schema, admission, and permissions, but does not run controller-level validation of referenced workloads. Rollback permits verified newer sibling handoffs while retaining resource-UID, owner, and management-label checks.
+Readiness reporting includes lightweight COS and COD API availability checks; these are diagnostic, not a guarantee that a later write will succeed. Operator migration uses COD and requires the experimental COD API. Gather (including CLI dry-run) and migration validate the prepared revision with a strict server-side dry-run create before removing OLMv0 management. Validation and creation share the same revision and Secret-reference builders; dry-run does not persist revisions or packed Secrets. The API server validates schema, admission, and permissions, but does not run controller-level validation of referenced workloads. Rollback permits verified newer sibling handoffs while retaining resource-UID, owner, and management-label checks.
 
 Rollback persists verified resource identities and UIDs on the restored Subscription before deleting the CE backup. Remigration includes still-unowned retained resources (including catalog-generated RBAC) omitted from the OLMv0 inventory; missing resources are skipped, replacements and newly controlled resources are rejected, and normal collection is deduplicated.
+
+Recovery before CE creation must not rely only on an in-memory backup. Persist the
+original Subscription and OperatorGroup specs on retained staging resources at
+creation, before rollout/handoff failures can strand the operator. Preserve them
+on failed or uncertain handoffs and refuse automatic OLMv0 restart. Regression
+tests must decode the server-side backup after discarding the original plan and
+verify it can restore the original Subscription spec after safe target release.
+
+Revision collision observations during COD handoff are retried within the existing rollout timeout. Only current-generation completion and availability allow migration to continue; persistent collisions fail with the controller diagnostic and preserve staged recovery resources.
+
+COD-only migration waits for the protected staging rollout to complete after changing the template to `Prevent`, before creating the ClusterExtension. Stale initial-generation readiness must not authorize catalog handoff.
