@@ -75,7 +75,7 @@ func TestDeploymentReadiness(t *testing.T) {
 
 // TestPrepareDeployment covers invalid names, unavailable APIs, and occupied deployment identities.
 func TestPrepareDeployment(t *testing.T) {
-	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: clusterObjectDeploymentCRDName}, Spec: apiextensionsv1.CustomResourceDefinitionSpec{Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{Name: "v1", Served: true, Schema: testRevisionSchema(true)}}}, Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{Type: apiextensionsv1.Established, Status: apiextensionsv1.ConditionTrue}}}}
+	crd := establishedClusterObjectDeploymentCRD()
 	ctx := context.Background()
 	if err := migrationTestClient(t).prepareClusterObjectDeployment(ctx, "example"); err == nil {
 		t.Fatal("accepted missing CRD")

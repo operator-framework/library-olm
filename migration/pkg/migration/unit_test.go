@@ -1289,7 +1289,7 @@ func TestPrerequisitesAndRecoveryErrors(t *testing.T) {
 
 func TestGatherRequiresControllerNamespace(t *testing.T) {
 	sub, csv := healthySubscriptionFixtures()
-	m := migrationTestClient(t, sub, csv)
+	m := migrationTestClient(t, sub, csv, establishedClusterObjectDeploymentCRD())
 	_, err := m.Gather(context.Background(), Options{SubscriptionName: sub.Name, SubscriptionNamespace: sub.Namespace})
 	if err == nil || !strings.Contains(err.Error(), "operator-controller Deployment") {
 		t.Fatalf("Gather() without the controller namespace = %v, want a prerequisite error", err)
