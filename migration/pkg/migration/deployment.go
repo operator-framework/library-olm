@@ -38,6 +38,7 @@ func (m *Migrator) hasClusterObjectDeploymentCRD(ctx context.Context) (bool, err
 	return true, nil
 }
 
+// prepareClusterObjectDeployment rejects incompatible APIs and occupied revision groups before migration.
 func (m *Migrator) prepareClusterObjectDeployment(ctx context.Context, name string) error {
 	if len(name) > 52 || !deploymentNamePattern.MatchString(name) {
 		return fmt.Errorf("ClusterObjectDeployment name %q must be 1–52 lowercase letters, digits or hyphens, starting with a letter and ending with a letter or digit", name)
@@ -74,48 +75,25 @@ func (m *Migrator) prepareClusterObjectDeployment(ctx context.Context, name stri
 }
 
 func (m *Migrator) createClusterObjectDeployment(ctx context.Context, opts Options, info *MigrationInfo, phases []*ocv1ac.ClusterObjectSetPhaseApplyConfiguration, marker string, resources *createdMigrationResources) error {
-	annotations := map[string]string{
-		MigratedFromSubscriptionAnnotation: fmt.Sprintf("%s/%s", opts.SubscriptionNamespace, opts.SubscriptionName),
-		migrationInvocationAnnotation:      marker,
-		LabelPackageName:                   info.PackageName,
-		LabelBundleName:                    info.BundleName,
-		LabelBundleVersion:                 info.Version,
-	}
-	if info.BundleImage != "" {
-		annotations[LabelBundleReference] = info.BundleImage
-	}
-	configuration := ocv1ac.ClusterObjectDeployment(opts.ClusterExtensionName).
-		WithAnnotations(annotations).
-		WithLabels(map[string]string{LabelOwnerKind: ocv1.ClusterExtensionKind, LabelOwnerName: opts.ClusterExtensionName, controllerManagedByLabel: "operator-controller"}).
-		WithSpec(ocv1ac.ClusterObjectDeploymentSpec().WithTemplate(
-			ocv1ac.ClusterObjectDeploymentTemplate().
-				WithMetadata(ocv1ac.ClusterObjectDeploymentTemplateMetadata().
-					WithLabels(map[string]string{LabelOwnerKind: ocv1.ClusterExtensionKind, LabelOwnerName: opts.ClusterExtensionName}).
-					WithAnnotations(annotations)).WithSpec(
-				ocv1ac.ClusterObjectDeploymentTemplateSpec().WithPhases(phases...).WithCollisionProtection(ocv1.CollisionProtectionNone))))
-	data, err := json.Marshal(configuration)
+	cod, err := buildClusterObjectDeployment(opts, info, phases, marker)
 	if err != nil {
-		return fmt.Errorf("marshal ClusterObjectDeployment: %w", err)
-	}
-	var cod ocv1.ClusterObjectDeployment
-	if err := json.Unmarshal(data, &cod); err != nil {
-		return fmt.Errorf("decode ClusterObjectDeployment: %w", err)
+		return err
 	}
 	// Create rather than apply: an existing deployment may already manage
 	// workloads, and its mutable template must never be overwritten here.
-	if err := m.Client.Create(ctx, &cod); err != nil {
+	if err := m.Client.Create(ctx, cod); err != nil {
 		if createWasRejected(err) {
 			return fmt.Errorf("create ClusterObjectDeployment: %w", err)
 		}
-		if !apierrors.IsAlreadyExists(err) && m.resolveCreatedObject(context.WithoutCancel(ctx), &cod, marker) {
-			resources.cod = &cod
+		if !apierrors.IsAlreadyExists(err) && m.resolveCreatedObject(context.WithoutCancel(ctx), cod, marker) {
+			resources.cod = cod
 		} else {
 			resources.ownershipUnknown = true
 		}
 		return fmt.Errorf("create ClusterObjectDeployment: %w", err)
 	}
-	resources.cod = &cod
-	return m.waitForDeployment(ctx, &cod)
+	resources.cod = cod
+	return m.waitForDeployment(ctx, cod)
 }
 
 func (m *Migrator) waitForDeployment(ctx context.Context, created *ocv1.ClusterObjectDeployment) error {
@@ -297,4 +275,36 @@ func (m *Migrator) validateRollbackRevision(ctx context.Context, revision *ocv1.
 		}
 	}
 	return unverified
+}
+
+// buildClusterObjectDeployment constructs the same candidate for validation and creation.
+func buildClusterObjectDeployment(opts Options, info *MigrationInfo, phases []*ocv1ac.ClusterObjectSetPhaseApplyConfiguration, marker string) (*ocv1.ClusterObjectDeployment, error) {
+	annotations := map[string]string{
+		MigratedFromSubscriptionAnnotation: fmt.Sprintf("%s/%s", opts.SubscriptionNamespace, opts.SubscriptionName),
+		migrationInvocationAnnotation:      marker,
+		LabelPackageName:                   info.PackageName,
+		LabelBundleName:                    info.BundleName,
+		LabelBundleVersion:                 info.Version,
+	}
+	if info.BundleImage != "" {
+		annotations[LabelBundleReference] = info.BundleImage
+	}
+	configuration := ocv1ac.ClusterObjectDeployment(opts.ClusterExtensionName).
+		WithAnnotations(annotations).
+		WithLabels(map[string]string{LabelOwnerKind: ocv1.ClusterExtensionKind, LabelOwnerName: opts.ClusterExtensionName, controllerManagedByLabel: "operator-controller"}).
+		WithSpec(ocv1ac.ClusterObjectDeploymentSpec().WithTemplate(
+			ocv1ac.ClusterObjectDeploymentTemplate().
+				WithMetadata(ocv1ac.ClusterObjectDeploymentTemplateMetadata().
+					WithLabels(map[string]string{LabelOwnerKind: ocv1.ClusterExtensionKind, LabelOwnerName: opts.ClusterExtensionName}).
+					WithAnnotations(annotations)).WithSpec(
+				ocv1ac.ClusterObjectDeploymentTemplateSpec().WithPhases(phases...).WithCollisionProtection(ocv1.CollisionProtectionNone))))
+	data, err := json.Marshal(configuration)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ClusterObjectDeployment: %w", err)
+	}
+	var cod ocv1.ClusterObjectDeployment
+	if err := json.Unmarshal(data, &cod); err != nil {
+		return nil, fmt.Errorf("decode ClusterObjectDeployment: %w", err)
+	}
+	return &cod, nil
 }

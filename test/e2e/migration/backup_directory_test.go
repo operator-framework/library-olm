@@ -91,7 +91,7 @@ func TestFixtureBackupDirectory(t *testing.T) {
 		}
 	}
 	if scenario == "delete-denied" {
-		args[len(args)-1] = backupReadOnlyKubeconfig(t, c)
+		args[len(args)-1] = backupDeletionDeniedKubeconfig(t, c)
 	}
 	out, err := output(cli, args...)
 	switch scenario {
@@ -180,13 +180,16 @@ func assertBackupManifest(t *testing.T, path string, expected client.Object, api
 	}
 }
 
-func backupReadOnlyKubeconfig(t *testing.T, c client.Client) string {
+func backupDeletionDeniedKubeconfig(t *testing.T, c client.Client) string {
 	t.Helper()
 	const identity = "migration-backup-reader"
 	run(t, "kubectl", "delete", "clusterrolebinding/"+identity, "clusterrole/"+identity, "--ignore-not-found")
 	role := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: identity}, Rules: []rbacv1.PolicyRule{
 		{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: []string{"get", "list", "watch"}},
 		{APIGroups: []string{""}, Resources: []string{"pods/portforward"}, Verbs: []string{"create"}},
+		// Server-side dry-run requires create permission. Keep deletion denied
+		// so the scenario still verifies that backup precedes Subscription removal.
+		{APIGroups: []string{ocv1.GroupVersion.Group}, Resources: []string{"clusterobjectsets", "clusterobjectdeployments"}, Verbs: []string{"create"}},
 	}}
 	binding := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: identity}, RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: identity}, Subjects: []rbacv1.Subject{{Kind: "User", APIGroup: rbacv1.GroupName, Name: identity}}}
 	t.Cleanup(func() {

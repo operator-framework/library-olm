@@ -44,7 +44,7 @@ Verified during Phase 8 E2E.
 
 **COD transition (R2.7), in progress:** the library selects COD creation when its CRD exists,
 current-generation rollout checks, and COD-aware rollback. API types are pinned to
-operator-controller commit `77754d81ea01`, matching the COD CI controller and including
+operator-controller commit `9dd683afa190`, matching the COD CI controller and including
 the adoption label requirement. Migration stamps `apps.kubernetes.io/managed-by:
 operator-controller` on the ownerless COD before handoff; unit and E2E assertions
 check this label and preservation of the original COD identity. Directly created
@@ -58,8 +58,8 @@ PR #3058. On 2026-10-29, a disposable kind cluster running operator-controller m
 and its revisions 1 and 2 used `None` and `Prevent` collision protection. A separate
 full CLI fixture conversion and acknowledged rollback restored the Subscription,
 removed COD/COS resources, and preserved the operator Deployment UID and availability.
-The default E2E setup remains pinned to v1.12.0 for the legacy path. A separate CI job
-builds pinned COD-capable commit `77754d81ea0125d3a850e9fa57decf7a7255a409` and
+The default E2E setup builds the pinned current experimental controller. A separate CI job
+builds pinned COD-capable commit `9dd683afa190a67bc6c719abbafa97faa2d68b96` and
 runs covered handoff and workload-preserving rollback E2E targets. The rollback target
 passed locally on 2026-10-29.
 Both covered targets passed again on 2026-11-05 against `bbe43971eadd` on kind
@@ -67,6 +67,9 @@ Kubernetes 1.37, verifying labeled COD adoption and rollback.
 The covered handoff and rollback targets also pass against `77754d81ea01`,
 including COS manager-label assertions. Direct COS creation and the
 `UnmanagedRevision` terminal condition are covered by unit regressions.
+The current API uses typed `inlineManifest`/`secretRef` entries for creation and
+rollback. Older experimental COS/COD schemas are not supported; the controller
+and library must use matching definitions.
 
 ---
 
@@ -173,7 +176,7 @@ an explicitly selected OLMv1 system-managed namespace mode.
 - Move collected namespace-scoped resources to the target namespace in the migration COS and,
   after the target CE is installed, remove their source copies.
 - Delete the source namespace only with `--acknowledge-namespace-delete`; retain it by default.
-- `--system-managed-install-namespace` uses operator-controller `v1.12.0`'s experimental
+- `--system-managed-install-namespace` uses the pinned operator-controller experimental
   optional-namespace CRD. It capability-gates the mode and omits the CE field. Migration
   prepares the bundle-metadata namespace before its COS and imports it for the catalog
   revision's ownership handoff, after which OLMv1 manages it. Unit tests
@@ -232,3 +235,76 @@ Phase 1 (4717) ──► Phase 2 (4718) ──► Phase 3 (4719) ──► Phase
 
 Phase 7 (4723, operator-controller): APIService-owning operators remain unsupported; C3 is permanent
 ```
+
+Readiness reporting includes a lightweight COS API availability check; this is diagnostic, not a guarantee that a later write will succeed. Preparation does not repeat that COS CRD check. COD discovery remains necessary to select the revision manager. Gather (including CLI dry-run) and migration validate the prepared revision with a strict server-side dry-run create before removing OLMv0 management. Validation and creation share the same revision and Secret-reference builders; dry-run does not persist revisions or packed Secrets. The API server validates schema, admission, and permissions, but does not run controller-level validation of referenced workloads. Rollback permits verified newer sibling handoffs while retaining resource-UID, owner, and management-label checks.
+
+
+## Follow-ups from the COS/COD compatibility review
+
+These items remain outside PR93's initial compatibility scope. Keep them open
+until their implementation and validation are complete; a review response alone
+is not completion.
+
+### Protected handoff to ClusterExtension
+
+- [ ] Complete either [PR95 (COD-only)](https://github.com/operator-framework/library-olm/pull/95)
+  or [PR97 (COS+COD)](https://github.com/operator-framework/library-olm/pull/97).
+  These are alternative approaches, not sequential requirements.
+- COD-only: create an adoption-disabled COD with `collisionProtection: None`,
+  wait for its initial rollout, then atomically enable `Prevent`, remove
+  phase/object overrides, and enable CE adoption. Complete the protected rollout
+  before creating the CE.
+- COS+COD: complete initial COS adoption with `None` before creating the protected
+  COD with `Prevent`, then allow the CE handoff.
+- Validate that initial resources are adopted, later unrelated-object collisions
+  are rejected, and failed handoffs preserve recovery information.
+
+Source: [handoff safety review](https://github.com/operator-framework/library-olm/pull/93#discussion_r4556776332).
+
+### Explicit migration annotation cleanup
+
+- [ ] Design an explicit API/CLI operation for users who no longer need migration
+  recovery metadata. Do not remove annotations automatically after migration;
+  users may still need rollback, and historical values can become stale.
+- Classify provenance, invocation identity, backup data, and bundle metadata by
+  resource and consumer. Determine which fields can be removed safely and how
+  removing them affects rollback. Preserve metadata still used by controllers.
+- Define dry-run output and explicit user acknowledgment for any loss of recovery
+  capability. Test resource ownership checks, repeated cleanup, and preservation
+  of active workloads and controller-owned metadata.
+- Keep this operation distinct from the existing cleanup of OLMv0 conflicts.
+
+Source: [annotation retention discussion](https://github.com/operator-framework/library-olm/pull/93#discussion_r4556715778).
+
+### Align owner labels with upstream controllers
+
+- [ ] Revisit `LabelOwnerKind`, `LabelOwnerName`, and managed-by labels once
+  operator-controller/object-controller settle their requirements.
+- Until then, retain alignment with the pinned controller on COD metadata, COD
+  template metadata, and directly created COS resources. Do not remove labels
+  preemptively.
+- Coordinate any change with adoption, resource discovery, rollback, and cleanup
+  tests so removing a label does not break identity or ownership checks.
+
+Sources: [COD labels](https://github.com/operator-framework/library-olm/pull/93#discussion_r4556739359),
+[template labels](https://github.com/operator-framework/library-olm/pull/93#discussion_r4556747596),
+[COS labels](https://github.com/operator-framework/library-olm/pull/93#discussion_r4556851701).
+
+### Shared revision content conversion and typed construction
+
+- [ ] Centralize conversion from supported bundle formats and collected migration
+  resources to `ClusterObjectSetContent` in library-olm. Migration's `PhaseSort`
+  and operator-controller's internal phase construction currently duplicate
+  ordering and content-conversion logic.
+- Define a reusable converter with explicit inputs, shared phase-ordering tests,
+  and adapters for both callers. Keep controller reconciliation, migration
+  ownership, and Secret persistence outside the converter.
+- [ ] Replace the apply-configuration JSON marshal/unmarshal round-trip with a
+  consistent typed-object construction path. Address phase sorting and Secret
+  packing together rather than adding a manual conversion layer solely at the
+  COD constructor. Assess changes to exported APIs such as `PhaseSort` explicitly.
+- Preserve shared builders for server-side dry-run and actual creation, and test
+  inline manifests, packed references, optional fields, labels, and annotations.
+
+Sources: [shared converter](https://github.com/operator-framework/library-olm/pull/93#discussion_r4554296554),
+[typed construction](https://github.com/operator-framework/library-olm/pull/93#discussion_r4556794570).

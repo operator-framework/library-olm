@@ -102,24 +102,16 @@ jobs:
     timeout-minutes: 90
     env:
       E2E_FIXTURE_CLUSTER_NAME: library-olm-cod-e2e
-      E2E_FIXTURE_KUBECONFIG: ${{ github.workspace }}/operator-controller/.kubeconfig/library-olm-cod-e2e.kubeconfig
+      E2E_FIXTURE_KUBECONFIG: ${{ github.workspace }}/.kubeconfig/library-olm-cod-e2e.kubeconfig
       E2E_COVERAGE_DIR: ${{ github.workspace }}/artifacts/e2e/coverage/cod
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/checkout@v7
-        with:
-          repository: operator-framework/operator-controller
-          ref: 77754d81ea0125d3a850e9fa57decf7a7255a409
-          path: operator-controller
-          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - name: Build and deploy pinned COD-capable controller
-        run: make -C operator-controller run-experimental KIND_CLUSTER_NAME=library-olm-cod-e2e K8S_VERSION=1.37
-      - name: Install committed OLMv0 fixtures and catalog
+      - name: Install pinned controller, OLMv0 APIs, and fixture catalog
         run: make migration/e2e-fixture-setup
       - name: Verify COD handoff and catalog revision
         run: make migration/test-e2e-cos-supersession
@@ -148,7 +140,9 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Run in-cluster migration Job test
-        run: make migration/test-e2e-in-cluster-job
+        run: |
+          make migration/e2e-fixture-setup
+          make migration/test-e2e-in-cluster-job
       - name: Tear down fixture cluster
         if: always()
         run: E2E_CLUSTER_NAME=library-olm-fixture-e2e make migration/e2e-teardown

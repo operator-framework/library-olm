@@ -10,16 +10,18 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	ocv1 "github.com/operator-framework/operator-controller/api/v1"
 	ocv1ac "github.com/operator-framework/operator-controller/applyconfigurations/api/v1"
 )
 
+// largeConfigMap builds an inline ConfigMap with configurable payload size.
 func largeConfigMap(name, payload string) *ocv1ac.ClusterObjectSetObjectApplyConfiguration {
 	object := unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "ConfigMap",
 		"metadata": map[string]interface{}{"name": name},
 		"data":     map[string]interface{}{"payload": payload},
 	}}
-	return ocv1ac.ClusterObjectSetObject().WithObject(object)
+	return ocv1ac.ClusterObjectSetObject().WithType(ocv1.ObjectTypeInlineManifest).WithInlineManifest(object)
 }
 
 func TestSecretPackerSplitsLargeBundleAcrossSecrets(t *testing.T) {
@@ -53,6 +55,7 @@ func TestSecretPackerSplitsLargeBundleAcrossSecrets(t *testing.T) {
 	}
 }
 
+// TestSecretPackerCompressesOversizedObject checks compression preserves a manifest that exceeds the uncompressed size limit.
 func TestSecretPackerCompressesOversizedObject(t *testing.T) {
 	payload := strings.Repeat("x", gzipThreshold+1)
 	phase := ocv1ac.ClusterObjectSetPhase().WithObjects(largeConfigMap("large", payload))
@@ -81,5 +84,49 @@ func TestSecretPackerCompressesOversizedObject(t *testing.T) {
 	data, found, err := unstructured.NestedString(restored.Object, "data", "payload")
 	if err != nil || !found || data != payload {
 		t.Fatalf("restored payload length = %d, found = %t, error = %v", len(data), found, err)
+	}
+}
+
+// TestSecretPackerUsesObjectType verifies discriminator dispatch preserves existing references and rejects malformed inline entries.
+func TestSecretPackerUsesObjectType(t *testing.T) {
+	for _, kind := range []string{"inline", "reference", "missing type", "missing manifest", "unknown"} {
+		t.Run(kind, func(t *testing.T) {
+			object := largeConfigMap("config", "payload")
+			switch kind {
+			case "reference":
+				object.WithType(ocv1.ObjectTypeSecretReference).WithSecretRef(ocv1ac.SecretSourceRef().WithName("stored").WithNamespace("controller").WithKey("manifest"))
+				object.InlineManifest = nil
+			case "missing type":
+				object.Type = nil
+			case "missing manifest":
+				object.InlineManifest = nil
+			case "unknown":
+				object.WithType(ocv1.ObjectType("Unknown"))
+			}
+			phases := []*ocv1ac.ClusterObjectSetPhaseApplyConfiguration{ocv1ac.ClusterObjectSetPhase().WithObjects(object)}
+			before, err := json.Marshal(phases)
+			if err != nil {
+				t.Fatal(err)
+			}
+			packed, err := (&secretPacker{RevisionName: "example", OwnerName: "example", SystemNamespace: "controller"}).pack(phases)
+			if kind != "inline" && kind != "reference" {
+				if err == nil {
+					t.Fatal("accepted malformed union")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (len(packed.Refs) > 0) != (kind == "inline") {
+				t.Fatalf("wrong union member packed: %+v", packed)
+			}
+			if kind == "reference" {
+				after, marshalErr := json.Marshal(phases)
+				if marshalErr != nil || string(before) != string(after) || len(packed.Secrets) != 0 {
+					t.Fatalf("existing reference was changed or repacked: phases=%s secrets=%d error=%v", after, len(packed.Secrets), marshalErr)
+				}
+			}
+		})
 	}
 }

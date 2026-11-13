@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -464,6 +465,7 @@ func (c conflictCleanupFailureClient) Delete(ctx context.Context, object client.
 	return c.Client.Delete(ctx, object, opts...)
 }
 
+// TestCleanupConflictReportsCSVAndArtifactFailures checks that cleanup errors retain their resource context.
 func TestCleanupConflictReportsCSVAndArtifactFailures(t *testing.T) {
 	for _, scenario := range []string{"list", "delete CSV", "delete condition"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -484,5 +486,144 @@ func TestCleanupConflictReportsCSVAndArtifactFailures(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRollbackSnapshotAllowsVerifiedSiblingHandoff permits verified adoption races while rejecting foreign owners and replaced resources.
+func TestRollbackSnapshotAllowsVerifiedSiblingHandoff(t *testing.T) {
+	foreignOwner := *metav1.NewControllerRef(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "foreign", UID: "foreign"}}, corev1.SchemeGroupVersion.WithKind("ConfigMap"))
+	for _, scenario := range []struct {
+		name             string
+		siblingGroup     string
+		siblingHasObject bool
+		revision         string
+		managedBy        string
+		uid              types.UID
+		owners           []metav1.OwnerReference
+		wantError        bool
+	}{
+		{name: "sibling handoff", siblingGroup: "example", siblingHasObject: true, revision: "3", managedBy: "olm.operatorframework.io", uid: "resource"},
+		{name: "unlisted revision", siblingGroup: "example", siblingHasObject: true, revision: "4", managedBy: "olm.operatorframework.io", uid: "resource", wantError: true},
+		{name: "foreign controller", siblingGroup: "example", siblingHasObject: true, revision: "3", managedBy: "olm.operatorframework.io", uid: "resource", owners: []metav1.OwnerReference{foreignOwner}, wantError: true},
+		{name: "changed label", siblingGroup: "example", siblingHasObject: true, revision: "3", managedBy: "foreign", uid: "resource", wantError: true},
+		{name: "replaced object", siblingGroup: "example", siblingHasObject: true, revision: "3", managedBy: "olm.operatorframework.io", uid: "replacement", wantError: true},
+		{name: "sibling omits object", siblingGroup: "example", siblingHasObject: false, revision: "3", managedBy: "olm.operatorframework.io", uid: "resource", wantError: true},
+		{name: "different group", siblingGroup: "other", siblingHasObject: true, revision: "3", managedBy: "olm.operatorframework.io", uid: "resource", wantError: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			ctx := context.Background()
+			manifest := unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "config", "namespace": "source"}}}
+			first := ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "example-2", UID: "revision-2"}, Spec: ocv1.ClusterObjectSetSpec{Group: "example", Revision: 2, Phases: []ocv1.ClusterObjectSetPhase{{Name: "deploy", Objects: []ocv1.ClusterObjectSetObject{{Type: ocv1.ObjectTypeInlineManifest, InlineManifest: manifest}}}}}}
+			second := *first.DeepCopy()
+			second.Name = "example-3"
+			second.UID = "revision-3"
+			second.Spec.Revision = 3
+			second.Spec.Group = scenario.siblingGroup
+			if !scenario.siblingHasObject {
+				second.Spec.Phases = nil
+			}
+			live := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "source", UID: "resource", OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(&first, ocv1.GroupVersion.WithKind(ocv1.ClusterObjectSetKind))}, Annotations: map[string]string{boxcutterRevisionAnnotation: "2"}, Labels: map[string]string{boxcutterManagedByLabel: "olm.operatorframework.io"}}}
+			m := migrationTestClient(t, live)
+			snapshot, err := m.snapshotRevisionObjects(ctx, []ocv1.ClusterObjectSet{first, second})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(snapshot) != 1 {
+				t.Fatalf("snapshot = %+v", snapshot)
+			}
+			// Permitted sibling identities must survive a persisted-snapshot merge.
+			old := snapshot[0]
+			old.AdditionalOwners = nil
+			mergedSnapshot, _, mergeErr := mergeRollbackObjects([]rollbackObject{old}, snapshot)
+			if mergeErr != nil || !reflect.DeepEqual(mergedSnapshot, snapshot) {
+				t.Fatalf("lost sibling identities: %+v, %v", mergedSnapshot, mergeErr)
+			}
+			// Adoption completes after the snapshot; GC then removes the verified owner.
+			live.OwnerReferences = scenario.owners
+			live.Annotations[boxcutterRevisionAnnotation] = scenario.revision
+			live.Labels[boxcutterManagedByLabel] = scenario.managedBy
+			live.UID = scenario.uid
+			if err := m.Client.Update(ctx, live); err != nil {
+				t.Fatal(err)
+			}
+			err = m.releaseRevisionObjects(ctx, snapshot)
+			if scenario.wantError {
+				if err == nil {
+					t.Fatal("released unverified object")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = m.Client.Get(ctx, client.ObjectKeyFromObject(live), live); err != nil {
+				t.Fatal(err)
+			}
+			if live.Annotations[boxcutterRevisionAnnotation] != "" || live.UID != "resource" {
+				t.Fatalf("release lost identity or retained metadata: %+v", live)
+			}
+			// The permitted transition must also survive snapshot merges on retry.
+			merged, _, err := mergeRollbackObjects(snapshot, []rollbackObject{{Identity: snapshot[0].Identity, UID: "resource", OwnerUID: "revision-3", Revision: "3", ManagedBy: "olm.operatorframework.io"}})
+			if err != nil || len(merged[0].AdditionalOwners) != 1 {
+				t.Fatalf("merge = %+v, %v", merged, err)
+			}
+		})
+	}
+}
+
+// TestRollbackSnapshotOrdering is independent of revision list and manifest order.
+func TestRollbackSnapshotOrdering(t *testing.T) {
+	objects := make([]ocv1.ClusterObjectSetObject, 0, 2)
+	for _, name := range []string{"z-config", "a-config"} {
+		objects = append(objects, ocv1.ClusterObjectSetObject{
+			Type: ocv1.ObjectTypeInlineManifest,
+			InlineManifest: unstructured.Unstructured{Object: map[string]interface{}{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]interface{}{"name": name, "namespace": "source"},
+			}},
+		})
+	}
+	first := ocv1.ClusterObjectSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "example-1", UID: "revision-1"},
+		Spec: ocv1.ClusterObjectSetSpec{Group: "example", Revision: 1,
+			Phases: []ocv1.ClusterObjectSetPhase{{Name: "deploy", Objects: objects}}},
+	}
+	second, tenth := *first.DeepCopy(), *first.DeepCopy()
+	second.Name, second.UID, second.Spec.Revision = "example-2", "revision-2", 2
+	tenth.Name, tenth.UID, tenth.Spec.Revision = "example-10", "revision-10", 10
+	live := make([]runtime.Object, 0, len(objects))
+	for _, object := range objects {
+		live = append(live, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+			Name: object.InlineManifest.GetName(), Namespace: "source", UID: types.UID(object.InlineManifest.GetName()),
+			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(&first, ocv1.GroupVersion.WithKind(ocv1.ClusterObjectSetKind))},
+			Annotations:     map[string]string{boxcutterRevisionAnnotation: "1"},
+			Labels:          map[string]string{boxcutterManagedByLabel: "olm.operatorframework.io"},
+		}})
+	}
+	m := migrationTestClient(t, live...)
+	var expected []rollbackObject
+	for _, order := range [][]ocv1.ClusterObjectSet{
+		{tenth, first, second}, {second, tenth, first}, {first, second, tenth},
+	} {
+		before := slices.Clone(order)
+		got, err := m.snapshotRevisionObjects(t.Context(), order)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(order, before) {
+			t.Fatal("snapshot reordered caller's revisions")
+		}
+		if len(got) != 2 || got[0].Identity.GetName() != "a-config" || got[1].Identity.GetName() != "z-config" {
+			t.Fatalf("unexpected resource order: %+v", got)
+		}
+		for _, object := range got {
+			if len(object.AdditionalOwners) != 2 || object.AdditionalOwners[0].Revision != "2" || object.AdditionalOwners[1].Revision != "10" {
+				t.Fatalf("unexpected sibling order: %+v", object.AdditionalOwners)
+			}
+		}
+		if expected != nil && !reflect.DeepEqual(got, expected) {
+			t.Fatalf("snapshot depends on revision input order: got %+v, want %+v", got, expected)
+		}
+		expected = got
 	}
 }

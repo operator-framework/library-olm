@@ -71,8 +71,9 @@ func TestDeploymentReadiness(t *testing.T) {
 	}
 }
 
+// TestPrepareDeployment covers invalid names, unavailable APIs, and occupied deployment identities.
 func TestPrepareDeployment(t *testing.T) {
-	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: clusterObjectDeploymentCRDName}, Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{Type: apiextensionsv1.Established, Status: apiextensionsv1.ConditionTrue}}}}
+	crd := establishedClusterObjectDeploymentCRD()
 	ctx := context.Background()
 	if err := migrationTestClient(t).prepareClusterObjectDeployment(ctx, "example"); err == nil {
 		t.Fatal("accepted missing CRD")
@@ -152,6 +153,7 @@ func TestDeploymentTerminalRevisionFailures(t *testing.T) {
 	}
 }
 
+// TestAutomaticDeploymentSelection verifies API discovery selects the manager without unsafe fallback.
 func TestAutomaticDeploymentSelection(t *testing.T) {
 	for _, tc := range []struct {
 		name                                string
@@ -163,10 +165,10 @@ func TestAutomaticDeploymentSelection(t *testing.T) {
 		{name: "discovery failure does not fall back", failDiscovery: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cosCRD := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName}, Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{Type: apiextensionsv1.Established, Status: apiextensionsv1.ConditionTrue}}}}
+			cosCRD := establishedClusterObjectSetCRD()
 			m := migrationTestClient(t, cosCRD)
 			if tc.present {
-				codCRD := cosCRD.DeepCopy()
+				codCRD := establishedClusterObjectDeploymentCRD()
 				codCRD.Name = clusterObjectDeploymentCRDName
 				codCRD.ResourceVersion = ""
 				if !tc.established {
@@ -477,6 +479,7 @@ type deploymentDeletionClient struct {
 	stopped bool
 }
 
+// Delete checks that rollback stops the deployment before removing its revisions.
 func (c *deploymentDeletionClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
 	options := (&client.DeleteOptions{}).ApplyOptions(opts)
 	switch obj.(type) {
@@ -491,4 +494,11 @@ func (c *deploymentDeletionClient) Delete(ctx context.Context, obj client.Object
 		}
 	}
 	return c.Client.Delete(ctx, obj, opts...)
+}
+
+// establishedClusterObjectDeploymentCRD returns an established COD API for fake-client lifecycle tests.
+func establishedClusterObjectDeploymentCRD() *apiextensionsv1.CustomResourceDefinition {
+	crd := establishedClusterObjectSetCRD()
+	crd.Name = clusterObjectDeploymentCRDName
+	return crd
 }

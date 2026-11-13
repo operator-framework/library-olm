@@ -71,6 +71,7 @@ func TestDryRunRejectsIncompatibleInputs(t *testing.T) {
 	}
 }
 
+// TestDryRunRejectsSystemManagedSourceNamespace verifies dry-run refuses a managed namespace that resolves back to the source.
 func TestDryRunRejectsSystemManagedSourceNamespace(t *testing.T) {
 	scheme := runtime.NewScheme()
 	for _, register := range []func(*runtime.Scheme) error{corev1.AddToScheme, operatorsv1.AddToScheme, operatorsv1alpha1.AddToScheme, ocv1.AddToScheme, apiextensionsv1.AddToScheme} {

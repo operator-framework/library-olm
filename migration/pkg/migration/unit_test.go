@@ -149,6 +149,7 @@ func healthySubscriptionFixtures() (*operatorsv1alpha1.Subscription, *operatorsv
 	return sub, csv
 }
 
+// establishedClusterObjectSetCRD returns an established COS API for fake-client lifecycle tests.
 func establishedClusterObjectSetCRD() *apiextensionsv1.CustomResourceDefinition {
 	return &apiextensionsv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
@@ -386,19 +387,20 @@ func TestCompatibilityPureChecks(t *testing.T) {
 	}
 }
 
+// TestPhaseSortAndResourceKeys checks deterministic resource ordering and identity keys.
 func TestPhaseSortAndResourceKeys(t *testing.T) {
 	object := func(group, kind, namespace, name string) ocv1ac.ClusterObjectSetObjectApplyConfiguration {
 		u := unstructured.Unstructured{}
 		u.SetGroupVersionKind(schema.GroupVersionKind{Group: group, Version: "v1", Kind: kind})
 		u.SetNamespace(namespace)
 		u.SetName(name)
-		return *ocv1ac.ClusterObjectSetObject().WithObject(u)
+		return *ocv1ac.ClusterObjectSetObject().WithType(ocv1.ObjectTypeInlineManifest).WithInlineManifest(u)
 	}
 	phases := PhaseSort([]ocv1ac.ClusterObjectSetObjectApplyConfiguration{object("apps", "Deployment", "z", "b"), object("", "Secret", "z", "a"), object("apiextensions.k8s.io", "CustomResourceDefinition", "", "widgets.example.io"), object("apps", "Deployment", "a", "a")})
 	if len(phases) != 3 || *phases[0].Name != string(PhaseConfiguration) || *phases[1].Name != string(PhaseCRDs) || *phases[2].Name != string(PhaseDeploy) {
 		t.Fatalf("unexpected phases %#v", phases)
 	}
-	if *phases[2].CollisionProtection != ocv1.CollisionProtectionNone || phases[2].Objects[0].Object.GetNamespace() != "a" {
+	if *phases[2].CollisionProtection != ocv1.CollisionProtectionNone || phases[2].Objects[0].InlineManifest.GetNamespace() != "a" {
 		t.Fatalf("deployment phase not sorted with migration collision protection: %#v", phases[2])
 	}
 	a := unstructured.Unstructured{}
@@ -412,9 +414,10 @@ func TestPhaseSortAndResourceKeys(t *testing.T) {
 	}
 }
 
+// TestSecretPacker verifies packed manifests can be recovered through their generated Secret references.
 func TestSecretPacker(t *testing.T) {
 	obj := unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "one"}, "data": map[string]interface{}{"x": "y"}}}
-	phases := []*ocv1ac.ClusterObjectSetPhaseApplyConfiguration{ocv1ac.ClusterObjectSetPhase().WithObjects(ocv1ac.ClusterObjectSetObject().WithObject(obj), ocv1ac.ClusterObjectSetObject().WithObject(obj))}
+	phases := []*ocv1ac.ClusterObjectSetPhaseApplyConfiguration{ocv1ac.ClusterObjectSetPhase().WithObjects(ocv1ac.ClusterObjectSetObject().WithType(ocv1.ObjectTypeInlineManifest).WithInlineManifest(obj), ocv1ac.ClusterObjectSetObject().WithType(ocv1.ObjectTypeInlineManifest).WithInlineManifest(obj))}
 	result, err := (&secretPacker{RevisionName: "rev", OwnerName: "ce", SystemNamespace: "system"}).pack(phases)
 	if err != nil || len(result.Secrets) != 1 || len(result.Secrets[0].Data) != 1 || len(result.Refs) != 2 {
 		t.Fatalf("pack result=%#v err=%v", result, err)
@@ -893,6 +896,7 @@ func TestCleanupResultErr(t *testing.T) {
 	}
 }
 
+// TestPrepareClusterObjectSet covers migration defaults and prerequisite validation.
 func TestPrepareClusterObjectSet(t *testing.T) {
 	establishedCRD := &apiextensionsv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
@@ -935,6 +939,7 @@ func TestPrepareClusterObjectSetRejectsExistingClusterExtension(t *testing.T) {
 	}
 }
 
+// TestPrepareClusterObjectSetRejectsDeletingOperatorControllerNamespace ensures a terminating controller namespace prevents staging.
 func TestPrepareClusterObjectSetRejectsDeletingOperatorControllerNamespace(t *testing.T) {
 	establishedCRD := &apiextensionsv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
@@ -968,17 +973,18 @@ func TestPrepareClusterObjectSetRejectsDeletingOperatorControllerNamespace(t *te
 	}
 }
 
-func TestPrepareClusterObjectSetRequiresEstablishedCRD(t *testing.T) {
+// TestReadinessRequiresEstablishedCRD retains the lightweight API diagnostic.
+func TestReadinessRequiresEstablishedCRD(t *testing.T) {
 	m := migrationTestClient(t)
-	if _, err := m.PrepareClusterObjectSet(context.Background(), Options{}); err == nil || !strings.Contains(err.Error(), clusterObjectSetCRDName) {
-		t.Fatalf("PrepareClusterObjectSet() error = %v, want missing CRD error", err)
+	if err := m.ensureClusterObjectSetCRD(context.Background()); err == nil || !strings.Contains(err.Error(), clusterObjectSetCRDName) {
+		t.Fatalf("ensureClusterObjectSetCRD() error = %v, want missing CRD error", err)
 	}
 
 	m = migrationTestClient(t, &apiextensionsv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName},
 	})
-	if _, err := m.PrepareClusterObjectSet(context.Background(), Options{}); err == nil || !strings.Contains(err.Error(), "not established") {
-		t.Fatalf("PrepareClusterObjectSet() error = %v, want unestablished CRD error", err)
+	if err := m.ensureClusterObjectSetCRD(context.Background()); err == nil || !strings.Contains(err.Error(), "not established") {
+		t.Fatalf("ensureClusterObjectSetCRD() error = %v, want unestablished CRD error", err)
 	}
 }
 
@@ -1272,12 +1278,12 @@ func TestPrerequisitesAndRecoveryErrors(t *testing.T) {
 	}
 }
 
-func TestGatherRequiresClusterObjectSetPrerequisites(t *testing.T) {
+func TestGatherRequiresControllerNamespace(t *testing.T) {
 	sub, csv := healthySubscriptionFixtures()
 	m := migrationTestClient(t, sub, csv)
 	_, err := m.Gather(context.Background(), Options{SubscriptionName: sub.Name, SubscriptionNamespace: sub.Namespace})
-	if err == nil || !strings.Contains(err.Error(), "ClusterObjectSet CRD") {
-		t.Fatalf("Gather() without the target CRD = %v, want a prerequisite error", err)
+	if err == nil || !strings.Contains(err.Error(), "operator-controller Deployment") {
+		t.Fatalf("Gather() without the controller namespace = %v, want a prerequisite error", err)
 	}
 	if err := m.Client.Get(context.Background(), client.ObjectKeyFromObject(sub), &operatorsv1alpha1.Subscription{}); err != nil {
 		t.Fatalf("Gather() changed source Subscription: %v", err)
@@ -1895,5 +1901,26 @@ func TestRollbackRejectsMissingSourceNamespaceWithoutMutation(t *testing.T) {
 	}
 	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(cos), &ocv1.ClusterObjectSet{}); err != nil {
 		t.Fatalf("rollback deleted ClusterObjectSet before source namespace preflight: %v", err)
+	}
+}
+
+// TestPrepareDefersCOSAPIValidation leaves schema and create validation to dry-run.
+func TestPrepareDefersCOSAPIValidation(t *testing.T) {
+	for _, present := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unestablished CRD present=%t", present), func(t *testing.T) {
+			m := migrationTestClient(t)
+			if present {
+				if err := m.Client.Create(t.Context(), &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: clusterObjectSetCRDName}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			opts, err := m.PrepareClusterObjectSet(t.Context(), Options{ClusterExtensionName: "example", SystemNamespace: "controller"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if opts.UseClusterObjectDeployment {
+				t.Fatal("selected COD without a COD API")
+			}
+		})
 	}
 }
