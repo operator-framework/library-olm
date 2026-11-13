@@ -308,3 +308,5 @@ Sources: [COD labels](https://github.com/operator-framework/library-olm/pull/93#
 
 Sources: [shared converter](https://github.com/operator-framework/library-olm/pull/93#discussion_r4554296554),
 [typed construction](https://github.com/operator-framework/library-olm/pull/93#discussion_r4556794570).
+
+Rollback persists verified resource identities and UIDs on the restored Subscription before deleting the CE backup. Remigration includes still-unowned retained resources (including catalog-generated RBAC) omitted from the OLMv0 inventory; missing resources are skipped, replacements and newly controlled resources are rejected, and normal collection is deduplicated.
