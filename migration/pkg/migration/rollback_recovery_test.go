@@ -519,7 +519,7 @@ func TestRollbackSnapshotAllowsVerifiedSiblingHandoff(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			ctx := context.Background()
 			manifest := unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "config", "namespace": "source"}}}
-			first := ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "example-2", UID: "revision-2"}, Spec: ocv1.ClusterObjectSetSpec{Group: "example", Revision: 2, Phases: []ocv1.ClusterObjectSetPhase{{Name: "deploy", Objects: []ocv1.ClusterObjectSetObject{{Type: ocv1.ObjectTypeInlineManifest, InlineManifest: manifest}}}}}}
+			first := ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "example-2", UID: "revision-2"}, Spec: ocv1.ClusterObjectSetSpec{Group: "example", Revision: 2, ClusterObjectSetContent: ocv1.ClusterObjectSetContent{Phases: []ocv1.ClusterObjectSetPhase{{Name: "deploy", Objects: []ocv1.ClusterObjectSetObject{{Type: ocv1.ObjectTypeInlineManifest, InlineManifest: manifest}}}}}}}
 			second := *first.DeepCopy()
 			second.Name = "example-3"
 			second.UID = "revision-3"
@@ -592,7 +592,7 @@ func TestRollbackSnapshotOrdering(t *testing.T) {
 	first := ocv1.ClusterObjectSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "example-1", UID: "revision-1"},
 		Spec: ocv1.ClusterObjectSetSpec{Group: "example", Revision: 1,
-			Phases: []ocv1.ClusterObjectSetPhase{{Name: "deploy", Objects: objects}}},
+			ClusterObjectSetContent: ocv1.ClusterObjectSetContent{Phases: []ocv1.ClusterObjectSetPhase{{Name: "deploy", Objects: objects}}}},
 	}
 	second, tenth := *first.DeepCopy(), *first.DeepCopy()
 	second.Name, second.UID, second.Spec.Revision = "example-2", "revision-2", 2

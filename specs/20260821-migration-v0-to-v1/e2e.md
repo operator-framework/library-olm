@@ -14,7 +14,7 @@ refusals, not features this library is expected to implement.
 
 ### COD transition
 
-The library API dependency and COD CI controller both use commit `9dd683afa190`.
+The library API dependency and COD CI controller both use commit `dae9b613163a`.
 The handoff test checks that the ownerless migration COD
 has `apps.kubernetes.io/managed-by: operator-controller` before CE creation and
 retains the label and COD UID after adoption.
@@ -39,7 +39,7 @@ conversion and acknowledged rollback preserved the operator Deployment UID and i
 available replica, restored the Subscription, and removed the COD and both COS revisions.
 The `migration/test-e2e-cod-rollback` target now automates those rollback assertions and
 collects CLI coverage. A separate CI job builds and installs operator-controller from
-pinned commit `9dd683afa190a67bc6c719abbafa97faa2d68b96`, then runs the handoff and
+pinned commit `dae9b613163a8fc5df36e3b9ad5a770a64c0048c`, then runs the handoff and
 rollback targets. Default suites also build this pinned controller from source,
 using upstream build targets and the experimental installer. Docker, Git, Python 3, and
 `envsubst` must be available locally. Setup loads the built images into the
@@ -73,7 +73,7 @@ to match generated manifests, regardless of caller image overrides.
 Pin controller versions and installers in CI; the public live catalog above is an
 explicit exception. The fixture
 registry's `latest` tag is private to the disposable cluster and rebuilt from committed inputs on
-every setup. The default bootstrap pins OLMv0 to `v0.46.0`, OLMv1 to commit `9dd683afa190`, and kind to
+every setup. The default bootstrap pins OLMv0 to `v0.46.0`, OLMv1 to commit `dae9b613163a`, and kind to
 `v0.33.0` with the digest-pinned Kubernetes `v1.37.0` node image; CI should
 mirror those release artifacts and override the URLs when it cannot access GitHub. The job inputs
 are the kind node image, OLMv0 manifest URL and digest, operator-controller source commit, and (only for the smoke suite) the catalog image/package/channel/CSV
