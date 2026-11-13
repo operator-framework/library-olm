@@ -20,13 +20,19 @@ import (
 func TestRevisionServerDryRun(t *testing.T) {
 	rejection := errors.New("API server rejected candidate")
 	for _, deployment := range []bool{false, true} {
-		for _, serverErr := range []error{nil, rejection} {
+		for _, rejectAt := range []int{0, 1, 2} {
+			if !deployment && rejectAt == 2 {
+				continue
+			}
 			name := "COS"
 			if deployment {
 				name = "COD"
 			}
-			if serverErr != nil {
-				name += "/rejected"
+			if rejectAt == 1 {
+				name += "/cos-rejected"
+			}
+			if rejectAt == 2 {
+				name += "/cod-rejected"
 			}
 			t.Run(name, func(t *testing.T) {
 				m := migrationTestClient(t)
@@ -41,12 +47,12 @@ func TestRevisionServerDryRun(t *testing.T) {
 						var phases []ocv1.ClusterObjectSetPhase
 						switch candidate := obj.(type) {
 						case *ocv1.ClusterObjectSet:
-							if deployment || candidate.Name != "example-1" {
+							if calls != 1 || candidate.Name != "example-1" {
 								t.Fatalf("unexpected COS: %+v", candidate)
 							}
 							phases = candidate.Spec.Phases
 						case *ocv1.ClusterObjectDeployment:
-							if !deployment || candidate.Name != "example" {
+							if !deployment || calls != 2 || candidate.Name != "example" || candidate.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
 								t.Fatalf("unexpected COD: %+v", candidate)
 							}
 							phases = candidate.Spec.Template.Spec.Phases
@@ -60,7 +66,10 @@ func TestRevisionServerDryRun(t *testing.T) {
 						if object.Type != ocv1.ObjectTypeSecretReference || object.SecretRef.Namespace != "controller" || object.SecretRef.Key == "" {
 							t.Fatalf("unpacked candidate: %+v", object)
 						}
-						return serverErr
+						if calls == rejectAt {
+							return rejection
+						}
+						return nil
 					},
 					Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
 						t.Fatal("dry run deleted an object")
@@ -70,7 +79,11 @@ func TestRevisionServerDryRun(t *testing.T) {
 				opts := Options{ClusterExtensionName: "example", SystemNamespace: "controller", UseClusterObjectDeployment: deployment}
 				info := &MigrationInfo{CollectedObjects: []unstructured.Unstructured{{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "config", "namespace": "operators"}, "data": map[string]interface{}{"key": "value"}}}}}
 				err := m.validateMigrationRevision(t.Context(), opts, info)
-				if !errors.Is(err, serverErr) || calls != 1 {
+				wantCalls := 1
+				if deployment && rejectAt != 1 {
+					wantCalls = 2
+				}
+				if (rejectAt == 0 && err != nil) || (rejectAt != 0 && !errors.Is(err, rejection)) || calls != wantCalls {
 					t.Fatalf("calls=%d, error=%v", calls, err)
 				}
 				var secrets corev1.SecretList
