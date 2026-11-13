@@ -43,7 +43,7 @@ type failingMigrationClient struct {
 	unknownCOSCreate  bool
 	failCECreate      bool
 	failCEAfterCreate bool
-	blockCOS          bool
+	invalidCOS        bool
 	succeedCOS        bool
 }
 
@@ -65,6 +65,7 @@ func (c canceledScaleClient) Update(ctx context.Context, obj client.Object, opts
 	return c.Client.Update(ctx, obj, opts...)
 }
 
+// Create injects configured creation failures for migration recovery tests.
 func (c failingMigrationClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
 	if c.failCOSCreate {
 		if _, ok := obj.(*ocv1.ClusterObjectSet); ok {
@@ -91,19 +92,20 @@ func (c failingMigrationClient) Create(ctx context.Context, obj client.Object, o
 	}
 	if c.succeedCOS {
 		if cos, ok := obj.(*ocv1.ClusterObjectSet); ok {
+			cos.Status.CompletedAt = metav1.Now()
 			cos.Status.Conditions = []metav1.Condition{
-				{Type: "Succeeded", Status: metav1.ConditionTrue},
-				{Type: "Available", Status: metav1.ConditionTrue},
+				{Type: ocv1.ClusterObjectSetTypeReady, Status: metav1.ConditionTrue},
 			}
 		}
 	}
 	return c.Client.Create(ctx, obj, opts...)
 }
 
+// Get injects configured read failures for migration recovery tests.
 func (c failingMigrationClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-	if c.blockCOS {
+	if c.invalidCOS {
 		if cos, ok := obj.(*ocv1.ClusterObjectSet); ok {
-			cos.Status.Conditions = []metav1.Condition{{Type: "Succeeded", Status: metav1.ConditionFalse, Reason: "Blocked"}}
+			cos.Status.Conditions = []metav1.Condition{{Type: ocv1.ClusterObjectSetTypeReady, Status: metav1.ConditionFalse, Reason: ocv1.ClusterObjectSetReasonInvalidSpecification}}
 			return nil
 		}
 	}
@@ -1699,11 +1701,12 @@ func TestCreateMigrationResourcesPreservesTrackedCOSAfterClusterExtensionFailure
 	}
 }
 
+// TestCreateClusterObjectSetCleansSecretsAfterReadinessFailure checks failed staging cleans its owned Secret artifacts.
 func TestCreateClusterObjectSetCleansSecretsAfterReadinessFailure(t *testing.T) {
 	ctx := context.Background()
 	m := migrationTestClient(t, establishedClusterObjectSetCRD())
 	baseClient := m.Client
-	m.Client = failingMigrationClient{Client: baseClient, blockCOS: true}
+	m.Client = failingMigrationClient{Client: baseClient, invalidCOS: true}
 	object := unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]interface{}{"name": "operator-config", "namespace": "ns"},
 	}}
@@ -1778,10 +1781,11 @@ func TestRecoverCreatedMigrationResourcesPreservesActiveTargetResources(t *testi
 	}
 }
 
+// TestWaitForClusterObjectSetAvailable requires the current Ready condition for workload availability.
 func TestWaitForClusterObjectSetAvailable(t *testing.T) {
 	ctx := context.Background()
 	cos := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "sub-1"}, Status: ocv1.ClusterObjectSetStatus{Conditions: []metav1.Condition{{
-		Type: "Available", Status: metav1.ConditionTrue,
+		Type: ocv1.ClusterObjectSetTypeReady, Status: metav1.ConditionTrue,
 	}}}}
 	m := migrationTestClient(t, cos)
 	if err := m.WaitForClusterObjectSetAvailable(ctx, cos.Name); err != nil {

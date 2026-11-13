@@ -352,7 +352,7 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 		t.Fatal("migration COS lacks the object-controller adoption label")
 	}
 	if !cosSucceeded(before.Items[0]) {
-		t.Fatal("pre-existing COS did not reach Succeeded=True before CE creation")
+		t.Fatal("pre-existing COS did not set status.completedAt before CE creation")
 	}
 	if before.Items[0].Spec.CollisionProtection != ocv1.CollisionProtectionNone {
 		t.Fatalf("migration COS collisionProtection = %q, want %q", before.Items[0].Spec.CollisionProtection, ocv1.CollisionProtectionNone)
@@ -423,16 +423,9 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 	}
 }
 
+// cosSucceeded reports revision completion through completedAt, without legacy condition fallbacks.
 func cosSucceeded(cos ocv1.ClusterObjectSet) bool {
-	if !cos.Status.CompletedAt.IsZero() {
-		return true
-	}
-	for _, condition := range cos.Status.Conditions {
-		if condition.Type == "Succeeded" && condition.Status == metav1.ConditionTrue {
-			return true
-		}
-	}
-	return false
+	return !cos.Status.CompletedAt.IsZero()
 }
 
 func newMigrator(t *testing.T) (*migration.Migrator, client.Client, *rest.Config) {

@@ -132,7 +132,7 @@ flag is set; CE carries the matching annotation.
   CSV-associated InstallPlans (R2.6; deduplicate by namespace/name) → collect
   (primary: `Operator` CR `status.components.refs`; supplementary: `olm.owner` label query,
   ownerRef query, InstallPlan steps; dedup by GVK+ns+name — see R5) → create COS (wait
-  `Succeeded=True`) → create CE → cleanup.
+  `status.completedAt` and `Ready=True`) → create CE → cleanup.
   `--dry-run` previews without mutation. `--all` prints the four-section summary, then converts
   each Eligible operator; `--continue-on-error` to keep going. Batch classification uses
   the requested acknowledgment overrides; `-n` and `--ce-name` are rejected with `--all`.
