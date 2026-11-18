@@ -153,11 +153,13 @@ The directory is created if it does not exist. Failure to list associated plans 
 ClusterExtension, with controller-managed COS revisions. COD is the only migration path. Missing, deleting, unestablished, or unreadable COD CRDs block check, dry-run, and migration before OLMv0 resources change. COD migration requires an established
 COD CRD and operator-controller's COD-backed ClusterExtension applier (upstream PR #3058).
 Create the deployment with collision protection `None` and no CE-adoption label.
-Wait for current-generation rollout completion and availability, then atomically
-change protection to `Prevent` and add `app.kubernetes.io/managed-by: operator-controller`.
-Remove phase/object protection overrides in that same resource-version-guarded patch.
-Recheck UID, generation, migration invocation, readiness, and absence of controller
-ownership before patching. Only after a successful patch create the CE. Failures
+Wait for current-generation rollout completion and availability, then change protection
+to `Prevent` and remove phase/object overrides in a resource-version-guarded patch.
+Wait for the protected rollout to complete before adding `app.kubernetes.io/managed-by:
+operator-controller` in a separate guarded patch. Recheck UID, generation, migration
+invocation, readiness, protection, and absence of controller ownership before enabling
+adoption. Create the CE only after both rollouts and the adoption-label patch succeed. Failures
+
 preserve the potentially active COD and its Secrets and refuse automatic OLMv0 recovery.
 Later rollouts must reject unrelated existing objects rather than blindly adopt them.
 

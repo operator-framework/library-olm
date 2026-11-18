@@ -244,15 +244,11 @@ is not completion.
 
 ### Protected handoff to ClusterExtension
 
-- [ ] Complete either [PR95 (COD-only)](https://github.com/operator-framework/library-olm/pull/95)
-  or [PR97 (COS+COD)](https://github.com/operator-framework/library-olm/pull/97).
-  These are alternative approaches, not sequential requirements.
+- [ ] Complete [PR95 (COD-only)](https://github.com/operator-framework/library-olm/pull/95).
+  COD-only was selected; the superseded COS+COD alternative was closed.
 - COD-only: create an adoption-disabled COD with `collisionProtection: None`,
-  wait for its initial rollout, then atomically enable `Prevent`, remove
-  phase/object overrides, and enable CE adoption. Complete the protected rollout
-  before creating the CE.
-- COS+COD: complete initial COS adoption with `None` before creating the protected
-  COD with `Prevent`, then allow the CE handoff.
+  wait for its initial rollout, enable `Prevent` and remove phase/object overrides,
+  then wait for the protected rollout before enabling CE adoption and creating the CE.
 - Validate that initial resources are adopted, later unrelated-object collisions
   are rejected, and failed handoffs preserve recovery information.
 
@@ -322,9 +318,9 @@ After capturing the backup and before removing OLMv0 management, validate the st
 ### Protected COD-only handoff
 
 Migration creates a COD with `None` and without its CE-adoption label, waits for
-initial rollout completion and availability, then atomically enables `Prevent`
-and CE adoption. It clears permissive phase/object overrides in the same guarded
-patch before creating the CE. Failed or uncertain handoffs preserve staging resources.
+initial rollout completion and availability, then enables `Prevent` and clears
+permissive phase/object overrides in a guarded patch. After the protected rollout
+completes, a separate guarded patch enables CE adoption before creating the CE. Failed or uncertain handoffs preserve staging resources.
 The protection-only template update may create an intermediate protected revision.
 
 `make migration/test-e2e-cos-supersession` also runs

@@ -614,7 +614,7 @@ func TestCreateMigrationResourcesSharesDefaults(t *testing.T) {
 	}
 }
 
-// TestProtectedCODHandoff verifies the atomic handoff and refuses stale identity,
+// TestProtectedCODHandoff verifies the protection patch and refuses stale identity,
 // status, ownership, and concurrent-write outcomes without enabling adoption.
 func TestProtectedCODHandoff(t *testing.T) {
 	for _, tc := range []struct {
@@ -658,8 +658,8 @@ func TestProtectedCODHandoff(t *testing.T) {
 				if !strings.Contains(string(data), "resourceVersion") {
 					t.Fatal("handoff patch lacks optimistic locking")
 				}
-				if cod.Labels[controllerManagedByLabel] != "operator-controller" || cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent || cod.Spec.Template.Spec.Phases[0].CollisionProtection != "" || cod.Spec.Template.Spec.Phases[0].Objects[0].CollisionProtection != "" {
-					t.Fatal("handoff patch must atomically enable protection and adoption without overrides")
+				if cod.Labels[controllerManagedByLabel] != "" || cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent || cod.Spec.Template.Spec.Phases[0].CollisionProtection != "" || cod.Spec.Template.Spec.Phases[0].Objects[0].CollisionProtection != "" {
+					t.Fatal("protection patch must keep adoption disabled and remove overrides")
 				}
 				if tc.patchError != nil {
 					return tc.patchError
@@ -747,11 +747,11 @@ func TestProtectedCODFailurePreservesStaging(t *testing.T) {
 			if err := m.Client.Get(t.Context(), client.ObjectKey{Name: "example"}, &cod); err != nil {
 				t.Fatal(err)
 			}
-			if mode != "patch response lost" && mode != "protected rollout timeout" && cod.Labels[controllerManagedByLabel] != "" {
+			if cod.Labels[controllerManagedByLabel] != "" {
 				t.Fatal("failed handoff enabled adoption")
 			}
-			if mode == "patch response lost" && (cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent || cod.Labels[controllerManagedByLabel] != "operator-controller") {
-				t.Fatal("accepted patch did not atomically set protection and adoption")
+			if mode == "patch response lost" && (cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent || cod.Labels[controllerManagedByLabel] != "") {
+				t.Fatal("accepted patch did not enable protection while keeping adoption disabled")
 			}
 		})
 	}
@@ -790,6 +790,116 @@ func TestProtectedCODRetriesStatusConflict(t *testing.T) {
 			if changed {
 				if err == nil || attempts != 1 {
 					t.Fatalf("changed template accepted: attempts=%d err=%v", attempts, err)
+				}
+			} else if err != nil || attempts != 2 || created.Labels[controllerManagedByLabel] != "" {
+				t.Fatalf("status conflict not retried: attempts=%d err=%v", attempts, err)
+			}
+		})
+	}
+}
+
+// TestEnableDeploymentAdoption requires the current protected rollout and
+// refuses stale identities, permissive overrides, and failed optimistic patches.
+func TestEnableDeploymentAdoption(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		change     func(*ocv1.ClusterObjectDeployment)
+		patchError error
+	}{
+		{name: "ready"},
+		{name: "replacement", change: func(c *ocv1.ClusterObjectDeployment) { c.UID = "replacement" }},
+		{name: "changed generation", change: func(c *ocv1.ClusterObjectDeployment) { c.Generation++ }},
+		{name: "changed invocation", change: func(c *ocv1.ClusterObjectDeployment) { c.Annotations[migrationInvocationAnnotation] = "other" }},
+		{name: "unprotected", change: func(c *ocv1.ClusterObjectDeployment) {
+			c.Spec.Template.Spec.CollisionProtection = ocv1.CollisionProtectionNone
+		}},
+		{name: "phase override", change: func(c *ocv1.ClusterObjectDeployment) {
+			c.Spec.Template.Spec.Phases[0].CollisionProtection = ocv1.CollisionProtectionNone
+		}},
+		{name: "object override", change: func(c *ocv1.ClusterObjectDeployment) {
+			c.Spec.Template.Spec.Phases[0].Objects[0].CollisionProtection = ocv1.CollisionProtectionNone
+		}},
+		{name: "stale rollout", change: func(c *ocv1.ClusterObjectDeployment) { c.Status.Conditions[0].ObservedGeneration-- }},
+		{name: "unavailable", change: func(c *ocv1.ClusterObjectDeployment) { c.Status.Conditions[1].Status = metav1.ConditionFalse }},
+		{name: "already adoptable", change: func(c *ocv1.ClusterObjectDeployment) {
+			c.Labels = map[string]string{controllerManagedByLabel: "operator-controller"}
+		}},
+		{name: "controlled", change: func(c *ocv1.ClusterObjectDeployment) {
+			c.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(&ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "foreign", UID: "foreign"}}, ocv1.GroupVersion.WithKind(ocv1.ClusterExtensionKind))}
+		}},
+		{name: "patch rejected", patchError: errors.New("adoption patch rejected")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			created := readyDeployment()
+			created.Annotations = map[string]string{migrationInvocationAnnotation: "invocation"}
+			created.Spec.Template.Spec.CollisionProtection = ocv1.CollisionProtectionPrevent
+			created.Spec.Template.Spec.Phases = []ocv1.ClusterObjectSetPhase{{Name: "deploy", Objects: []ocv1.ClusterObjectSetObject{{}}}}
+			current := created.DeepCopy()
+			if tc.change != nil {
+				tc.change(current)
+			}
+			m := migrationTestClient(t, current)
+			patched := false
+			m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				patched = true
+				data, err := patch.Data(obj)
+				if err != nil || !strings.Contains(string(data), "resourceVersion") {
+					t.Fatalf("adoption patch lacks optimistic locking: %s %v", data, err)
+				}
+				if tc.patchError != nil {
+					return tc.patchError
+				}
+				return c.Patch(ctx, obj, patch, opts...)
+			}})
+			err := m.enableDeploymentAdoption(t.Context(), created)
+			if wantError := tc.change != nil || tc.patchError != nil; (err != nil) != wantError {
+				t.Fatalf("error=%v wantError=%v", err, wantError)
+			}
+			if tc.change != nil && patched {
+				t.Fatal("patched changed or unready COD")
+			}
+			if tc.patchError != nil && !errors.Is(err, tc.patchError) {
+				t.Fatalf("lost patch error: %v", err)
+			}
+			if err == nil && (!patched || created.Labels[controllerManagedByLabel] != "operator-controller") {
+				t.Fatal("adoption was not enabled")
+			}
+		})
+	}
+}
+
+// TestDeploymentAdoptionRetry revalidates protection after status conflicts.
+func TestDeploymentAdoptionRetry(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		t.Run(fmt.Sprint("generationChanged=", changed), func(t *testing.T) {
+			created := readyDeployment()
+			created.Annotations = map[string]string{migrationInvocationAnnotation: "invocation"}
+			created.Spec.Template.Spec.CollisionProtection = ocv1.CollisionProtectionPrevent
+			m := migrationTestClient(t, created.DeepCopy())
+			attempts := 0
+			m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				attempts++
+				if attempts == 1 {
+					var current ocv1.ClusterObjectDeployment
+					if err := c.Get(ctx, client.ObjectKeyFromObject(obj), &current); err != nil {
+						return err
+					}
+					if changed {
+						current.Generation++
+					} else {
+						current.Annotations["status-writer"] = "updated"
+					}
+					if err := c.Update(ctx, &current); err != nil {
+						return err
+					}
+					return apierrors.NewConflict(schema.GroupResource{Resource: "clusterobjectdeployments"}, current.Name, errors.New("concurrent update"))
+				}
+				return c.Patch(ctx, obj, patch, opts...)
+			}})
+			err := m.enableDeploymentAdoption(t.Context(), created)
+			if changed {
+				if err == nil || attempts != 1 {
+					t.Fatalf("changed generation accepted: attempts=%d err=%v", attempts, err)
 				}
 			} else if err != nil || attempts != 2 || created.Labels[controllerManagedByLabel] != "operator-controller" {
 				t.Fatalf("status conflict not retried: attempts=%d err=%v", attempts, err)

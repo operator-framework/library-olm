@@ -395,6 +395,7 @@ Rollback persists verified resource identities and UIDs on the restored Subscrip
 
 Revision collision observations during COD rollout are retried within the existing timeout. Only current-generation completion and availability allow migration to continue; persistent collisions fail with the controller diagnostic and retain staging resources.
 
+
 ### Recovering a handoff that stopped before CE creation
 
 Migration stores the original Subscription and OperatorGroup specs on its retained
@@ -434,9 +435,9 @@ After capturing the backup and before removing OLMv0 management, validate the st
 ### Protected COD-only handoff
 
 Migration creates a COD with `None` and without its CE-adoption label, waits for
-initial rollout completion and availability, then atomically enables `Prevent`
-and CE adoption. It clears permissive phase/object overrides in the same guarded
-patch before creating the CE. Failed or uncertain handoffs preserve staging resources.
+initial rollout completion and availability, then enables `Prevent` and clears
+permissive phase/object overrides in a guarded patch. After the protected rollout
+completes, a separate guarded patch enables CE adoption before creating the CE. Failed or uncertain handoffs preserve staging resources.
 The protection-only template update may create an intermediate protected revision.
 
 `make migration/test-e2e-cos-supersession` also runs
