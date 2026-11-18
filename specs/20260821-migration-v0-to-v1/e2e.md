@@ -39,21 +39,24 @@ collects CLI coverage. A separate CI job builds and installs operator-controller
 pinned commit `552f8422ebffc8102d8e0d4fa868f99b061cda23`, then runs the handoff and
 rollback targets. Default suites also build this pinned controller from source,
 using upstream build targets and the experimental installer. Docker, Git, Python 3, and
-`envsubst` must be available locally. Setup loads the built images into the
-existing kind cluster without recreating it. Live setup also installs upstream's
-`operatorhubio` ClusterCatalog and waits for it to serve; the catalog-migration
-test uses its resolved image digest. Every live setup reapplies the catalog, including retries after partial installation.
-Fixture setup skips that public catalog
-and uses the locally built fixture catalog.
+`envsubst` must be available locally. Setup loads the built images into a new
+kind cluster or an existing cluster without OLM installed. Live setup also
+installs upstream's `operatorhubio` ClusterCatalog and waits for it to serve;
+the catalog-migration test uses its resolved image digest. Fixture setup skips
+that public catalog and uses the locally built fixture catalog.
 
 COS/COD are experimental: only the current typed `inlineManifest`/`secretRef`
 entries are supported. There is no conversion of older experimental resource
-schemas. Setup validates existing COS/COD schemas and rejects incompatible clusters
-with instructions to recreate them. When all required CRDs and controller deployments exist,
-setup skips the controller build and image loading; even a compatible cluster may
-therefore run an older commit. Recreate the cluster to change the installed controller
-commit. Fixture rollback verifies restoration, not OLMv0 reconciliation, because
-fixture clusters have no OLMv0 controllers.
+schemas. Setup refuses clusters containing OLM namespaces or COS/COD APIs,
+including partial installations. Before repeating setup, run:
+
+```bash
+E2E_CLUSTER_NAME=<cluster-name> make migration/e2e-teardown
+```
+
+Fixture rollback verifies
+restoration, not OLMv0 reconciliation, because fixture clusters have no OLMv0
+controllers.
 
 The covered targets verify revision encoding, COD adoption, and workload-preserving
 rollback. Rerun them against the pinned controller whenever updating the API dependency.
