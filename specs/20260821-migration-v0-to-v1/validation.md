@@ -34,7 +34,7 @@ kind cluster with both OLMv0 and OLMv1 installed.
   Assert inline and Secret-backed object encodings using the current COS/COD
   definitions, including workload preservation during rollback. Older experimental
   schemas are outside the compatibility requirements.
-  Assert prompt failures for all current-generation terminal `Progressing=False` reasons except successful completion, including revision collisions and invalid revisions; preserve the controller's reason and message. Definitive COS/COD create rejections restore OLMv0 and report that the target cannot be active; timeouts and transport failures refuse automatic recovery.
+  Assert prompt failures for current-generation terminal `Progressing=False` reasons except successful completion and retryable revision collisions; preserve the controller's reason and message. Definitive COS/COD create rejections restore OLMv0 and report that the target cannot be active; timeouts and transport failures refuse automatic recovery.
   Rollback persists verified COD UIDs before deletion and accepts matching dangling references even after restarting rollback. Unknown UIDs remain rejected, and failure to persist verified identity prevents COD deletion.
 
 ## V2. Eligibility matrix (one case per check, R3)
@@ -158,3 +158,5 @@ flag flips it to `Eligible`:
 Readiness reporting includes a lightweight COS API availability check; this is diagnostic, not a guarantee that a later write will succeed. Preparation does not repeat that COS CRD check. COD discovery remains necessary to select the revision manager. Gather (including CLI dry-run) and migration validate the prepared revision with a strict server-side dry-run create before removing OLMv0 management. Validation and creation share the same revision and Secret-reference builders; dry-run does not persist revisions or packed Secrets. The API server validates schema, admission, and permissions, but does not run controller-level validation of referenced workloads. Rollback permits verified newer sibling handoffs while retaining resource-UID, owner, and management-label checks.
 
 Rollback persists verified resource identities and UIDs on the restored Subscription before deleting the CE backup. Remigration includes still-unowned retained resources (including catalog-generated RBAC) omitted from the OLMv0 inventory; missing resources are skipped, replacements and newly controlled resources are rejected, and normal collection is deduplicated.
+
+Revision collision observations during COD rollout are retried within the existing timeout. Only current-generation completion and availability allow migration to continue; persistent collisions fail with the controller diagnostic and retain staging resources.

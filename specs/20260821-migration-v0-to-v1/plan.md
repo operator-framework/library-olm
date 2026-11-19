@@ -310,3 +310,5 @@ Sources: [shared converter](https://github.com/operator-framework/library-olm/pu
 [typed construction](https://github.com/operator-framework/library-olm/pull/93#discussion_r4556794570).
 
 Rollback persists verified resource identities and UIDs on the restored Subscription before deleting the CE backup. Remigration includes still-unowned retained resources (including catalog-generated RBAC) omitted from the OLMv0 inventory; missing resources are skipped, replacements and newly controlled resources are rejected, and normal collection is deduplicated.
+
+Revision collision observations during COD rollout are retried within the existing timeout. Only current-generation completion and availability allow migration to continue; persistent collisions fail with the controller diagnostic and retain staging resources.
