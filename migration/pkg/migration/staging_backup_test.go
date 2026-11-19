@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	operatorsv1 "github.com/operator-framework/api/pkg/operators/v1"
 	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
@@ -96,6 +100,36 @@ func TestStagingBackupSurvivesFailedHandoff(t *testing.T) {
 			}
 			if !reflect.DeepEqual(actual.Spec, sub.Spec) {
 				t.Fatal("persisted backup did not restore original spec")
+			}
+		})
+	}
+}
+
+func TestStagingBackupPreflightRejectsOversizedAnnotations(t *testing.T) {
+	for _, useCOD := range []bool{false, true} {
+		name := "COS"
+		if useCOD {
+			name = "COD"
+		}
+		t.Run(name, func(t *testing.T) {
+			sub, _ := healthySubscriptionFixtures()
+			sub.Spec.Config = &operatorsv1alpha1.SubscriptionConfig{
+				Env: []corev1.EnvVar{{Name: "LARGE", Value: strings.Repeat("x", apivalidation.TotalAnnotationSizeLimitB)}},
+			}
+			info, err := withStagingBackup(&MigrationInfo{}, &Backup{Subscription: sub})
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := migrationTestClient(t)
+			m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{
+				Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+					t.Fatal("sent oversized staging annotations to the API server")
+					return nil
+				},
+			})
+			opts := Options{SubscriptionName: sub.Name, SubscriptionNamespace: sub.Namespace, ClusterExtensionName: "staged", SystemNamespace: "controller", UseClusterObjectDeployment: useCOD}
+			if err := m.validateMigrationRevision(t.Context(), opts, info); err == nil || !strings.Contains(err.Error(), "annotations size") {
+				t.Fatalf("expected annotation-size preflight rejection, got %v", err)
 			}
 		})
 	}

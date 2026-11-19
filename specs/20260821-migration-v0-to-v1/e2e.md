@@ -420,3 +420,5 @@ The ordinary rollback CLI requires a CE and does not automate this pre-CE recove
 Library callers can decode the saved spec into `Backup.Subscription` and use
 `RecoverFromBackup` after safely releasing the target. Keep the exported files until
 recovery has succeeded.
+
+After capturing the backup and before removing OLMv0 management, validate the staging COS or COD with its recovery annotations. Reject a candidate whose total annotation size exceeds Kubernetes' 256 KiB limit before creating it.

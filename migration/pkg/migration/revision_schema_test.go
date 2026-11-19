@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -79,5 +81,49 @@ func TestRevisionServerDryRun(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestRevisionPreflightCountsAllAnnotationBytes(t *testing.T) {
+	for _, useCOD := range []bool{false, true} {
+		name := "COS"
+		if useCOD {
+			name = "COD"
+		}
+		t.Run(name, func(t *testing.T) {
+			opts := Options{ClusterExtensionName: "example", SystemNamespace: "controller", UseClusterObjectDeployment: useCOD}
+			info := &MigrationInfo{}
+			marker := strings.Repeat("a", 36) // The dry-run builder uses a UUID of this length.
+			var candidate client.Object
+			var err error
+			if useCOD {
+				candidate, err = buildClusterObjectDeployment(opts, info, nil, marker)
+			} else {
+				candidate, err = buildClusterObjectSet(opts, info, nil, marker)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			used := len(MigrationSubscriptionBackupAnnotation)
+			for key, value := range candidate.GetAnnotations() {
+				used += len(key) + len(value)
+			}
+			info.SubscriptionBackupJSON = strings.Repeat("x", apivalidation.TotalAnnotationSizeLimitB-used)
+			m := migrationTestClient(t)
+			creates := 0
+			m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{
+				Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+					creates++
+					return nil
+				},
+			})
+			if err := m.validateMigrationRevision(t.Context(), opts, info); err != nil || creates != 1 {
+				t.Fatalf("annotation limit should pass: creates=%d, error=%v", creates, err)
+			}
+			info.SubscriptionBackupJSON += "x"
+			if err := m.validateMigrationRevision(t.Context(), opts, info); err == nil || !strings.Contains(err.Error(), "annotations size") || creates != 1 {
+				t.Fatalf("annotation limit + 1 should fail before dry run: creates=%d, error=%v", creates, err)
+			}
+		})
 	}
 }
