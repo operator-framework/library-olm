@@ -157,12 +157,12 @@ workflow uses the current COS definitions. Discovery errors must fail rather tha
 COD CRD and operator-controller's COD-backed ClusterExtension applier (upstream PR #3058).
 Create the deployment with collision protection `None`, wait for current-generation rollout
 completion and availability, then create the CE to hand management to operator-controller.
-Set `apps.kubernetes.io/managed-by: operator-controller` on the COD itself so
+Set `app.kubernetes.io/managed-by: operator-controller` on the COD itself so
 operator-controller retains its rollout data and can adopt it while ownerless.
 Preserve the same COD UID through adoption; owner-kind and
 owner-name metadata alone do not authorize adoption. The adoption label is not
 required on the COS template or operator workload objects.
-Directly created migration COS revisions carry `apps.kubernetes.io/managed-by:
+Directly created migration COS revisions carry `app.kubernetes.io/managed-by:
 object-controller` so a COD can adopt an ownerless revision in its group.
 COD-generated COS revisions receive this label from object-controller. The two
 manager values apply to different resources and must not be interchanged.

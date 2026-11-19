@@ -22,12 +22,12 @@ kind cluster with both OLMv0 and OLMv1 installed.
 - **V1.8** No command ever blocks on interactive input. An operator whose name collides with a verb (e.g. `check`) is migratable as a positional argument (`convert check -n <ns>`).
 - **V1.9** Manager detection selects direct COS when the COD CRD is absent and COD when it is present and established. Discovery errors and unmet prerequisites fail before deleting OLMv0 resources. Validate COD name/group constraints and reject an existing COD rather than overwriting it. CRD presence is the supported capability signal; controller-version detection is not required.
 - **V1.10** The COD template preserves migration labels, annotations, packed Secret references, and `CollisionProtection: None`. Readiness requires completion and availability for the current generation; stale status cannot satisfy the wait. Invalid-specification and deadline failures report actionable errors. Once a COD may have reconciled, failure preserves migration resources and refuses automatic OLMv0 recovery.
-  The COD itself carries `apps.kubernetes.io/managed-by: operator-controller`
+  The COD itself carries `app.kubernetes.io/managed-by: operator-controller`
   before CE creation and after adoption. It has no controller owner during
   staging, then gains the CE controller reference while retaining its UID.
   The template continues to carry extension identity metadata without copying
   this COD-specific adoption label onto operator workloads.
-  Directly created migration COS revisions carry `apps.kubernetes.io/managed-by:
+  Directly created migration COS revisions carry `app.kubernetes.io/managed-by:
   object-controller` and remain ownerless during staging. COD-generated migration
   and catalog revisions carry the same COS label, while the COD retains its
   distinct `operator-controller` value.

@@ -252,7 +252,7 @@ func TestCreateClusterObjectSetAdoptionLabel(t *testing.T) {
 	if err := m.Client.Get(context.Background(), client.ObjectKeyFromObject(resources.cos), &cos); err != nil {
 		t.Fatal(err)
 	}
-	if cos.Labels["apps.kubernetes.io/managed-by"] != "object-controller" {
+	if cos.Labels["app.kubernetes.io/managed-by"] != "object-controller" {
 		t.Fatal("migration COS lacks the object-controller adoption label")
 	}
 	if metav1.GetControllerOf(&cos) != nil || cos.Spec.Group != "example" || cos.Spec.CollisionProtection != ocv1.CollisionProtectionNone {
@@ -277,7 +277,7 @@ func TestCreateDeploymentTemplate(t *testing.T) {
 	if !reflect.DeepEqual(resources.cod.Spec.Template.Metadata.Annotations, resources.cod.Annotations) {
 		t.Fatal("template must propagate bundle and migration annotations to revisions")
 	}
-	if resources.cod.Labels["apps.kubernetes.io/managed-by"] != "operator-controller" {
+	if resources.cod.Labels["app.kubernetes.io/managed-by"] != "operator-controller" {
 		t.Fatal("missing COD adoption label required by operator-controller")
 	}
 	if metav1.GetControllerOf(resources.cod) != nil {

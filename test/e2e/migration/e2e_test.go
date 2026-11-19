@@ -341,14 +341,14 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 		if !metav1.IsControlledBy(&before.Items[0], &originalCOD) || before.Items[0].Spec.Group != subscription {
 			t.Fatal("migration revision is not controlled by its COD")
 		}
-		if originalCOD.Labels["apps.kubernetes.io/managed-by"] != "operator-controller" || metav1.GetControllerOf(&originalCOD) != nil {
+		if originalCOD.Labels["app.kubernetes.io/managed-by"] != "operator-controller" || metav1.GetControllerOf(&originalCOD) != nil {
 			t.Fatal("staging COD must be ownerless and carry the operator-controller adoption label")
 		}
 	}
 	if precreatedUID == "" {
 		t.Fatal("pre-existing COS has no UID")
 	}
-	if before.Items[0].Labels["apps.kubernetes.io/managed-by"] != "object-controller" {
+	if before.Items[0].Labels["app.kubernetes.io/managed-by"] != "object-controller" {
 		t.Fatal("migration COS lacks the object-controller adoption label")
 	}
 	if !cosSucceeded(before.Items[0]) {
@@ -406,13 +406,13 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 		if currentCOD.UID != originalCOD.UID || !metav1.IsControlledBy(&currentCOD, &ce) {
 			t.Fatal("CE did not take ownership of the original COD")
 		}
-		if currentCOD.Labels["apps.kubernetes.io/managed-by"] != "operator-controller" {
+		if currentCOD.Labels["app.kubernetes.io/managed-by"] != "operator-controller" {
 			t.Fatal("adopted COD lost its operator-controller management label")
 		}
 		if !metav1.IsControlledBy(catalogCOS, &currentCOD) || catalogCOS.Spec.Group != subscription {
 			t.Fatal("catalog revision is not controlled by the original COD")
 		}
-		if catalogCOS.Labels["apps.kubernetes.io/managed-by"] != "object-controller" {
+		if catalogCOS.Labels["app.kubernetes.io/managed-by"] != "object-controller" {
 			t.Fatal("COD-generated catalog revision lacks the object-controller label")
 		}
 	} else if len(catalogCOS.OwnerReferences) != 1 || catalogCOS.OwnerReferences[0].Name != subscription {
