@@ -100,6 +100,7 @@ func buildClusterObjectSet(opts Options, info *MigrationInfo, phases []*ocv1ac.C
 		LabelBundleVersion:                 info.Version,
 		migrationInvocationAnnotation:      marker,
 	}
+	addStagingBackup(cosAnnotations, info)
 	if info.BundleImage != "" {
 		cosAnnotations[LabelBundleReference] = info.BundleImage
 	}

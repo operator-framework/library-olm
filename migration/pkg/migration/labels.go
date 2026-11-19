@@ -34,10 +34,10 @@ const (
 	// Value is "<namespace>/<name>" of the source Subscription.
 	MigratedFromSubscriptionAnnotation = "olm.operatorframework.io/migrated-from-subscription"
 
-	// MigrationSubscriptionBackupAnnotation holds JSON-encoded Subscription spec on the CE (R2.5).
+	// MigrationSubscriptionBackupAnnotation holds JSON-encoded Subscription spec on retained staging resources and the CE (R2.5).
 	MigrationSubscriptionBackupAnnotation = "olm.operatorframework.io/migration-subscription-backup"
 
-	// MigrationOperatorGroupBackupAnnotation holds JSON-encoded OperatorGroup spec on the CE (R2.5).
+	// MigrationOperatorGroupBackupAnnotation holds JSON-encoded OperatorGroup spec on retained staging resources and the CE (R2.5).
 	MigrationOperatorGroupBackupAnnotation = "olm.operatorframework.io/migration-operatorgroup-backup"
 
 	// AnnotationAcknowledgedPrefix is the prefix for per-flag audit annotations on the CE (R2.5).
