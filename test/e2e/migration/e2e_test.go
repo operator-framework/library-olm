@@ -385,6 +385,7 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 		}
 		return false, nil
 	}); err != nil {
+		logCODHandoffDiagnostics(t, subscription, after.Items)
 		t.Fatalf("wait for completed catalog COS newer than revision %d: %v", highestPreCERevision, err)
 	}
 	if len(after.Items) < 2 {
@@ -448,10 +449,33 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 	}
 	if catalogCOS.Labels["app.kubernetes.io/managed-by"] != "object-controller" {
 		t.Fatal("COD-generated catalog revision lacks the object-controller label")
-
 	}
 	if err := m.WaitForCOSSucceeded(ctx, catalogCOS.Name); err != nil {
 		t.Fatalf("catalog revision did not complete: %v", err)
+	}
+}
+
+func logCODHandoffDiagnostics(t *testing.T, subscription string, revisions []ocv1.ClusterObjectSet) {
+	t.Helper()
+	selector := migration.LabelOwnerKind + "=" + ocv1.ClusterExtensionKind + "," + migration.LabelOwnerName + "=" + subscription
+	queries := [][]string{
+		{"get", "clusterobjectdeployment/" + subscription, "-o=json"},
+		{"get", "clusterobjectsets", "-l", selector, "-o=json"},
+		{"get", "events", "-A", "--field-selector", "involvedObject.name=" + subscription, "-o=wide"},
+	}
+	limit := len(revisions)
+	if limit > 3 {
+		limit = 3
+	}
+	for _, revision := range revisions[:limit] {
+		queries = append(queries, []string{"get", "events", "-A", "--field-selector", "involvedObject.name=" + revision.Name, "-o=wide"})
+	}
+	for _, args := range queries {
+		diagnosticCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		command := exec.CommandContext(diagnosticCtx, "kubectl", append([]string{"--request-timeout=5s"}, args...)...)
+		output, err := command.CombinedOutput()
+		cancel()
+		t.Logf("timeout diagnostics: kubectl %s (error: %v)\n%s", strings.Join(args, " "), err, output)
 	}
 }
 
