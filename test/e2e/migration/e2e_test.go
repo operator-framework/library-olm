@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -22,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -336,6 +338,7 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 	}
 	slices.SortFunc(before.Items, func(a, b ocv1.ClusterObjectSet) int { return cmp.Compare(a.Spec.Revision, b.Spec.Revision) })
 	precreatedUID := before.Items[0].UID
+	highestPreCERevision := before.Items[len(before.Items)-1].Spec.Revision
 	var originalCOD ocv1.ClusterObjectDeployment
 	if err := kubeClient.Get(ctx, client.ObjectKey{Name: subscription}, &originalCOD); err != nil {
 		t.Fatal(err)
@@ -347,9 +350,7 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 		t.Fatal("adoptable COD must already enforce Prevent")
 	}
 	if originalCOD.Labels["app.kubernetes.io/managed-by"] != "operator-controller" || metav1.GetControllerOf(&originalCOD) != nil {
-
 		t.Fatal("staging COD must be ownerless and carry the operator-controller adoption label")
-
 	}
 	if precreatedUID == "" {
 		t.Fatal("pre-existing COS has no UID")
@@ -369,11 +370,22 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 	}
 	run(t, "kubectl", "wait", "--for=jsonpath={.status.conditions[?(@.type=='Installed')].status}=True", "clusterextension/"+subscription, "--timeout=10m")
 	var after ocv1.ClusterObjectSetList
-	if err := kubeClient.List(ctx, &after, client.MatchingLabels{
-		migration.LabelOwnerKind: ocv1.ClusterExtensionKind,
-		migration.LabelOwnerName: subscription,
+	if err := wait.PollUntilContextTimeout(ctx, 2*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
+		after = ocv1.ClusterObjectSetList{}
+		if err := kubeClient.List(ctx, &after, client.MatchingLabels{
+			migration.LabelOwnerKind: ocv1.ClusterExtensionKind,
+			migration.LabelOwnerName: subscription,
+		}); err != nil {
+			return false, err
+		}
+		for _, revision := range after.Items {
+			if revision.Spec.Revision > highestPreCERevision && cosSucceeded(revision) {
+				return true, nil
+			}
+		}
+		return false, nil
 	}); err != nil {
-		t.Fatalf("list COS after CE creation: %v", err)
+		t.Fatalf("wait for completed catalog COS newer than revision %d: %v", highestPreCERevision, err)
 	}
 	if len(after.Items) < 2 {
 		t.Fatalf("COS count after CE creation = %d, want initial and catalog revisions", len(after.Items))
@@ -401,12 +413,12 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 				}
 			}
 		}
-		if catalogCOS == nil || cos.Spec.Revision > catalogCOS.Spec.Revision {
+		if cos.Spec.Revision > highestPreCERevision && cosSucceeded(*cos) && (catalogCOS == nil || cos.Spec.Revision > catalogCOS.Spec.Revision) {
 			catalogCOS = cos
 		}
 	}
 	if migrationCOS == nil || catalogCOS == nil {
-		t.Fatalf("COS revisions = %#v, want migration revision 1 and a newer catalog revision", after.Items)
+		t.Fatalf("COS revisions = %#v, want migration revision 1 and a completed catalog revision newer than %d", after.Items, highestPreCERevision)
 	}
 	if migrationCOS.UID != precreatedUID {
 		t.Fatalf("migration COS UID = %s, want pre-created UID %s", migrationCOS.UID, precreatedUID)
