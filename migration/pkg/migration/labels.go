@@ -8,7 +8,7 @@ import "time"
 const (
 	// controllerManagedByLabel gates ownerless adoption: CODs use operator-controller,
 	// while COS revisions use object-controller. Upstream constants are internal.
-	controllerManagedByLabel = "apps.kubernetes.io/managed-by"
+	controllerManagedByLabel = "app.kubernetes.io/managed-by"
 
 	// LabelOwnerKind is set on ClusterObjectSet to indicate its owner's kind.
 	LabelOwnerKind = "olm.operatorframework.io/owner-kind"
