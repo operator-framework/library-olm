@@ -4,14 +4,17 @@ package e2e
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -20,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -329,21 +333,24 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("list pre-existing COS: %v", err)
 	}
-	if len(before.Items) != 1 {
-		t.Fatalf("pre-existing COS count = %d, want 1", len(before.Items))
+	if len(before.Items) < 1 || len(before.Items) > 2 {
+		t.Fatalf("pre-existing COS count = %d, want initial revision and optional protected revision", len(before.Items))
 	}
+	slices.SortFunc(before.Items, func(a, b ocv1.ClusterObjectSet) int { return cmp.Compare(a.Spec.Revision, b.Spec.Revision) })
 	precreatedUID := before.Items[0].UID
+	highestPreCERevision := before.Items[len(before.Items)-1].Spec.Revision
 	var originalCOD ocv1.ClusterObjectDeployment
-	if opts.UseClusterObjectDeployment {
-		if err := kubeClient.Get(ctx, client.ObjectKey{Name: subscription}, &originalCOD); err != nil {
-			t.Fatal(err)
-		}
-		if !metav1.IsControlledBy(&before.Items[0], &originalCOD) || before.Items[0].Spec.Group != subscription {
-			t.Fatal("migration revision is not controlled by its COD")
-		}
-		if originalCOD.Labels["app.kubernetes.io/managed-by"] != "operator-controller" || metav1.GetControllerOf(&originalCOD) != nil {
-			t.Fatal("staging COD must be ownerless and carry the operator-controller adoption label")
-		}
+	if err := kubeClient.Get(ctx, client.ObjectKey{Name: subscription}, &originalCOD); err != nil {
+		t.Fatal(err)
+	}
+	if !metav1.IsControlledBy(&before.Items[0], &originalCOD) || before.Items[0].Spec.Group != subscription {
+		t.Fatal("migration revision is not controlled by its COD")
+	}
+	if originalCOD.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
+		t.Fatal("adoptable COD must already enforce Prevent")
+	}
+	if originalCOD.Labels["app.kubernetes.io/managed-by"] != "operator-controller" || metav1.GetControllerOf(&originalCOD) != nil {
+		t.Fatal("staging COD must be ownerless and carry the operator-controller adoption label")
 	}
 	if precreatedUID == "" {
 		t.Fatal("pre-existing COS has no UID")
@@ -363,27 +370,56 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 	}
 	run(t, "kubectl", "wait", "--for=jsonpath={.status.conditions[?(@.type=='Installed')].status}=True", "clusterextension/"+subscription, "--timeout=10m")
 	var after ocv1.ClusterObjectSetList
-	if err := kubeClient.List(ctx, &after, client.MatchingLabels{
-		migration.LabelOwnerKind: ocv1.ClusterExtensionKind,
-		migration.LabelOwnerName: subscription,
+	if err := wait.PollUntilContextTimeout(ctx, 2*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
+		after = ocv1.ClusterObjectSetList{}
+		if err := kubeClient.List(ctx, &after, client.MatchingLabels{
+			migration.LabelOwnerKind: ocv1.ClusterExtensionKind,
+			migration.LabelOwnerName: subscription,
+		}); err != nil {
+			return false, err
+		}
+		for _, revision := range after.Items {
+			if revision.Spec.Revision > highestPreCERevision && cosSucceeded(revision) {
+				return true, nil
+			}
+		}
+		return false, nil
 	}); err != nil {
-		t.Fatalf("list COS after CE creation: %v", err)
+		logCODHandoffDiagnostics(t, subscription, after.Items)
+		t.Fatalf("wait for completed catalog COS newer than revision %d: %v", highestPreCERevision, err)
 	}
-	if len(after.Items) != 2 {
-		t.Fatalf("COS count after CE creation = %d, want 2 (migration and catalog revisions)", len(after.Items))
+	if len(after.Items) < 2 {
+		t.Fatalf("COS count after CE creation = %d, want initial and catalog revisions", len(after.Items))
 	}
 	var migrationCOS, catalogCOS *ocv1.ClusterObjectSet
 	for i := range after.Items {
 		cos := &after.Items[i]
-		switch cos.Spec.Revision {
-		case 1:
+		if cos.Spec.Revision == 1 {
 			migrationCOS = cos
-		case 2:
+			continue
+		}
+		if cos.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
+			t.Fatalf("revision %s bypasses collision protection", cos.Name)
+		}
+		if !metav1.IsControlledBy(cos, &originalCOD) || cos.Spec.Group != subscription {
+			t.Fatalf("revision %s has unexpected ownership", cos.Name)
+		}
+		for _, phase := range cos.Spec.Phases {
+			if phase.CollisionProtection != "" && phase.CollisionProtection != ocv1.CollisionProtectionPrevent {
+				t.Fatalf("revision %s has permissive phase override", cos.Name)
+			}
+			for _, obj := range phase.Objects {
+				if obj.CollisionProtection != "" && obj.CollisionProtection != ocv1.CollisionProtectionPrevent {
+					t.Fatalf("revision %s has permissive object override", cos.Name)
+				}
+			}
+		}
+		if cos.Spec.Revision > highestPreCERevision && cosSucceeded(*cos) && (catalogCOS == nil || cos.Spec.Revision > catalogCOS.Spec.Revision) {
 			catalogCOS = cos
 		}
 	}
 	if migrationCOS == nil || catalogCOS == nil {
-		t.Fatalf("COS revisions = %#v, want migration revision 1 and catalog revision 2", after.Items)
+		t.Fatalf("COS revisions = %#v, want migration revision 1 and a completed catalog revision newer than %d", after.Items, highestPreCERevision)
 	}
 	if migrationCOS.UID != precreatedUID {
 		t.Fatalf("migration COS UID = %s, want pre-created UID %s", migrationCOS.UID, precreatedUID)
@@ -394,32 +430,52 @@ func TestPrecreatedClusterObjectSetSupersession(t *testing.T) {
 	if catalogCOS.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
 		t.Fatalf("catalog COS collisionProtection = %q, want %q", catalogCOS.Spec.CollisionProtection, ocv1.CollisionProtectionPrevent)
 	}
-	if opts.UseClusterObjectDeployment {
-		var currentCOD ocv1.ClusterObjectDeployment
-		var ce ocv1.ClusterExtension
-		if err := kubeClient.Get(ctx, client.ObjectKey{Name: subscription}, &currentCOD); err != nil {
-			t.Fatal(err)
-		}
-		if err := kubeClient.Get(ctx, client.ObjectKey{Name: subscription}, &ce); err != nil {
-			t.Fatal(err)
-		}
-		if currentCOD.UID != originalCOD.UID || !metav1.IsControlledBy(&currentCOD, &ce) {
-			t.Fatal("CE did not take ownership of the original COD")
-		}
-		if currentCOD.Labels["app.kubernetes.io/managed-by"] != "operator-controller" {
-			t.Fatal("adopted COD lost its operator-controller management label")
-		}
-		if !metav1.IsControlledBy(catalogCOS, &currentCOD) || catalogCOS.Spec.Group != subscription {
-			t.Fatal("catalog revision is not controlled by the original COD")
-		}
-		if catalogCOS.Labels["app.kubernetes.io/managed-by"] != "object-controller" {
-			t.Fatal("COD-generated catalog revision lacks the object-controller label")
-		}
-	} else if len(catalogCOS.OwnerReferences) != 1 || catalogCOS.OwnerReferences[0].Name != subscription {
-		t.Fatalf("catalog COS ownerReferences = %#v, want ClusterExtension %q", catalogCOS.OwnerReferences, subscription)
+	var currentCOD ocv1.ClusterObjectDeployment
+	var ce ocv1.ClusterExtension
+	if err := kubeClient.Get(ctx, client.ObjectKey{Name: subscription}, &currentCOD); err != nil {
+		t.Fatal(err)
+	}
+	if err := kubeClient.Get(ctx, client.ObjectKey{Name: subscription}, &ce); err != nil {
+		t.Fatal(err)
+	}
+	if currentCOD.UID != originalCOD.UID || !metav1.IsControlledBy(&currentCOD, &ce) {
+		t.Fatal("CE did not take ownership of the original COD")
+	}
+	if currentCOD.Labels["app.kubernetes.io/managed-by"] != "operator-controller" {
+		t.Fatal("adopted COD lost its operator-controller management label")
+	}
+	if !metav1.IsControlledBy(catalogCOS, &currentCOD) || catalogCOS.Spec.Group != subscription {
+		t.Fatal("catalog revision is not controlled by the original COD")
+	}
+	if catalogCOS.Labels["app.kubernetes.io/managed-by"] != "object-controller" {
+		t.Fatal("COD-generated catalog revision lacks the object-controller label")
 	}
 	if err := m.WaitForCOSSucceeded(ctx, catalogCOS.Name); err != nil {
 		t.Fatalf("catalog revision did not complete: %v", err)
+	}
+}
+
+func logCODHandoffDiagnostics(t *testing.T, subscription string, revisions []ocv1.ClusterObjectSet) {
+	t.Helper()
+	selector := migration.LabelOwnerKind + "=" + ocv1.ClusterExtensionKind + "," + migration.LabelOwnerName + "=" + subscription
+	queries := [][]string{
+		{"get", "clusterobjectdeployment/" + subscription, "-o=json"},
+		{"get", "clusterobjectsets", "-l", selector, "-o=json"},
+		{"get", "events", "-A", "--field-selector", "involvedObject.name=" + subscription, "-o=wide"},
+	}
+	limit := len(revisions)
+	if limit > 3 {
+		limit = 3
+	}
+	for _, revision := range revisions[:limit] {
+		queries = append(queries, []string{"get", "events", "-A", "--field-selector", "involvedObject.name=" + revision.Name, "-o=wide"})
+	}
+	for _, args := range queries {
+		diagnosticCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		command := exec.CommandContext(diagnosticCtx, "kubectl", append([]string{"--request-timeout=5s"}, args...)...)
+		output, err := command.CombinedOutput()
+		cancel()
+		t.Logf("timeout diagnostics: kubectl %s (error: %v)\n%s", strings.Join(args, " "), err, output)
 	}
 }
 

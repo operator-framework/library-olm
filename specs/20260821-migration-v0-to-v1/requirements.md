@@ -155,10 +155,13 @@ ClusterExtension, with controller-managed COS revisions. The initial implementat
 selected automatically when the COD CRD exists; when absent, the direct COS
 workflow uses the current COS definitions. Discovery errors must fail rather than silently fall back. COD migration requires an established
 COD CRD and operator-controller's COD-backed ClusterExtension applier (upstream PR #3058).
-Create the deployment with collision protection `None`, wait for current-generation rollout
-completion and availability, then create the CE to hand management to operator-controller.
-Set `app.kubernetes.io/managed-by: operator-controller` on the COD itself so
-operator-controller retains its rollout data and can adopt it while ownerless.
+Create the deployment with collision protection `None` and no adoption label.
+After current-generation rollout completion and availability, switch the template
+to `Prevent` and remove per-phase and per-object overrides. Wait for that
+protected rollout to complete before adding
+`app.kubernetes.io/managed-by: operator-controller` to the COD and creating the
+CE. This lets operator-controller retain the rollout data and adopt the COD
+while it is ownerless.
 Preserve the same COD UID through adoption; owner-kind and
 owner-name metadata alone do not authorize adoption. The adoption label is not
 required on the COS template or operator workload objects.
@@ -384,6 +387,8 @@ Readiness reporting includes a lightweight COS API availability check; this is d
 Rollback persists verified resource identities and UIDs on the restored Subscription before deleting the CE backup. Remigration includes still-unowned retained resources (including catalog-generated RBAC) omitted from the OLMv0 inventory; missing resources are skipped, replacements and newly controlled resources are rejected, and normal collection is deduplicated.
 
 Revision collision observations during COD rollout are retried within the existing timeout. Only current-generation completion and availability allow migration to continue; persistent collisions fail with the controller diagnostic and retain staging resources.
+
+A failed or uncertain COD handoff retains staging resources for explicit recovery.
 
 Recovery before CE creation must not rely only on an in-memory backup. Persist the
 original Subscription and OperatorGroup specs on retained staging resources at
