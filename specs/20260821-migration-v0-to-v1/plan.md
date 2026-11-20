@@ -273,9 +273,9 @@ Source: [annotation retention discussion](https://github.com/operator-framework/
 
 - [ ] Revisit `LabelOwnerKind`, `LabelOwnerName`, and managed-by labels once
   operator-controller/object-controller settle their requirements.
-- Until then, retain alignment with the pinned controller on COD metadata, COD
-  template metadata, and directly created COS resources. Do not remove labels
-  preemptively.
+- Until then, retain alignment with the pinned controller on COD metadata and
+  template metadata, and verify controller-generated COS labels. Do not remove
+  labels preemptively.
 - Coordinate any change with adoption, resource discovery, rollback, and cleanup
   tests so removing a label does not break identity or ownership checks.
 
@@ -313,7 +313,7 @@ on failed or uncertain handoffs and refuse automatic OLMv0 restart. Regression
 tests must decode the server-side backup after discarding the original plan and
 verify it can restore the original Subscription spec after safe target release.
 
-After capturing the backup and before removing OLMv0 management, validate the staging COS or COD with its recovery annotations. Reject a candidate whose total annotation size exceeds Kubernetes' 256 KiB limit before creating it.
+After capturing the backup and before removing OLMv0 management, validate the staging COD with its recovery annotations. Reject a candidate whose total annotation size exceeds Kubernetes' 256 KiB limit before creating it.
 
 ### Protected COD-only handoff
 

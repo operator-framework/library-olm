@@ -171,7 +171,7 @@ on failed or uncertain handoffs and refuse automatic OLMv0 restart. Regression
 tests must decode the server-side backup after discarding the original plan and
 verify it can restore the original Subscription spec after safe target release.
 
-After capturing the backup and before removing OLMv0 management, validate the staging COS or COD with its recovery annotations. Reject a candidate whose total annotation size exceeds Kubernetes' 256 KiB limit before creating it.
+After capturing the backup and before removing OLMv0 management, validate the staging COD with its recovery annotations. Reject a candidate whose total annotation size exceeds Kubernetes' 256 KiB limit before creating it.
 
 The protected COD handoff must reject stale identity, generation, readiness, ownership,
 and concurrent updates. Patch rejection or an uncertain response must not create a CE
