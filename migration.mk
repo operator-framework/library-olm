@@ -264,7 +264,7 @@ migration/test-e2e-cos-supersession: migration/build ## Verify migration COS is 
 	mkdir -p "$$(dirname "$$coverage_profile")"; \
 	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
 	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/install-fixture-v0.sh "$$package"; \
-	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/cos-supersession" E2E_SUITE=fixture E2E_COS_SUPERSESSION_TEST=true E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e -covermode=count -coverpkg=./migration/... -coverprofile="$$coverage_profile" ./test/e2e/migration -run '^TestPrecreatedClusterObjectSetSupersession$$' -timeout "$(E2E_TIMEOUT)"; \
+	KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" E2E_ARTIFACTS="$(E2E_ARTIFACTS)/cos-supersession" E2E_SUITE=fixture E2E_COS_SUPERSESSION_TEST=true E2E_NAMESPACE=migration-e2e-ecr-secret E2E_SUBSCRIPTION="$$package" go test -count=1 -tags=e2e -covermode=count -coverpkg=./migration/... -coverprofile="$$coverage_profile" ./test/e2e/migration -run '^Test(PrecreatedClusterObjectSetSupersession|CODProtectedRolloutCollision)$$' -timeout "$(E2E_TIMEOUT)"; \
 	if [[ "$(E2E_KEEP_RESOURCES)" != true ]]; then \
 		KUBECONFIG="$(E2E_FIXTURE_KUBECONFIG)" ./hack/e2e/migration/delete-v1.sh "$$package"; \
 	else \
