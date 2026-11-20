@@ -211,9 +211,10 @@ live, COS-supersession, and COD tests publish coverage inputs; a dependent cover
 their combined report. The Job intentionally does not upload diagnostics or coverage artifacts.
 
 The supersession check is deliberately separate from the conversion matrix. With the pinned
-experimental controller, migration creates revision 1 with collision protection `None`;
-creating the ClusterExtension results in a controller-owned, catalog-derived revision 2 with
-collision protection `Prevent`. The check requires both revisions to succeed.
+experimental controller, COD migration creates revision 1 with collision protection `None`,
+then completes a protected COD rollout before enabling ClusterExtension adoption. The
+catalog-derived revision also uses `Prevent`. The check requires the migration and catalog
+revisions to succeed while allowing the protected rollout to create an additional revision.
 
 ## CI rollout
 
