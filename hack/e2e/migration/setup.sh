@@ -8,11 +8,12 @@ set -euo pipefail
 : "${OLM_V0_MANIFEST:?OLM_V0_MANIFEST is required}"
 : "${OLM_V1_COMMIT:?OLM_V1_COMMIT is required}"
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
-kind() { go -C "$root_dir" tool kind "$@"; }
+kind_bin=$(go -C "$root_dir" tool -n kind)
+kind() { "$kind_bin" "$@"; }
 cluster_name=${E2E_CLUSTER_NAME:-library-olm-e2e}
 kind_config=${E2E_KIND_CONFIG:-"$root_dir/test/e2e/migration/kind-config.yaml"}
-# Go runs Kind from root_dir. Resolve caller-supplied paths before changing
-# directories so Kind and kubectl use the same kubeconfig and config file.
+# Kind runs from the caller's directory, preserving relative host paths inside
+# a custom config. Resolve the config and kubeconfig filenames explicitly.
 [[ $E2E_KUBECONFIG == /* ]] || E2E_KUBECONFIG="$PWD/$E2E_KUBECONFIG"
 [[ $kind_config == /* ]] || kind_config="$PWD/$kind_config"
 

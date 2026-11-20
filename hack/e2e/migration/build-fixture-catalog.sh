@@ -6,6 +6,10 @@ set -euo pipefail
 # catalog metadata or bundle content from Quay.
 : "${KUBECONFIG:?KUBECONFIG is required}"
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+if [[ -n ${SSL_CERT_FILE:-} && $SSL_CERT_FILE != /* ]]; then
+	SSL_CERT_FILE="$(pwd -P)/$SSL_CERT_FILE"
+	export SSL_CERT_FILE
+fi
 crane() { go -C "$root_dir" tool crane "$@"; }
 # Resolve the tool while the caller's SSL_CERT_FILE still applies. Pushes below
 # use the fixture registry CA, which may not trust the Go module proxy.
