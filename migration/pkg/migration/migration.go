@@ -172,25 +172,19 @@ func (m *Migrator) migrate(ctx context.Context, opts Options, nextStep func(Prog
 		}
 	}
 
-	if err := m.validateMigrationRevision(ctx, opts, info); err != nil {
-		return err
-	}
-
 	nextStep(ProgressStepBackup, "Backing up OLMv0 resources")
 	backup, err := m.BackupResources(ctx, opts, csv, ip)
 	if err != nil {
 		return fmt.Errorf("failed to backup resources: %w", err)
 	}
-	// Populate CE backup annotations (R2.5) — must happen before PrepareForMigration deletes the Sub.
-	if backup.Subscription != nil {
-		if j, err := json.Marshal(backup.Subscription.Spec); err == nil {
-			info.SubscriptionBackupJSON = string(j)
-		}
+	// Validate the exact staging annotations before removing OLMv0 management.
+	// The same backup fields are used by direct CreateMigrationResources callers.
+	info, err = withStagingBackup(info, backup)
+	if err != nil {
+		return err
 	}
-	if backup.OperatorGroup != nil {
-		if j, err := json.Marshal(backup.OperatorGroup.Spec); err == nil {
-			info.OperatorGroupBackupJSON = string(j)
-		}
+	if err := m.validateMigrationRevision(ctx, opts, info); err != nil {
+		return err
 	}
 
 	// Disk backup (non-fatal per R2.6 — CE annotation backup is authoritative).
@@ -633,6 +627,12 @@ func (m *Migrator) CreateClusterObjectSet(ctx context.Context, opts Options, inf
 // as one recoverable operation. Its result reports whether a target COS may have
 // started reconciling, including when cleanup was requested after a failure.
 func (m *Migrator) CreateMigrationResources(ctx context.Context, opts Options, info *MigrationInfo, backup *Backup) (MigrationResourcesResult, error) {
+	var err error
+	info, err = withStagingBackup(info, backup)
+	if err != nil {
+		return MigrationResourcesResult{}, err
+	}
+	opts.ApplyDefaults()
 	resources, err := m.createClusterObjectSet(ctx, opts, info)
 	if err != nil {
 		result := MigrationResourcesResult{TargetMayBeActive: resources.cos != nil || resources.cod != nil || resources.ownershipUnknown}

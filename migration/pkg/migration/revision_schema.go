@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,6 +36,9 @@ func (m *Migrator) validateMigrationRevision(ctx context.Context, opts Options, 
 	}
 	if err != nil {
 		return err
+	}
+	if err := apivalidation.ValidateAnnotationsSize(candidate.GetAnnotations()); err != nil {
+		return fmt.Errorf("validate migration revision annotations: %w", err)
 	}
 	if err := m.Client.Create(ctx, candidate, client.DryRunAll, client.FieldValidation(metav1.FieldValidationStrict)); err != nil {
 		return fmt.Errorf("validate migration revision with server-side dry run: %w", err)
@@ -100,6 +104,7 @@ func buildClusterObjectSet(opts Options, info *MigrationInfo, phases []*ocv1ac.C
 		LabelBundleVersion:                 info.Version,
 		migrationInvocationAnnotation:      marker,
 	}
+	addStagingBackup(cosAnnotations, info)
 	if info.BundleImage != "" {
 		cosAnnotations[LabelBundleReference] = info.BundleImage
 	}

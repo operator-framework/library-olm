@@ -389,3 +389,36 @@ The live namespace-deletion target uses Redis. The ecr-secret-operator bundle in
 Rollback persists verified resource identities and UIDs on the restored Subscription before deleting the CE backup. Remigration includes still-unowned retained resources (including catalog-generated RBAC) omitted from the OLMv0 inventory; missing resources are skipped, replacements and newly controlled resources are rejected, and normal collection is deduplicated.
 
 Revision collision observations during COD rollout are retried within the existing timeout. Only current-generation completion and availability allow migration to continue; persistent collisions fail with the controller diagnostic and retain staging resources.
+
+### Recovering a handoff that stopped before CE creation
+
+Migration stores the original Subscription and OperatorGroup specs on its retained
+staging resource using the same backup annotations as the CE. These annotations
+are written with resource creation, before any rollout wait or handoff can fail,
+and are propagated to COD-generated revisions. This does not depend on `--backup`.
+
+Export the retained COD before removing any staging resources. For direct COS staging, export that COS instead:
+
+```bash
+kubectl get clusterobjectdeployment "$ce_name" -o json > staging.json
+# Alternative when only the initial COS exists:
+# kubectl get clusterobjectset "${ce_name}-1" -o json > staging.json
+jq -e '
+  .metadata.annotations as $a |
+  ($a["olm.operatorframework.io/migrated-from-subscription"] | split("/")) as $source |
+  {apiVersion: "operators.coreos.com/v1alpha1", kind: "Subscription",
+   metadata: {namespace: $source[0], name: $source[1]},
+   spec: ($a["olm.operatorframework.io/migration-subscription-backup"] | fromjson)}
+' staging.json > subscription-recovery.json
+jq -e '.metadata.annotations["olm.operatorframework.io/migration-operatorgroup-backup"] | fromjson' staging.json > operatorgroup-spec-recovery.json
+```
+
+Exporting does not restore OLMv0. Before restoring the Subscription, stop the target
+controllers, release their workload ownership, and verify the source namespace and
+OperatorGroup are usable; otherwise OLMv0 and OLMv1 could reconcile concurrently.
+The ordinary rollback CLI requires a CE and does not automate this pre-CE recovery.
+Library callers can decode the saved spec into `Backup.Subscription` and use
+`RecoverFromBackup` after safely releasing the target. Keep the exported files until
+recovery has succeeded.
+
+After capturing the backup and before removing OLMv0 management, validate the staging COS or COD with its recovery annotations. Reject a candidate whose total annotation size exceeds Kubernetes' 256 KiB limit before creating it.
