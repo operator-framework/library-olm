@@ -7,20 +7,24 @@ set -euo pipefail
 : "${OLM_V0_CRDS:?OLM_V0_CRDS is required}"
 : "${OLM_V0_MANIFEST:?OLM_V0_MANIFEST is required}"
 : "${OLM_V1_COMMIT:?OLM_V1_COMMIT is required}"
-: "${KIND:?KIND is required}"
-
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+kind_bin=$(go -C "$root_dir" tool -n kind)
+kind() { "$kind_bin" "$@"; }
 cluster_name=${E2E_CLUSTER_NAME:-library-olm-e2e}
 kind_config=${E2E_KIND_CONFIG:-"$root_dir/test/e2e/migration/kind-config.yaml"}
+# Kind runs from the caller's directory, preserving relative host paths inside
+# a custom config. Resolve the config and kubeconfig filenames explicitly.
+[[ $E2E_KUBECONFIG == /* ]] || E2E_KUBECONFIG="$PWD/$E2E_KUBECONFIG"
+[[ $kind_config == /* ]] || kind_config="$PWD/$kind_config"
 
 mkdir -p "$(dirname "$E2E_KUBECONFIG")"
-if "$KIND" get clusters | grep -Fxq "$cluster_name"; then
+if kind get clusters | grep -Fxq "$cluster_name"; then
 	# Keep an existing dedicated cluster for iterative fixture development, but
 	# always regenerate the kubeconfig from Kind rather than accepting an old or
 	# user-supplied file.
-	"$KIND" export kubeconfig --name "$cluster_name" --kubeconfig "$E2E_KUBECONFIG"
+	kind export kubeconfig --name "$cluster_name" --kubeconfig "$E2E_KUBECONFIG"
 else
-	"$KIND" create cluster --name "$cluster_name" --config "$kind_config" --kubeconfig "$E2E_KUBECONFIG"
+	kind create cluster --name "$cluster_name" --config "$kind_config" --kubeconfig "$E2E_KUBECONFIG"
 fi
 kubectl --kubeconfig "$E2E_KUBECONFIG" wait --for=condition=Ready nodes --all --timeout=3m
 

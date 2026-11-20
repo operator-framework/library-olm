@@ -5,9 +5,9 @@ set -euo pipefail
 : "${OLM_V1_COMMIT:?OLM_V1_COMMIT is required}"
 : "${E2E_KUBECONFIG:?E2E_KUBECONFIG is required}"
 : "${E2E_CLUSTER_NAME:?E2E_CLUSTER_NAME is required}"
-: "${KIND:?KIND is required}"
 [[ "$OLM_V1_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo 'OLM_V1_COMMIT must be a full commit hash' >&2; exit 1; }
 
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 source_dir=$(mktemp -d)
 trap 'rm -rf "$source_dir"' EXIT
 git -C "$source_dir" init --quiet
@@ -29,7 +29,7 @@ make -C "$source_dir" -f Makefile -f - migration-install \
 	OPCON_IMG=quay.io/operator-framework/operator-controller:devel \
 	CATD_IMG=quay.io/operator-framework/catalogd:devel \
 	OBJECT_CONTROLLER_IMG=quay.io/operator-framework/object-controller:devel \
-	KIND="$KIND" MIGRATION_CLUSTER="$E2E_CLUSTER_NAME" <<'MAKE'
+	KIND="go -C $root_dir tool kind" MIGRATION_CLUSTER="$E2E_CLUSTER_NAME" <<'MAKE'
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 .PHONY: migration-install
