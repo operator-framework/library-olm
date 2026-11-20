@@ -154,13 +154,13 @@ func TestDeploymentTerminalRevisionFailures(t *testing.T) {
 	}
 }
 
-// TestAutomaticDeploymentSelection verifies API discovery selects the manager without unsafe fallback.
-func TestAutomaticDeploymentSelection(t *testing.T) {
+// TestRequiredDeploymentPrerequisite rejects absent or unavailable COD support without falling back to direct COS creation.
+func TestRequiredDeploymentPrerequisite(t *testing.T) {
 	for _, tc := range []struct {
 		name                                string
 		present, established, failDiscovery bool
 	}{
-		{name: "absent uses COS"},
+		{name: "absent blocks migration"},
 		{name: "present uses COD", present: true, established: true},
 		{name: "unready does not fall back", present: true},
 		{name: "discovery failure does not fall back", failDiscovery: true},
@@ -187,14 +187,11 @@ func TestAutomaticDeploymentSelection(t *testing.T) {
 					return c.Get(ctx, key, obj, opts...)
 				}})
 			}
-			// An input value must not override automatic selection.
-			opts, err := m.PrepareClusterObjectSet(context.Background(), Options{SubscriptionName: "example", SystemNamespace: "controller", UseClusterObjectDeployment: !tc.present})
-			wantError := tc.failDiscovery || tc.present && !tc.established
+			// Missing or unreadable COD support must never fall back to direct COS creation.
+			_, err := m.PrepareClusterObjectSet(context.Background(), Options{SubscriptionName: "example", SystemNamespace: "controller"})
+			wantError := tc.failDiscovery || !tc.present || !tc.established
 			if (err != nil) != wantError {
 				t.Fatalf("error = %v, want error %v", err, wantError)
-			}
-			if err == nil && opts.UseClusterObjectDeployment != tc.present {
-				t.Fatalf("COD selected = %v, want %v", opts.UseClusterObjectDeployment, tc.present)
 			}
 		})
 	}
@@ -231,34 +228,16 @@ func TestRollbackDeploymentOwnership(t *testing.T) {
 
 type completingDeploymentClient struct{ client.Client }
 
+// Create simulates controller completion for deployment creation tests.
 func (c completingDeploymentClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
 	if cod, ok := obj.(*ocv1.ClusterObjectDeployment); ok {
+		if cod.Labels[controllerManagedByLabel] != "" || cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionNone {
+			return errors.New("initial COD must use None without its adoption label")
+		}
 		ready := readyDeployment()
 		cod.UID, cod.Generation, cod.Status = ready.UID, ready.Generation, ready.Status
 	}
 	return c.Client.Create(ctx, obj, opts...)
-}
-
-func TestCreateClusterObjectSetAdoptionLabel(t *testing.T) {
-	m := migrationTestClient(t)
-	m.Client = failingMigrationClient{Client: m.Client, succeedCOS: true}
-	resources, err := m.createClusterObjectSet(context.Background(), Options{ClusterExtensionName: "example", SubscriptionNamespace: "ns", SubscriptionName: "sub"}, &MigrationInfo{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resources.cos == nil || resources.cod != nil {
-		t.Fatal("expected a directly created COS when the COD CRD is absent")
-	}
-	var cos ocv1.ClusterObjectSet
-	if err := m.Client.Get(context.Background(), client.ObjectKeyFromObject(resources.cos), &cos); err != nil {
-		t.Fatal(err)
-	}
-	if cos.Labels["app.kubernetes.io/managed-by"] != "object-controller" {
-		t.Fatal("migration COS lacks the object-controller adoption label")
-	}
-	if metav1.GetControllerOf(&cos) != nil || cos.Spec.Group != "example" || cos.Spec.CollisionProtection != ocv1.CollisionProtectionNone {
-		t.Fatalf("unexpected staging COS identity or collision protection: %#v", cos)
-	}
 }
 
 func TestCreateDeploymentTemplate(t *testing.T) {
@@ -536,6 +515,100 @@ func TestDeploymentCollisionWait(t *testing.T) {
 				}
 			} else if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "existing object is still owned") {
 				t.Fatalf("persistent collision lost deadline or diagnostic: %v", err)
+			}
+		})
+	}
+}
+
+// TestMissingCODBlocksMigrationBeforeMutation checks that missing COD support prevents destructive migration work.
+func TestMissingCODBlocksMigrationBeforeMutation(t *testing.T) {
+	sub, csv := healthySubscriptionFixtures()
+	sub.Spec.CatalogSource = "catalog"
+	sub.Spec.CatalogSourceNamespace = "catalogs"
+	catalog := &operatorsv1alpha1.CatalogSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "catalog", Namespace: "catalogs"},
+		Spec: operatorsv1alpha1.CatalogSourceSpec{
+			SourceType: operatorsv1alpha1.SourceTypeGrpc,
+			Image:      "registry.example/catalog:latest",
+		},
+	}
+	m := migrationTestClient(t, sub, csv, catalog, establishedClusterObjectSetCRD())
+	m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{
+		Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+			t.Fatal("created a resource without COD support")
+			return nil
+		},
+		Update: func(context.Context, client.WithWatch, client.Object, ...client.UpdateOption) error {
+			t.Fatal("updated a resource without COD support")
+			return nil
+		},
+		Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
+			t.Fatal("deleted a resource without COD support")
+			return nil
+		},
+	})
+	ctx := context.Background()
+	opts := Options{SubscriptionName: sub.Name, SubscriptionNamespace: sub.Namespace}
+	report, err := m.CheckReadiness(ctx, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, check := range report.Checks {
+		if check.Name == "ClusterObjectDeployment API" && !check.Passed && strings.Contains(check.Message, clusterObjectDeploymentCRDName) {
+			found = true
+		}
+	}
+	if !found || len(report.FailedChecks()) != 1 {
+		t.Fatalf("readiness did not report missing COD support: %+v", report)
+	}
+	if _, err := m.Gather(ctx, opts); err == nil || !strings.Contains(err.Error(), clusterObjectDeploymentCRDName) {
+		t.Fatalf("dry-run Gather did not reject missing COD: %v", err)
+	}
+	if err := m.Migrate(ctx, opts); err == nil || !strings.Contains(err.Error(), "readiness checks failed (1 issues)") {
+		t.Fatalf("migration did not reject missing COD at readiness: %v", err)
+	}
+}
+
+// TestCreateMigrationResourcesSharesDefaults verifies COD and CE creation use the
+// same defaulted identity and namespace, while retaining explicit CE names.
+func TestCreateMigrationResourcesSharesDefaults(t *testing.T) {
+	for _, name := range []string{"", "custom"} {
+		t.Run("name="+name, func(t *testing.T) {
+			m := migrationTestClient(t, establishedClusterObjectDeploymentCRD())
+			m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{
+				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					switch resource := obj.(type) {
+					case *ocv1.ClusterObjectDeployment:
+						ready := readyDeployment()
+						resource.UID, resource.Generation, resource.Status = ready.UID, ready.Generation, ready.Status
+					case *ocv1.ClusterExtension:
+						resource.UID = "extension"
+						resource.Status.Conditions = []metav1.Condition{{Type: ocv1.TypeInstalled, Status: metav1.ConditionTrue}}
+					}
+					return c.Create(ctx, obj, opts...)
+				},
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			opts := Options{SubscriptionName: "subscription", SubscriptionNamespace: "source", ClusterExtensionName: name, SystemNamespace: "controller"}
+			if _, err := m.CreateMigrationResources(ctx, opts, &MigrationInfo{PackageName: "package", Channel: "stable"}, &Backup{}); err != nil {
+				t.Fatal(err)
+			}
+			expected := name
+			if expected == "" {
+				expected = "subscription"
+			}
+			var cod ocv1.ClusterObjectDeployment
+			if err := m.Client.Get(ctx, client.ObjectKey{Name: expected}, &cod); err != nil {
+				t.Fatal(err)
+			}
+			var ce ocv1.ClusterExtension
+			if err := m.Client.Get(ctx, client.ObjectKey{Name: expected}, &ce); err != nil {
+				t.Fatal(err)
+			}
+			if cod.Spec.Template.Metadata.Labels[LabelOwnerName] != expected || ce.Spec.Namespace != "source" {
+				t.Fatalf("inconsistent defaults: COD owner label=%q CE namespace=%q", cod.Spec.Template.Metadata.Labels[LabelOwnerName], ce.Spec.Namespace)
 			}
 		})
 	}
