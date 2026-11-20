@@ -387,3 +387,5 @@ Setup refuses existing OLM namespaces or APIs, including partial installations. 
 The live namespace-deletion target uses Redis. The ecr-secret-operator bundle includes a custom-resource sample with `spec.aws_iam_secret`, which is absent from its CRD schema and can block OLMv1 preflight in a new namespace. Ecr-secret-operator remains in the live migration matrix; the focused Redis scenario preserves all source-namespace deletion and label-transfer assertions.
 
 Rollback persists verified resource identities and UIDs on the restored Subscription before deleting the CE backup. Remigration includes still-unowned retained resources (including catalog-generated RBAC) omitted from the OLMv0 inventory; missing resources are skipped, replacements and newly controlled resources are rejected, and normal collection is deduplicated.
+
+Revision collision observations during COD rollout are retried within the existing timeout. Only current-generation completion and availability allow migration to continue; persistent collisions fail with the controller diagnostic and retain staging resources.
