@@ -48,7 +48,10 @@ that public catalog and uses the locally built fixture catalog.
 COS/COD are experimental: only the current typed `inlineManifest`/`secretRef`
 entries are supported. There is no conversion of older experimental resource
 schemas. Setup refuses clusters containing OLM namespaces or COS/COD APIs,
-including partial installations. Before repeating setup, run:
+including partial installations. Teardown deletes the entire Kind cluster named
+by `E2E_CLUSTER_NAME`, including all its workloads. Use a dedicated cluster name
+for E2E runs; do not point `E2E_CLUSTER_NAME` at a cluster you need to keep.
+Before repeating setup, run:
 
 ```bash
 E2E_CLUSTER_NAME=<cluster-name> make migration/e2e-teardown

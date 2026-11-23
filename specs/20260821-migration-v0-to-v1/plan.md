@@ -323,11 +323,9 @@ permissive phase/object overrides in a guarded patch. After the protected rollou
 completes, a separate guarded patch enables CE adoption before creating the CE. Failed or uncertain handoffs preserve staging resources.
 The protection-only template update may create an intermediate protected revision.
 
-`make migration/test-e2e-cos-supersession` also runs
-`TestCODProtectedRolloutCollision`, which verifies that a later COD rollout refuses
-an unrelated existing object. Both cases collect package coverage and run in the
-existing handoff CI jobs. Unit regressions cover readiness, identity changes,
-patch conflicts, uncertain patch outcomes, and refusal to create a CE on failure.
-
+`make migration/test-e2e-cos-supersession` runs
+`TestPrecreatedClusterObjectSetSupersession`, collecting package coverage in the
+handoff CI job. Unit regressions cover readiness, identity changes, patch
+conflicts, uncertain patch outcomes, and refusal to create a CE on failure.
 
 COD-only migration waits for the protected staging rollout to complete after changing the template to `Prevent`, before creating the ClusterExtension. Stale initial-generation readiness must not authorize catalog handoff.

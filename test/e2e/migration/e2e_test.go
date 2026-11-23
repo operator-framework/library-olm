@@ -826,6 +826,7 @@ func TestSystemManagedNamespaceMigration(t *testing.T) {
 	if namespace == "" || subscription == "" {
 		t.Fatal("E2E_NAMESPACE and E2E_SUBSCRIPTION are required")
 	}
+	_, kubeClient, _ := newMigrator(t)
 	// The fixture bundle supplies operatorframework.io/suggested-namespace,
 	// which has precedence over the package-derived default.
 	targetNamespace := subscription
@@ -872,16 +873,39 @@ func TestSystemManagedNamespaceMigration(t *testing.T) {
 	if err := json.Unmarshal([]byte(namespaceJSON), &managedNamespace); err != nil {
 		t.Fatalf("decode system-managed namespace: %v", err)
 	}
-	catalogCOS := subscription + "-2"
-	ownedByCatalogCOS := false
-	for _, owner := range managedNamespace.OwnerReferences {
-		if owner.Kind == ocv1.ClusterObjectSetKind && owner.Name == catalogCOS {
-			ownedByCatalogCOS = true
-			break
-		}
+	var cod ocv1.ClusterObjectDeployment
+	if err := kubeClient.Get(t.Context(), client.ObjectKey{Name: subscription}, &cod); err != nil {
+		t.Fatalf("get migration COD: %v", err)
 	}
-	if !ownedByCatalogCOS {
-		t.Fatalf("system-managed namespace %q ownerReferences = %#v, want catalog ClusterObjectSet %q", targetNamespace, managedNamespace.OwnerReferences, catalogCOS)
+	var revisions ocv1.ClusterObjectSetList
+	var catalogCOS *ocv1.ClusterObjectSet
+	if err := wait.PollUntilContextTimeout(t.Context(), 2*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
+		if err := kubeClient.Get(ctx, client.ObjectKey{Name: targetNamespace}, &managedNamespace); err != nil {
+			return false, err
+		}
+		revisions = ocv1.ClusterObjectSetList{}
+		if err := kubeClient.List(ctx, &revisions, client.MatchingLabels{
+			migration.LabelOwnerKind: ocv1.ClusterExtensionKind,
+			migration.LabelOwnerName: subscription,
+		}); err != nil {
+			return false, err
+		}
+		catalogCOS = nil
+		for i := range revisions.Items {
+			revision := &revisions.Items[i]
+			if revision.Spec.Group != subscription || !metav1.IsControlledBy(revision, &cod) {
+				return false, fmt.Errorf("revision %q has unexpected group or COD owner", revision.Name)
+			}
+			if catalogCOS == nil || revision.Spec.Revision > catalogCOS.Spec.Revision {
+				catalogCOS = revision
+			}
+		}
+		return catalogCOS != nil && catalogCOS.Spec.Revision > 1 &&
+			catalogCOS.Spec.CollisionProtection == ocv1.CollisionProtectionPrevent &&
+			cosSucceeded(*catalogCOS) && metav1.IsControlledBy(&managedNamespace, catalogCOS), nil
+	}); err != nil {
+		logCODHandoffDiagnostics(t, subscription, revisions.Items)
+		t.Fatalf("wait for completed catalog COS owning system-managed namespace %q: %v (latest COS: %#v, namespace owners: %#v)", targetNamespace, err, catalogCOS, managedNamespace.OwnerReferences)
 	}
 	targetDeployments, err := output("kubectl", "get", "deployment", "-n", targetNamespace, "-o", "name")
 	if err != nil || strings.TrimSpace(targetDeployments) == "" {
