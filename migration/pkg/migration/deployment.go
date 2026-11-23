@@ -94,7 +94,91 @@ func (m *Migrator) createClusterObjectDeployment(ctx context.Context, opts Optio
 		return fmt.Errorf("create ClusterObjectDeployment: %w", err)
 	}
 	resources.cod = cod
-	return m.waitForDeployment(ctx, cod)
+	if err := m.waitForDeployment(ctx, cod); err != nil {
+		return err
+	}
+	if err := m.protectDeploymentForAdoption(ctx, cod); err != nil {
+		return err
+	}
+	// Keep the deployment non-adoptable until its protected rollout has completed.
+	if err := m.waitForDeployment(ctx, cod); err != nil {
+		return err
+	}
+	return m.enableDeploymentAdoption(ctx, cod)
+}
+
+// protectDeploymentForAdoption enables collision protection after the initial
+// rollout without making the deployment adoptable. Concurrent changes fail closed.
+func (m *Migrator) protectDeploymentForAdoption(ctx context.Context, created *ocv1.ClusterObjectDeployment) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var cod ocv1.ClusterObjectDeployment
+		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(created), &cod); err != nil {
+			return fmt.Errorf("get COD before protected handoff: %w", err)
+		}
+		if cod.UID != created.UID || cod.Generation != created.Generation || cod.DeletionTimestamp != nil || metav1.GetControllerOf(&cod) != nil || cod.Labels[controllerManagedByLabel] != "" || cod.Annotations[migrationInvocationAnnotation] != created.Annotations[migrationInvocationAnnotation] {
+			return fmt.Errorf("migration ClusterObjectDeployment %s changed before protected handoff", cod.Name)
+		}
+		progress := apimeta.FindStatusCondition(cod.Status.Conditions, ocv1.ClusterObjectDeploymentTypeProgressing)
+		available := apimeta.FindStatusCondition(cod.Status.Conditions, ocv1.ClusterObjectDeploymentTypeAvailable)
+		if progress == nil || progress.ObservedGeneration != cod.Generation || progress.Status != metav1.ConditionFalse || progress.Reason != ocv1.ClusterObjectDeploymentReasonNewClusterObjectSetProgressed || available == nil || available.ObservedGeneration != cod.Generation || available.Status != metav1.ConditionTrue {
+			return fmt.Errorf("migration ClusterObjectDeployment %s is not ready for protected handoff", cod.Name)
+		}
+		before := cod.DeepCopy()
+		cod.Spec.Template.Spec.CollisionProtection = ocv1.CollisionProtectionPrevent
+		// PhaseSort and collected objects use None for initial adoption. Remove all
+		// overrides so every subsequent object inherits the protected template.
+		for i := range cod.Spec.Template.Spec.Phases {
+			phase := &cod.Spec.Template.Spec.Phases[i]
+			phase.CollisionProtection = ""
+			for j := range phase.Objects {
+				phase.Objects[j].CollisionProtection = ""
+			}
+		}
+		if err := m.Client.Patch(ctx, &cod, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+			return fmt.Errorf("protect COD before CE adoption: %w", err)
+		}
+		*created = cod
+		return nil
+	})
+}
+
+// enableDeploymentAdoption marks the COD adoptable only after its protected
+// rollout has completed. Recheck identity and status on every conflict retry.
+func (m *Migrator) enableDeploymentAdoption(ctx context.Context, created *ocv1.ClusterObjectDeployment) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var cod ocv1.ClusterObjectDeployment
+		if err := m.Client.Get(ctx, client.ObjectKeyFromObject(created), &cod); err != nil {
+			return fmt.Errorf("get COD before enabling adoption: %w", err)
+		}
+		if cod.UID != created.UID || cod.Generation != created.Generation || cod.DeletionTimestamp != nil || metav1.GetControllerOf(&cod) != nil || cod.Labels[controllerManagedByLabel] != "" || cod.Annotations[migrationInvocationAnnotation] != created.Annotations[migrationInvocationAnnotation] || cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
+			return fmt.Errorf("migration ClusterObjectDeployment %s changed before enabling adoption", cod.Name)
+		}
+		for _, phase := range cod.Spec.Template.Spec.Phases {
+			if phase.CollisionProtection != "" {
+				return fmt.Errorf("migration ClusterObjectDeployment %s has a phase collision-protection override", cod.Name)
+			}
+			for _, object := range phase.Objects {
+				if object.CollisionProtection != "" {
+					return fmt.Errorf("migration ClusterObjectDeployment %s has an object collision-protection override", cod.Name)
+				}
+			}
+		}
+		progress := apimeta.FindStatusCondition(cod.Status.Conditions, ocv1.ClusterObjectDeploymentTypeProgressing)
+		available := apimeta.FindStatusCondition(cod.Status.Conditions, ocv1.ClusterObjectDeploymentTypeAvailable)
+		if progress == nil || progress.ObservedGeneration != cod.Generation || progress.Status != metav1.ConditionFalse || progress.Reason != ocv1.ClusterObjectDeploymentReasonNewClusterObjectSetProgressed || available == nil || available.ObservedGeneration != cod.Generation || available.Status != metav1.ConditionTrue {
+			return fmt.Errorf("migration ClusterObjectDeployment %s protected rollout is not ready for adoption", cod.Name)
+		}
+		before := cod.DeepCopy()
+		if cod.Labels == nil {
+			cod.Labels = map[string]string{}
+		}
+		cod.Labels[controllerManagedByLabel] = "operator-controller"
+		if err := m.Client.Patch(ctx, &cod, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+			return fmt.Errorf("enable COD adoption: %w", err)
+		}
+		*created = cod
+		return nil
+	})
 }
 
 // waitForDeployment waits for the created deployment to complete its current rollout and become available.
@@ -305,7 +389,7 @@ func buildClusterObjectDeployment(opts Options, info *MigrationInfo, phases []*o
 	}
 	configuration := ocv1ac.ClusterObjectDeployment(opts.ClusterExtensionName).
 		WithAnnotations(annotations).
-		WithLabels(map[string]string{LabelOwnerKind: ocv1.ClusterExtensionKind, LabelOwnerName: opts.ClusterExtensionName, controllerManagedByLabel: "operator-controller"}).
+		WithLabels(map[string]string{LabelOwnerKind: ocv1.ClusterExtensionKind, LabelOwnerName: opts.ClusterExtensionName}).
 		WithSpec(ocv1ac.ClusterObjectDeploymentSpec().WithTemplate(
 			ocv1ac.ClusterObjectDeploymentTemplate().
 				WithMetadata(ocv1ac.ClusterObjectDeploymentTemplateMetadata().
