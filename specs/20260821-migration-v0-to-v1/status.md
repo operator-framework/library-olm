@@ -1,6 +1,6 @@
 # Implementation Status — OLMv0 → OLMv1 Migration
 
-Last updated: 2026-10-16
+Last updated: 2026-11-24
 
 ---
 
@@ -20,8 +20,10 @@ handling, shared catalog progress/output, and CLI usage-on-error behavior merged
 #64, #65, #69, and #72. PR #70 added deployment-config and large-bundle unit coverage;
 PR #73 added Kind demo scripts. PR #74 merged focused fixture acceptance cases and a live
 four-state batch with two eligible operators. PR #76 releases preserved workloads from OLMv1
-ownership during rollback and verifies that a second migration adopts them. The broader
-validation inventory and coverage threshold remain open work.
+ownership during rollback and verifies that a second migration adopts them. PRs #93–#107
+completed the COD-only path, protected CE handoff, collision checks, recovery improvements,
+and controller update. The broader validation inventory remains open. Combined coverage is
+displayed in CI; the 80% informational target will not be enforced.
 
 ---
 
@@ -35,8 +37,7 @@ Merged via stacked PRs #11–#16 on 2026-08-26.
 - GitHub Actions workflows (build, test, golangci-lint, go-apidiff)
 - Prow config in `openshift/release` (tide, lgtm/approve, hold) — completed
 - `migration/pkg/migration/` and `migration/examples/cmd/migrate-operators-v0-to-v1/` ported from perdasilva prototype
-- Migration `ClusterObjectSet` (COS) revision with `CollisionProtection: None`; the
-  controller subsequently creates its catalog-derived revision with `Prevent`
+- The original migration COS flow was replaced by the merged COD-only path in Phase 8
 - SecretPacker for large bundles
 - `olm.operatorframework.io/migrated-from-subscription: <ns>/<name>` annotation on COS and CE
 
@@ -71,8 +72,8 @@ Merged in PR #16.
 
 - `migrate-operators-v0-to-v1` example CLI under `migration/examples/cmd/`
 - `check` verb: readiness + compatibility + four-state classification; `--all`
-- `convert` verb: catalog resolution → backup Sub/OG specs to CE annotations → collect
-  resources → create COS (wait `Succeeded=True`) → create CE → cleanup; `--dry-run`;
+- `convert` verb: catalog resolution → backup Sub/OG specs → collect resources →
+  create COD → wait for initial and protected COS rollouts → enable CE adoption → cleanup; `--dry-run`;
   `--backup <dir>`; `--all` with `--continue-on-error`
 - `rollback` verb: start CE orphan deletion with a rollback finalizer before listing owned COS
   revisions, snapshot verified workloads, delete every revision, release preserved workloads
@@ -111,7 +112,7 @@ PR #51 merged the experimental system-managed mode.
   collected resources, and removes source copies after cutover.
 - `--acknowledge-namespace-delete` is the required destructive opt-in for deleting the source
   namespace after a cross-namespace migration.
-- `--system-managed-install-namespace` requires operator-controller v1.12.0's experimental CRD,
+- `--system-managed-install-namespace` requires the pinned operator-controller's experimental CRD,
   capability-checks its optional `spec.namespace`, omits the CE field, and prepares the
   bundle-metadata namespace before applying the migration COS.
 - COS is itself an experimental OLMv1 API, so the migration tooling already requires the
@@ -143,13 +144,13 @@ The fixture FBC is rebuilt locally from committed snapshots and served through a
 registry using OLMv1's `olmv1-ca`; it has no dependency on mutable Quay digests. The
 suite covers catalog migration, check, dry-run resource/deletion previews, conversion,
 negative non-mutation paths, recovery after CE creation failure, and execution of both
-CLIs from a ServiceAccount-authenticated Job. The focused OPRUN-4716 check validates the
-v1.12.0 handoff: migration revision 1 uses `None`, the controller creates revision
-2 with `Prevent`, and both revisions reach `Succeeded=True`.
+CLIs from a ServiceAccount-authenticated Job. The focused OPRUN-4716 check now validates
+one COD with an initial `None` rollout, a completed protected rollout before CE adoption,
+and later catalog revisions with `Prevent`.
 
 The live suite also creates a CatalogSource from OLMv0's catalog image and validates its
 migration. Failure diagnostics collect resources/events and OLMv1 controller logs. CI runs
-unit coverage, fixture E2E, live E2E, the in-cluster Job, and COS supersession independently,
+unit coverage, fixture E2E, live E2E, the in-cluster Job, and COD handoff independently,
 then displays combined coverage from all coverage-producing jobs.
 
 Live validation on 2026-09-23 migrated `logging-operator` from the OpenShift community
@@ -178,13 +179,15 @@ InstallPlan capture. PR #66 added focused validation tests, including self-depen
 and command-name parsing. PR #70 added unit assertions for inline DeploymentConfig mapping and
 large-bundle SecretPacker packing. PR #74 added fixture tests for non-image source refusal,
 dependent warnings, command-named Subscriptions, and DeploymentConfig mapping, plus a live
-four-state batch with two eligible operators. Remaining gaps include
+four-state batch with two eligible operators. PRs #99–#107 added COD rollback recovery,
+staging backup, collision retry, protected handoff, COD-only conversion, collision E2E,
+and the matching controller pin. Remaining test gaps include
 post-upgrade field persistence, fixture/live catalog naming/adoption/overflow/deletion edges,
-shared-resource adoption, OLMv1-driven upgrades, and the still-unenforced coverage threshold.
+shared-resource adoption, OLMv1-driven upgrades, and large-payload E2E.
 These are test gaps; they do not include
 OLMv1 dependency resolution, APIService migration, or standard-profile system-managed namespace
-availability. The documented ≥80% threshold applies to `migration/pkg/...` coverage combined
-from unit and coverage-producing E2E runs; it is not yet enforced by the Make target or CI.
+availability. Coverage remains visible in CI for inspection; the previously documented 80%
+target will not be enforced by Make, CI, or the Phase 8 exit criterion.
 Downstream topology, architecture, and restricted-network qualification also remains outside
 Kind CI.
 
@@ -261,14 +264,23 @@ merged PRs #14 and #16:
 | #74 | Close focused migration acceptance gaps | migration-acceptance-test-gaps | MERGED |
 | #75 | Format migration Makefile recipes | migration-makefile-recipe-formatting | MERGED |
 | #76 | Release orphaned resources during migration rollback | fix/migration-rollback-remigration | MERGED |
+| #93–#94 | Update experimental COS/COD APIs and remove legacy COS compatibility | — | MERGED |
+| #99–#103 | Preserve remigration and staging recovery, update controller APIs, and retry COD collisions | — | MERGED |
+| #104–#105 | Protect COD handoff and require COD-only migration | migration-cod-protected-handoff / migration-cod-only | MERGED |
+| #106 | Verify protected COD rollout rejects new collisions | migration-cod-collision-e2e | MERGED |
+| #107 | Update library and E2E controller to current pinned definitions | migration-operator-controller-latest | MERGED |
 
 ---
 
 ## Open items
 
-1. **Phase 8 / OPRUN-4762** — enforce and meet the `migration/pkg/...` coverage threshold,
-   then complete the remaining applicable `validation.md` cases, especially fixture/live
-   catalog edges, upgrades, shared resources, and large-payload E2E.
+1. **Phase 8 / OPRUN-4762** — complete the remaining applicable `validation.md` cases,
+   especially fixture/live catalog edges, upgrades, shared resources, and large-payload
+   E2E. Continue publishing combined coverage for review; no percentage gate is planned.
+2. Define explicit recovery-annotation cleanup separately from OLMv0 conflict cleanup.
+   Preserve provenance and controller metadata while making rollback loss explicit.
+3. Establish and test the lifecycle of OLMv0-generated custom-resource RBAC across
+   COD handoff, rollback, remigration, and uninstall.
 
 Dependency resolution and APIService-owning operators are unsupported by OLMv1. C2/C9 and C3
 must continue to reject them; implementing those OLMv0 behaviors in this library is not an open
