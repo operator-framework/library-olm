@@ -20,6 +20,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -584,6 +585,10 @@ func TestMigration(t *testing.T) {
 	if _, err := output("kubectl", "get", "subscription", subscription, "-n", namespace); err == nil {
 		t.Fatal("Subscription still exists after successful conversion")
 	}
+	if os.Getenv("E2E_RECOVERY_CLEANUP_TEST") == "true" {
+		assertRecoveryCleanup(t, subscription)
+		return
+	}
 	if os.Getenv("E2E_COD_ROLLBACK_TEST") == "true" {
 		assertCODFixtureRollback(t, namespace, subscription, &originalDeployment)
 		return
@@ -626,6 +631,77 @@ func TestMigration(t *testing.T) {
 		}
 		afterRemigration := captureRollbackManagement(t, kubeClient, subscription)
 		assertRemigrationAdoptedDeployments(t, kubeClient, ownedDeployments, beforeRefusal, afterRemigration)
+	}
+}
+
+func assertRecoveryCleanup(t *testing.T, name string) {
+	t.Helper()
+	ctx := context.Background()
+	_, c, _ := newMigrator(t)
+	var before ocv1.ClusterExtension
+	if err := c.Get(ctx, client.ObjectKey{Name: name}, &before); err != nil {
+		t.Fatal(err)
+	}
+	if before.Annotations[migration.MigrationSubscriptionBackupAnnotation] == "" {
+		t.Fatal("migration did not retain Subscription backup")
+	}
+	var codBefore ocv1.ClusterObjectDeployment
+	if err := wait.PollUntilContextTimeout(ctx, 2*time.Second, 5*time.Minute, true, func(ctx context.Context) (bool, error) {
+		if err := c.Get(ctx, client.ObjectKey{Name: name}, &codBefore); err != nil {
+			return false, err
+		}
+		progress := apimeta.FindStatusCondition(codBefore.Status.Conditions, ocv1.ClusterObjectDeploymentTypeProgressing)
+		available := apimeta.FindStatusCondition(codBefore.Status.Conditions, ocv1.ClusterObjectDeploymentTypeAvailable)
+		return progress != nil && progress.ObservedGeneration == codBefore.Generation && progress.Status == metav1.ConditionFalse &&
+			progress.Reason == ocv1.ClusterObjectDeploymentReasonNewClusterObjectSetProgressed &&
+			available != nil && available.ObservedGeneration == codBefore.Generation && available.Status == metav1.ConditionTrue, nil
+	}); err != nil {
+		t.Fatalf("wait for protected COD rollout: %v", err)
+	}
+	cli := binary(t, "migrate-operators-v0-to-v1")
+	config := os.Getenv("KUBECONFIG")
+	preview, err := output(cli, "cleanup-recovery", name, "--dry-run", "--output=jsonl", "--kubeconfig", config)
+	if err != nil || !strings.Contains(preview, migration.MigrationSubscriptionBackupAnnotation) {
+		t.Fatalf("recovery cleanup preview: %v\n%s", err, preview)
+	}
+	if _, err := output(cli, "cleanup-recovery", name, "--kubeconfig", config); err == nil {
+		t.Fatal("recovery cleanup accepted missing rollback-loss acknowledgment")
+	}
+	var afterRefusal ocv1.ClusterExtension
+	if err := c.Get(ctx, client.ObjectKey{Name: name}, &afterRefusal); err != nil {
+		t.Fatal(err)
+	}
+	if afterRefusal.Annotations[migration.MigrationSubscriptionBackupAnnotation] != before.Annotations[migration.MigrationSubscriptionBackupAnnotation] {
+		t.Fatal("preview or refusal changed the Subscription backup")
+	}
+	run(t, cli, "cleanup-recovery", name, "--acknowledge-rollback-loss", "--output=jsonl", "--kubeconfig", config)
+	var after ocv1.ClusterExtension
+	if err := c.Get(ctx, client.ObjectKey{Name: name}, &after); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := after.Annotations[migration.MigrationSubscriptionBackupAnnotation]; present {
+		t.Fatal("recovery cleanup retained Subscription backup")
+	}
+	if after.Annotations[migration.MigratedFromSubscriptionAnnotation] != before.Annotations[migration.MigratedFromSubscriptionAnnotation] {
+		t.Fatal("recovery cleanup changed migration provenance")
+	}
+	var cod ocv1.ClusterObjectDeployment
+	if err := c.Get(ctx, client.ObjectKey{Name: name}, &cod); err != nil {
+		t.Fatalf("recovery cleanup removed protected COD: %v", err)
+	}
+	if cod.UID != codBefore.UID || cod.Generation != codBefore.Generation {
+		t.Fatal("recovery cleanup changed the active COD")
+	}
+	run(t, cli, "cleanup-recovery", name, "--include-migration-metadata", "--kubeconfig", config)
+	run(t, cli, "cleanup-recovery", name, "--include-migration-metadata", "--kubeconfig", config)
+	if err := c.Get(ctx, client.ObjectKey{Name: name}, &after); err != nil {
+		t.Fatal(err)
+	}
+	if after.Annotations[migration.MigratedFromSubscriptionAnnotation] != before.Annotations[migration.MigratedFromSubscriptionAnnotation] {
+		t.Fatal("optional cleanup changed migration provenance")
+	}
+	if _, err := output(cli, "rollback", name, "--acknowledge-installed", "--kubeconfig", config); err == nil {
+		t.Fatal("rollback succeeded without the ClusterExtension backup")
 	}
 }
 

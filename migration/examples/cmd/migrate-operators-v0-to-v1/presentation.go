@@ -27,6 +27,7 @@ type commandOutput struct {
 	batchResult     func(command, target string, resultErr error) error
 	singleStart     func(command, target string)
 	singleResult    func(command, target string, resultErr error) error
+	recoveryResult  func(*migration.RecoveryCleanupResult) error
 	fatalError      func(error)
 }
 
@@ -135,6 +136,20 @@ func selectedCommandOutput() commandOutput {
 			fmt.Println()
 			return nil
 		},
+		recoveryResult: func(result *migration.RecoveryCleanupResult) error {
+			if result.DryRun {
+				fmt.Printf("Would remove %d ClusterExtension annotations from %s:\n", len(result.Annotations), result.ClusterExtensionName)
+			} else {
+				fmt.Printf("Removed %d ClusterExtension annotations from %s:\n", len(result.Annotations), result.ClusterExtensionName)
+			}
+			for _, key := range result.Annotations {
+				fmt.Printf("  %s\n", key)
+			}
+			if result.RollbackLoss {
+				fmt.Println("Rollback using the ClusterExtension Subscription backup will no longer be available.")
+			}
+			return nil
+		},
 		fatalError: func(err error) { _ = clioutput.WriteError(os.Stdout, os.Stderr, formatter, err) },
 	}
 	if formatter.Structured() {
@@ -176,6 +191,13 @@ func selectedCommandOutput() commandOutput {
 			return nil // main emits the terminal error record
 		}
 		output.fatalError = func(err error) { _ = clioutput.WriteError(os.Stdout, os.Stderr, formatter, err) }
+		output.recoveryResult = func(result *migration.RecoveryCleanupResult) error {
+			recordType := "result"
+			if result.DryRun {
+				recordType = "preview"
+			}
+			return formatter.WriteRecord(os.Stdout, outputRecord{Type: recordType, Command: "cleanup-recovery", Target: result.ClusterExtensionName, Status: migration.ProgressCompleted, Data: result})
+		}
 	}
 	return output
 }
