@@ -455,8 +455,8 @@ github.com/kisielk/errcheck v1.9.0 h1:9xt1zI9EBfcYBvdU1nVrzMzzUPUtPKs9bVSIM3TAb3
 github.com/kisielk/errcheck v1.9.0/go.mod h1:kQxWMMVZgIkDq7U8xtG/n2juOjbLgZtedi0D+/VL/i8=
 github.com/kkHAIKE/contextcheck v1.1.6 h1:7HIyRcnyzxL9Lz06NGhiKvenXq7Zw6Q0UQu/ttjfJCE=
 github.com/kkHAIKE/contextcheck v1.1.6/go.mod h1:3dDbMRNBFaq8HFXWC1JyvDSPm43CmE6IuHam8Wr0rkg=
-github.com/klauspost/compress v1.20.3 h1:zWNoFqq/lSuYQRim3dUXlXeA0IqwuZGicdG5ZTfY5j4=
-github.com/klauspost/compress v1.20.3/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
+github.com/klauspost/compress v1.20.4 h1:dD0v/bvxtjCBqQu6sx1TNWkalEY5lNTIe+HY9w8TeNI=
+github.com/klauspost/compress v1.20.4/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
 github.com/klauspost/cpuid/v2 v2.3.0 h1:S4CRMLnYUhGeDFDqkGriYKdfoFlDnMtqTiI/sFzhA9Y=
 github.com/klauspost/cpuid/v2 v2.3.0/go.mod h1:hqwkgyIinND0mEev00jJYCxPNVRVXFQeu1XKlok6oO0=
 github.com/klauspost/pgzip v1.2.7 h1:02QB3Ttao6zOWDnSsv3bIvjN24bX0eGjWniQ8vuBfkA=
@@ -568,8 +568,8 @@ github.com/opencontainers/runtime-spec v1.3.0 h1:YZupQUdctfhpZy3TM39nN9Ika5CBWT5
 github.com/opencontainers/runtime-spec v1.3.0/go.mod h1:jwyrGlmzljRJv/Fgzds9SsS/C5hL+LL3ko9hs6T5lQ0=
 github.com/operator-framework/api v0.46.0 h1:EitSlfRJZKYDewTK+ntH9L/p+NIKv/L1PgRoaIWH+to=
 github.com/operator-framework/api v0.46.0/go.mod h1:oFXzh7rHCnMwC6N0B92NEsfQyLGJ7FrceAYemjwoKPI=
-github.com/operator-framework/operator-controller v1.12.1-0.20261118155125-552f8422ebff h1:0tIZK83InammLTvuY6kjjR8v1iWDPoUqMocwjeR5bIY=
-github.com/operator-framework/operator-controller v1.12.1-0.20261118155125-552f8422ebff/go.mod h1:V0uQxHi+tjru/jYtRZEfKstHCQKjI0PjXuUzxm1Ew0A=
+github.com/operator-framework/operator-controller v1.12.1-0.20261124145859-a2b85064875b h1:iX/4gbDkzIRS5jsMBXkhzRJikiWmUmVqtYdL92Ehg04=
+github.com/operator-framework/operator-controller v1.12.1-0.20261124145859-a2b85064875b/go.mod h1:j000YhemybkV+trNkgjEr6CSwopjJ4moE65HzvIygp4=
 github.com/otiai10/copy v1.2.0/go.mod h1:rrF5dJ5F0t/EWSYODDu4j9/vEeYHMkc8jt0zJChqQWw=
 github.com/otiai10/copy v1.14.1 h1:5/7E6qsUMBaH5AnQ0sSLzzTg1oTECmcCmT6lvF45Na8=
 github.com/otiai10/copy v1.14.1/go.mod h1:oQwrEDDOci3IM8dJF0d8+jnbfPDllW6vUjNc3DoZm9I=

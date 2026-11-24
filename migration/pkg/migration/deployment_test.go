@@ -584,7 +584,7 @@ func TestCreateMigrationResourcesSharesDefaults(t *testing.T) {
 						resource.UID, resource.Generation, resource.Status = ready.UID, ready.Generation, ready.Status
 					case *ocv1.ClusterExtension:
 						resource.UID = "extension"
-						resource.Status.Conditions = []metav1.Condition{{Type: ocv1.TypeInstalled, Status: metav1.ConditionTrue}}
+						resource.Status.Conditions = []metav1.Condition{{Type: ocv1.ClusterExtensionTypeInstalled, Status: metav1.ConditionTrue}}
 					}
 					return c.Create(ctx, obj, opts...)
 				},
