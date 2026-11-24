@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/operator-framework/library-olm/migration/pkg/clioutput"
@@ -27,6 +28,7 @@ type commandOutput struct {
 	batchResult     func(command, target string, resultErr error) error
 	singleStart     func(command, target string)
 	singleResult    func(command, target string, resultErr error) error
+	recoveryResult  func(*migration.RecoveryCleanupResult) error
 	fatalError      func(error)
 }
 
@@ -135,7 +137,8 @@ func selectedCommandOutput() commandOutput {
 			fmt.Println()
 			return nil
 		},
-		fatalError: func(err error) { _ = clioutput.WriteError(os.Stdout, os.Stderr, formatter, err) },
+		recoveryResult: func(result *migration.RecoveryCleanupResult) error { return writeRecoveryTextResult(os.Stdout, result) },
+		fatalError:     func(err error) { _ = clioutput.WriteError(os.Stdout, os.Stderr, formatter, err) },
 	}
 	if formatter.Structured() {
 		output.scanStart = func(string) {}
@@ -176,8 +179,36 @@ func selectedCommandOutput() commandOutput {
 			return nil // main emits the terminal error record
 		}
 		output.fatalError = func(err error) { _ = clioutput.WriteError(os.Stdout, os.Stderr, formatter, err) }
+		output.recoveryResult = func(result *migration.RecoveryCleanupResult) error {
+			recordType := "result"
+			if result.DryRun {
+				recordType = "preview"
+			}
+			return formatter.WriteRecord(os.Stdout, outputRecord{Type: recordType, Command: "cleanup-recovery", Target: result.ClusterExtensionName, Status: migration.ProgressCompleted, Data: result})
+		}
 	}
 	return output
+}
+
+func writeRecoveryTextResult(w io.Writer, result *migration.RecoveryCleanupResult) error {
+	verb := "Removed"
+	if result.DryRun {
+		verb = "Would remove"
+	}
+	if _, err := fmt.Fprintf(w, "%s %d ClusterExtension annotations from %s:\n", verb, len(result.Annotations), result.ClusterExtensionName); err != nil {
+		return fmt.Errorf("write recovery cleanup summary: %w", err)
+	}
+	for _, key := range result.Annotations {
+		if _, err := fmt.Fprintf(w, "  %s\n", key); err != nil {
+			return fmt.Errorf("write recovery cleanup annotation %s: %w", key, err)
+		}
+	}
+	if result.RollbackLoss {
+		if _, err := fmt.Fprintln(w, "Rollback using the ClusterExtension Subscription backup will no longer be available."); err != nil {
+			return fmt.Errorf("write recovery cleanup rollback warning: %w", err)
+		}
+	}
+	return nil
 }
 
 func resultRecord(command, target string, resultErr error) outputRecord {

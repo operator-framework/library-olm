@@ -163,6 +163,15 @@ two eligible operators (V5.9). The fixture and live CI jobs run these cases.
 
 ## Test implementation and coverage
 
+The focused `make migration/test-e2e-recovery-cleanup` fixture target tests
+`cleanup-recovery` after COD adoption. It previews exact CE annotation keys,
+checks refusal without rollback-loss acknowledgment, removes backups, checks
+that rollback is then unavailable, and retries optional metadata cleanup. The
+target uses the same fixture cluster and contributes CLI coverage in CI.
+`cleanup-recovery` edits ClusterExtension annotations only. It preserves the
+`migrated-from-subscription` provenance marker and leaves COD templates and COS
+revisions untouched so cleanup does not trigger another rollout.
+
 Use Go's `testing` package with `testify`-free polling helpers and `client-go` against the
 kind kubeconfig. Tests are in `test/e2e/migration`, protected by the `e2e` build tag so `make migration/test-unit`
 remains unit-only. The test process invokes the built CLIs for command behavior; it uses

@@ -54,7 +54,8 @@ Subcommands:
   check   — report readiness and compatibility (no changes)
   convert — perform the migration
   rollback — restore an operator to OLMv0 management
-  cleanup — finish a partial migration (Conflict state)`,
+  cleanup — finish a partial migration (Conflict state)
+  cleanup-recovery — remove rollback annotations after protected adoption`,
 }
 
 func init() {
@@ -69,6 +70,7 @@ func init() {
 	rootCmd.AddCommand(convertCmd)
 	rootCmd.AddCommand(rollbackCmd)
 	rootCmd.AddCommand(cleanupCmd)
+	rootCmd.AddCommand(cleanupRecoveryCmd)
 }
 
 // runAfterArgumentValidation lets Cobra show usage for invalid arguments, but

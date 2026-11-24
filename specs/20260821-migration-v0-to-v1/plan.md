@@ -256,7 +256,7 @@ Source: [handoff safety review](https://github.com/operator-framework/library-ol
 
 ### Explicit migration annotation cleanup
 
-- [ ] Design an explicit API/CLI operation for users who no longer need migration
+- [x] Design an explicit API/CLI operation for users who no longer need migration
   recovery metadata. Do not remove annotations automatically after migration;
   users may still need rollback, and historical values can become stale.
 - Classify provenance, invocation identity, backup data, and bundle metadata by
@@ -266,6 +266,12 @@ Source: [handoff safety review](https://github.com/operator-framework/library-ol
   capability. Test resource ownership checks, repeated cleanup, and preservation
   of active workloads and controller-owned metadata.
 - Keep this operation distinct from the existing cleanup of OLMv0 conflicts.
+- `CleanupRecoveryAnnotations` and `cleanup-recovery` remove CE Subscription and
+  OperatorGroup backups after current-generation CE installation and protected COD
+  adoption. `--dry-run` lists exact keys; mutation requires
+  `--acknowledge-rollback-loss` while the Subscription backup exists. The optional
+  `--include-migration-metadata` also removes CE invocation and acknowledgment
+  annotations. Provenance, COD templates, COS revisions, and workloads remain.
 
 Source: [annotation retention discussion](https://github.com/operator-framework/library-olm/pull/93#discussion_r4556715778).
 
