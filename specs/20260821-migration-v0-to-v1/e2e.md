@@ -14,7 +14,7 @@ refusals, not features this library is expected to implement.
 
 ### COD transition
 
-The library API dependency and COD CI controller both use commit `552f8422ebff`.
+The library API dependency and COD CI controller both use commit `a2b85064875b`.
 The handoff test checks that the ownerless migration COD
 has `app.kubernetes.io/managed-by: operator-controller` before CE creation and
 retains the label and COD UID after adoption.
@@ -36,7 +36,7 @@ of all revisions. Only the initial revision uses `None`; every subsequent revisi
 must use `Prevent`, including any intermediate revisions during handoff.
 The `migration/test-e2e-cod-rollback` target now automates those rollback assertions and
 collects CLI coverage. A separate CI job builds and installs operator-controller from
-pinned commit `552f8422ebffc8102d8e0d4fa868f99b061cda23`, then runs the handoff and
+pinned commit `a2b85064875b25dccc9f0d8ecdbb1b2d4c041abf`, then runs the handoff and
 rollback targets. Default suites also build this pinned controller from source,
 using upstream build targets and the experimental installer. Docker, Git, Python 3, and
 `envsubst` must be available locally. Setup loads the built images into a new
@@ -83,7 +83,7 @@ to match generated manifests, regardless of caller image overrides.
 Pin controller versions and installers in CI; the public live catalog above is an
 explicit exception. The fixture
 registry's `latest` tag is private to the disposable cluster and rebuilt from committed inputs on
-every setup. The default bootstrap pins OLMv0 to `v0.46.0`, OLMv1 to commit `552f8422ebff`, and kind to
+every setup. The default bootstrap pins OLMv0 to `v0.46.0`, OLMv1 to commit `a2b85064875b`, and kind to
 `v0.33.0` with the digest-pinned Kubernetes `v1.37.0` node image; CI should
 mirror those release artifacts and override the URLs when it cannot access GitHub. The job inputs
 are the kind node image, OLMv0 manifest URL and digest, operator-controller source commit, and (only for the smoke suite) the catalog image/package/channel/CSV

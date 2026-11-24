@@ -20,7 +20,7 @@ E2E_FIXTURE_KUBECONFIG ?= $(ROOT_DIR)/.kubeconfig/library-olm-fixture-e2e
 # Pin controllers used by the E2E cluster. Override only to test a
 # compatibility candidate; do not use "latest" in CI.
 OLM_V0_VERSION ?= v0.46.0
-OLM_V1_COMMIT ?= 552f8422ebffc8102d8e0d4fa868f99b061cda23
+OLM_V1_COMMIT ?= a2b85064875b25dccc9f0d8ecdbb1b2d4c041abf
 OLM_V0_CRDS ?= https://github.com/operator-framework/operator-lifecycle-manager/releases/download/$(OLM_V0_VERSION)/crds.yaml
 OLM_V0_MANIFEST ?= https://github.com/operator-framework/operator-lifecycle-manager/releases/download/$(OLM_V0_VERSION)/olm.yaml
 E2E_REAL_OPERATOR_MANIFEST ?= $(ROOT_DIR)/test/e2e/migration/real-operator.yaml

@@ -881,7 +881,7 @@ func (m *Migrator) WaitForClusterExtensionInstalled(ctx context.Context, ceName 
 		}
 
 		for _, c := range ce.Status.Conditions {
-			if c.Type == ocv1.TypeInstalled && c.Status == metav1.ConditionTrue {
+			if c.Type == ocv1.ClusterExtensionTypeInstalled && c.Status == metav1.ConditionTrue {
 				return true, nil
 			}
 		}

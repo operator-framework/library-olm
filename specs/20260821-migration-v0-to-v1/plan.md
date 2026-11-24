@@ -43,7 +43,7 @@ revision 2 with `Prevent`, which also reaches `Succeeded=True`. Track boxcutter 
 Verified during Phase 8 E2E.
 
 **COD transition (R2.7), in progress:** the library always creates a COD, checks its current-generation rollout, and performs COD-aware rollback. COD CRD presence and establishment are mandatory prerequisites for check, dry-run, and migration. API types are pinned to
-operator-controller commit `552f8422ebff`, matching the COD CI controller and including
+operator-controller commit `a2b85064875b`, matching the COD CI controller and including
 the adoption label requirement. Migration stamps `app.kubernetes.io/managed-by:
 
 operator-controller` on the ownerless COD before handoff; unit and E2E assertions
@@ -57,7 +57,7 @@ and its revisions 1 and 2 used `None` and `Prevent` collision protection. A sepa
 full CLI fixture conversion and acknowledged rollback restored the Subscription,
 removed COD/COS resources, and preserved the operator Deployment UID and availability.
 The default E2E setup builds the pinned current experimental controller. A separate CI job
-builds pinned COD-capable commit `552f8422ebffc8102d8e0d4fa868f99b061cda23` and
+builds pinned COD-capable commit `a2b85064875b25dccc9f0d8ecdbb1b2d4c041abf` and
 runs covered handoff and workload-preserving rollback E2E targets. The rollback target
 passed locally on 2026-10-29.
 Both covered targets passed again on 2026-11-05 against `bbe43971eadd` on kind
