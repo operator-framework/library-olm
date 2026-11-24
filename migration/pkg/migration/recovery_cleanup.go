@@ -47,7 +47,7 @@ func (m *Migrator) CleanupRecoveryAnnotations(ctx context.Context, opts Recovery
 		return nil, fmt.Errorf("ClusterExtension name is required")
 	}
 	m.progress(ProgressEvent{Step: ProgressStepCleanup, Status: ProgressStarted, Message: fmt.Sprintf("Checking recovery cleanup for ClusterExtension %s", opts.ClusterExtensionName)})
-	ce, err := m.recoveryCleanupTarget(ctx, opts.ClusterExtensionName)
+	ce, cod, err := m.recoveryCleanupTarget(ctx, opts.ClusterExtensionName)
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +77,16 @@ func (m *Migrator) CleanupRecoveryAnnotations(ctx context.Context, opts Recovery
 		m.progress(ProgressEvent{Step: ProgressStepCleanup, Status: ProgressCompleted, Message: fmt.Sprintf("ClusterExtension %s has no selected recovery annotations", ce.Name)})
 		return result, nil
 	}
+	// Recheck both resources immediately before the CE patch. Kubernetes does not
+	// provide a transaction across CE and COD objects; the CE optimistic lock and
+	// explicit rollback-loss acknowledgment remain the commit-time safeguards.
+	currentCE, currentCOD, err := m.recoveryCleanupTarget(ctx, opts.ClusterExtensionName)
+	if err != nil {
+		return nil, err
+	}
+	if currentCE.ResourceVersion != ce.ResourceVersion || currentCOD.UID != cod.UID || currentCOD.Generation != cod.Generation {
+		return nil, fmt.Errorf("migration resources changed during recovery cleanup for ClusterExtension %s; retry", ce.Name)
+	}
 	before := ce.DeepCopy()
 	ce.Annotations = maps.Clone(ce.Annotations)
 	for _, key := range result.Annotations {
@@ -89,44 +99,61 @@ func (m *Migrator) CleanupRecoveryAnnotations(ctx context.Context, opts Recovery
 	return result, nil
 }
 
-func (m *Migrator) recoveryCleanupTarget(ctx context.Context, name string) (*ocv1.ClusterExtension, error) {
+func (m *Migrator) recoveryCleanupTarget(ctx context.Context, name string) (*ocv1.ClusterExtension, *ocv1.ClusterObjectDeployment, error) {
 	var ce ocv1.ClusterExtension
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: name}, &ce); err != nil {
-		return nil, fmt.Errorf("get ClusterExtension %s for recovery cleanup: %w", name, err)
+		return nil, nil, fmt.Errorf("get ClusterExtension %s for recovery cleanup: %w", name, err)
 	}
 	if ce.DeletionTimestamp != nil {
-		return nil, fmt.Errorf("ClusterExtension %s is being deleted", name)
+		return nil, nil, fmt.Errorf("ClusterExtension %s is being deleted", name)
 	}
 	ref := ce.Annotations[MigratedFromSubscriptionAnnotation]
 	ns, subName, err := splitSubRef(ref)
 	if err != nil {
-		return nil, fmt.Errorf("cluster extension %s has no valid migration provenance: %w", name, err)
+		return nil, nil, fmt.Errorf("cluster extension %s has no valid migration provenance: %w", name, err)
 	}
 	installed := apimeta.FindStatusCondition(ce.Status.Conditions, ocv1.ClusterExtensionTypeInstalled)
 	if installed == nil || installed.Status != metav1.ConditionTrue || installed.ObservedGeneration != ce.Generation {
-		return nil, fmt.Errorf("ClusterExtension %s is not installed at its current generation", name)
+		return nil, nil, fmt.Errorf("ClusterExtension %s is not installed at its current generation", name)
 	}
 	var sub operatorsv1alpha1.Subscription
 	if err := m.Client.Get(ctx, client.ObjectKey{Namespace: ns, Name: subName}, &sub); err == nil {
-		return nil, fmt.Errorf("subscription %s/%s still exists; resolve the conflict before recovery cleanup", ns, subName)
+		return nil, nil, fmt.Errorf("subscription %s/%s still exists; resolve the conflict before recovery cleanup", ns, subName)
 	} else if !apierrors.IsNotFound(err) && !apimeta.IsNoMatchError(err) {
-		return nil, fmt.Errorf("check source Subscription %s/%s: %w", ns, subName, err)
+		return nil, nil, fmt.Errorf("check source Subscription %s/%s: %w", ns, subName, err)
 	}
 	var cod ocv1.ClusterObjectDeployment
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: name}, &cod); err != nil {
-		return nil, fmt.Errorf("get ClusterObjectDeployment %s for recovery cleanup: %w", name, err)
+		return nil, nil, fmt.Errorf("get ClusterObjectDeployment %s for recovery cleanup: %w", name, err)
 	}
 	owner := metav1.GetControllerOf(&cod)
 	if cod.DeletionTimestamp != nil || owner == nil || owner.APIVersion != ocv1.GroupVersion.String() || owner.Kind != ocv1.ClusterExtensionKind || owner.Name != ce.Name || owner.UID != ce.UID {
-		return nil, fmt.Errorf("ClusterObjectDeployment %s is not controlled by ClusterExtension %s", name, name)
+		return nil, nil, fmt.Errorf("ClusterObjectDeployment %s is not controlled by ClusterExtension %s", name, name)
 	}
-	if cod.Labels[controllerManagedByLabel] != "operator-controller" || cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
-		return nil, fmt.Errorf("ClusterObjectDeployment %s has not completed protected adoption", name)
+	if cod.Labels[controllerManagedByLabel] != "operator-controller" || !codCollisionProtected(&cod) {
+		return nil, nil, fmt.Errorf("ClusterObjectDeployment %s has not completed protected adoption", name)
 	}
 	progress := apimeta.FindStatusCondition(cod.Status.Conditions, ocv1.ClusterObjectDeploymentTypeProgressing)
 	available := apimeta.FindStatusCondition(cod.Status.Conditions, ocv1.ClusterObjectDeploymentTypeAvailable)
 	if progress == nil || progress.ObservedGeneration != cod.Generation || progress.Status != metav1.ConditionFalse || progress.Reason != ocv1.ClusterObjectDeploymentReasonNewClusterObjectSetProgressed || available == nil || available.ObservedGeneration != cod.Generation || available.Status != metav1.ConditionTrue {
-		return nil, fmt.Errorf("ClusterObjectDeployment %s is not ready at its current generation", name)
+		return nil, nil, fmt.Errorf("ClusterObjectDeployment %s is not ready at its current generation", name)
 	}
-	return &ce, nil
+	return &ce, &cod, nil
+}
+
+func codCollisionProtected(cod *ocv1.ClusterObjectDeployment) bool {
+	if cod.Spec.Template.Spec.CollisionProtection != ocv1.CollisionProtectionPrevent {
+		return false
+	}
+	for _, phase := range cod.Spec.Template.Spec.Phases {
+		if phase.CollisionProtection != "" && phase.CollisionProtection != ocv1.CollisionProtectionPrevent {
+			return false
+		}
+		for _, object := range phase.Objects {
+			if object.CollisionProtection != "" && object.CollisionProtection != ocv1.CollisionProtectionPrevent {
+				return false
+			}
+		}
+	}
+	return true
 }

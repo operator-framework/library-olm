@@ -131,6 +131,81 @@ func TestCleanupRecoveryAnnotationsAdditionalMetadataAndRetry(t *testing.T) {
 	}
 }
 
+func TestCODCollisionProtected(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		phaseProtection  ocv1.CollisionProtection
+		objectProtection ocv1.CollisionProtection
+		want             bool
+	}{
+		{name: "inherited Prevent", want: true},
+		{name: "explicit Prevent", phaseProtection: ocv1.CollisionProtectionPrevent, objectProtection: ocv1.CollisionProtectionPrevent, want: true},
+		{name: "phase None", phaseProtection: ocv1.CollisionProtectionNone},
+		{name: "phase IfNoController", phaseProtection: ocv1.CollisionProtectionIfNoController},
+		{name: "object None", objectProtection: ocv1.CollisionProtectionNone},
+		{name: "object IfNoController", objectProtection: ocv1.CollisionProtectionIfNoController},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ce, cod := recoveryCleanupFixtures()
+			cod.Spec.Template.Spec.Phases = []ocv1.ClusterObjectSetPhase{{
+				CollisionProtection: tc.phaseProtection,
+				Objects:             []ocv1.ClusterObjectSetObject{{CollisionProtection: tc.objectProtection}},
+			}}
+			if got := codCollisionProtected(cod); got != tc.want {
+				t.Fatalf("codCollisionProtected = %t, want %t", got, tc.want)
+			}
+			m := migrationTestClient(t, ce, cod)
+			_, err := m.CleanupRecoveryAnnotations(context.Background(), RecoveryCleanupOptions{ClusterExtensionName: cod.Name, DryRun: true})
+			if (err == nil) != tc.want {
+				t.Fatalf("cleanup preview error = %v, want eligibility %t", err, tc.want)
+			}
+		})
+	}
+}
+
+type advanceCODOnSecondRead struct {
+	client.Client
+	reads int
+}
+
+func (c *advanceCODOnSecondRead) Get(ctx context.Context, key client.ObjectKey, object client.Object, opts ...client.GetOption) error {
+	if _, ok := object.(*ocv1.ClusterObjectDeployment); ok {
+		c.reads++
+		if c.reads == 2 {
+			if err := c.advanceCOD(ctx, key); err != nil {
+				return err
+			}
+		}
+	}
+	return c.Client.Get(ctx, key, object, opts...)
+}
+
+func (c *advanceCODOnSecondRead) advanceCOD(ctx context.Context, key client.ObjectKey) error {
+	var cod ocv1.ClusterObjectDeployment
+	if err := c.Client.Get(ctx, key, &cod); err != nil {
+		return err
+	}
+	cod.Generation++
+	return c.Update(ctx, &cod)
+}
+
+func TestCleanupRecoveryAnnotationsRechecksCODBeforePatch(t *testing.T) {
+	ce, cod := recoveryCleanupFixtures()
+	m := migrationTestClient(t, ce, cod)
+	m.Client = &advanceCODOnSecondRead{Client: m.Client}
+	_, err := m.CleanupRecoveryAnnotations(context.Background(), RecoveryCleanupOptions{ClusterExtensionName: ce.Name, AcknowledgeRollbackLoss: true})
+	if err == nil || !strings.Contains(err.Error(), "not ready at its current generation") {
+		t.Fatalf("cleanup after COD advanced = %v", err)
+	}
+	var unchanged ocv1.ClusterExtension
+	if err := m.Client.Get(context.Background(), client.ObjectKey{Name: ce.Name}, &unchanged); err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Annotations[MigrationSubscriptionBackupAnnotation] != ce.Annotations[MigrationSubscriptionBackupAnnotation] {
+		t.Fatal("cleanup removed backup after COD generation advanced")
+	}
+}
+
 func TestCleanupRecoveryAnnotationsRejectsUnsafeState(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

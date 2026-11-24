@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -8,6 +9,39 @@ import (
 	"github.com/operator-framework/library-olm/migration/pkg/clioutput"
 	"github.com/operator-framework/library-olm/migration/pkg/migration"
 )
+
+type failAfterWrites struct {
+	remaining int
+	err       error
+}
+
+func (w *failAfterWrites) Write(p []byte) (int, error) {
+	if w.remaining == 0 {
+		return 0, w.err
+	}
+	w.remaining--
+	return len(p), nil
+}
+
+func TestRecoveryCleanupTextWriteErrors(t *testing.T) {
+	failed := errors.New("output failed")
+	result := &migration.RecoveryCleanupResult{ClusterExtensionName: "widgets", Annotations: []string{"one"}, RollbackLoss: true}
+	for _, tc := range []struct {
+		name, operation string
+		writes          int
+	}{
+		{name: "summary", operation: "summary", writes: 0},
+		{name: "annotation", operation: "annotation one", writes: 1},
+		{name: "warning", operation: "rollback warning", writes: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := writeRecoveryTextResult(&failAfterWrites{remaining: tc.writes, err: failed}, result)
+			if !errors.Is(err, failed) || !strings.Contains(err.Error(), tc.operation) {
+				t.Fatalf("write error = %v", err)
+			}
+		})
+	}
+}
 
 func TestRecoveryCleanupStructuredOutput(t *testing.T) {
 	formatter := &recordingFormatter{}
