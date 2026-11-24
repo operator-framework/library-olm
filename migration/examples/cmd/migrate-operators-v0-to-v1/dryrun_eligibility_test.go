@@ -131,7 +131,9 @@ func TestDryRunRejectsSystemManagedSourceNamespace(t *testing.T) {
 			Status: apiextensionsv1.ConditionTrue,
 		}}},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sub, csv, catalog, operatorGroup, cosCRD, ceCRD).Build()
+	codCRD := cosCRD.DeepCopy()
+	codCRD.Name = "clusterobjectdeployments.olm.operatorframework.io"
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sub, csv, catalog, operatorGroup, cosCRD, codCRD, ceCRD).Build()
 	m := migration.NewMigrator(c, nil)
 	cmd := &cobra.Command{}
 	cmd.SetContext(t.Context())
