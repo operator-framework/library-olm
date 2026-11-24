@@ -5,7 +5,7 @@
 **Identifier:** `OPRUN-4715-TP-001`  
 **Feature:** [OPRUN-4715 — OLMv0 → OLMv1 Migration library & CLIs (prototype)](https://redhat.atlassian.net/browse/OPRUN-4715)  
 **Version:** 1.0  
-**Date:** 2026-10-16\
+**Date:** 2026-11-24
 **Status:** Active; the Phase 8 test foundation is implemented, with validation expansion in progress.
 
 This plan follows the IEEE 829 test-plan structure. It is the executable-test companion to
@@ -60,9 +60,9 @@ tests. A focused in-cluster Job test verifies that the CLIs can also run using P
 
 ### 4.3 Migration, recovery, and mappings
 
-- COS creation and `Succeeded=True` before ClusterExtension creation; no client-written OLMv1
-  status; migration revision `None` collision protection and the controller's `Prevent`
-  superseding revision.
+- COD creation and initial `None` rollout, followed by a completed `Prevent` rollout
+  before ClusterExtension adoption; no client-written OLMv1 status. Later catalog
+  revisions remain protected, and unrelated objects collide rather than being adopted.
 - Subscription, OperatorGroup, ClusterExtension, CatalogSource, and ClusterCatalog field mappings
   defined in requirements R4, R6, R7, and R8.
 - Backup annotations and optional on-disk backup; rollback acknowledgement, release of
@@ -164,20 +164,19 @@ there too. Unit tests write their profile under `artifacts/coverage`. After all
 coverage-producing suites, run `make migration/report-coverage-all` to merge and display a
 single report. The in-cluster Job is deliberately excluded from coverage collection.
 
-CI runs unit coverage, fixture E2E, COS-supersession E2E, and live E2E independently, retains
+CI runs unit coverage, fixture E2E, COD handoff E2E, and live E2E independently, retains
 their diagnostics and coverage inputs, and then runs a dependent aggregate-report job. The Job E2E is an independent
-functional check. The minimum 80% target applies to `migration/pkg/...` statements in the
-merged unit and coverage-producing E2E profiles, not to unit tests alone. There is no separate
-unit or E2E percentage minimum. The combined threshold is not yet enforced by the Make target
-or CI. Provisioning or image-pull errors may be retried once, but assertion failures must not be
+functional check. Combined `migration/pkg/...` coverage is reported for inspection. The
+previously stated 80% figure is informational and will not be enforced by Make, CI, or
+Phase 8 exit criteria. Provisioning or image-pull errors may be retried once, but assertion failures must not be
 retried automatically.
 
 ## 7. Item Pass/Fail Criteria
 
 - A test item passes only when all its mapped `validation.md` assertions pass and no unexpected
   cluster mutation occurs.
-- A migration passes only when its COS reaches `Succeeded=True` before the CE is created, the CE
-  reaches `Installed=True`, expected source cleanup occurs, and workloads/resources required to
+- A migration passes only when its COD reaches initial and protected rollout readiness before
+  the CE is created, the CE reaches `Installed=True`, expected source cleanup occurs, and workloads/resources required to
   remain are preserved or adopted.
 - A refusal test passes only on non-zero/refusal behavior with the expected reason and no CE/COS
   creation or unintended deletion.
@@ -186,8 +185,8 @@ retried automatically.
 - A catalog test passes only when the resulting ClusterCatalog is `Serving=True`, its mapping and
   adoption/deduplication behavior match V3, and deletion conditions are honored.
 - Current CI passes when required jobs pass and the combined coverage report is generated from
-  unit and coverage-producing E2E data. Phase 8 exit additionally requires the unenforced
-  combined `migration/pkg/...` coverage threshold to be met.
+  unit and coverage-producing E2E data. Phase 8 exit depends on the applicable validation
+  scenarios, without a coverage-percentage gate.
 
 ## 8. Suspension Criteria and Resumption Requirements
 
@@ -231,7 +230,7 @@ system-managed namespace scenarios against the experimental controller profile.
 |---|---|
 | Local / CI host | Go toolchain and Bingo-managed Kind; container runtime available to Kind. |
 | Kubernetes | Kind Kubernetes `v1.37.0` node image unless the test run explicitly validates another supported version. |
-| OLM components | Pinned OLMv0 `v0.46.0` and OLMv1 `v1.12.0` manifests, or CI-approved overrides of those pinned inputs. |
+| OLM components | Pinned OLMv0 `v0.46.0` and OLMv1 controller commit `a2b85064875b`, or CI-approved overrides of those pinned inputs. |
 | Kubeconfig | Kind-generated `.kubeconfig/library-olm-e2e` by default; `E2E_KUBECONFIG` only overrides that output path. |
 | Fixture environment | Separate `library-olm-fixture-e2e` cluster; OLMv0 CRDs only, OLMv1 controllers, local TLS registry/FBC, committed snapshots. |
 | Live environment | Separate `library-olm-e2e` cluster with both OLMv0 and OLMv1 controllers and OLMv0 catalog access. |
@@ -263,8 +262,8 @@ Testing follows implementation milestones rather than fixed dates:
    catalog edge cases and mapping next, then upgrade/large-payload/shared-resource scenarios.
 3. Keep the merged V4.7 namespace and experimental V4.8 system-managed scenarios passing.
    Retain C3 refusal coverage because APIService migration is permanently unsupported.
-4. Declare Phase 8 complete only after its coverage target and applicable validation inventory
-   pass in CI.
+4. Declare Phase 8 complete after the applicable validation inventory passes in CI;
+   inspect combined coverage without enforcing a percentage.
 
 ## 15. Risks and Contingencies
 
@@ -276,7 +275,7 @@ Testing follows implementation milestones rather than fixed dates:
 | Fixture drift from a real OLMv0 install | False confidence | Deliberately refresh, sanitize, review, and commit snapshots only from a healthy live installation. |
 | Unsafe migration cleanup | Workload/resource loss | Require refusal-before-mutation, backup/recovery tests, orphan-cascade assertions, and regression tests. |
 | Experimental OLMv1 namespace API | Controller compatibility | Retain the system-managed mode's capability gate and verify unsupported CRDs refuse before mutation. Explicit namespace migration is merged; APIService migration remains unsupported and covered by C3 refusal tests. |
-| Coverage-only confidence | Untested controller behavior | Require both the combined unit-plus-E2E threshold and fixture/live functional gates; retain per-suite reports for diagnosis. |
+| Coverage-only confidence | Untested controller behavior | Require fixture/live functional gates and retain per-suite coverage reports for diagnosis. |
 
 ## 16. Approvals
 

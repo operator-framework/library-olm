@@ -2,7 +2,7 @@
 
 A `v0` Go library plus two CLIs that migrate operators from **OLMv0** (`Subscription` /
 `ClusterServiceVersion` / `CatalogSource`) to **OLMv1** (`ClusterExtension` /
-`ClusterObjectSet` / `ClusterCatalog`) management — with minimal downtime and defined
+`ClusterObjectDeployment` / `ClusterObjectSet` / `ClusterCatalog`) management — with minimal downtime and defined
 recovery paths for partial migrations.
 
 > Status: upstream **prototype** for
@@ -10,7 +10,7 @@ recovery paths for partial migrations.
 > versioned `v0` — breaking API changes are expected. Binary packaging, Console UI, and
 > Hosted Control Planes are out of scope (see [requirements.md](requirements.md) §R10).
 
-The prototype requires the experimental OLMv1 installation for `ClusterObjectSet` (COS).
+The prototype requires the experimental OLMv1 installation for `ClusterObjectDeployment` (COD).
 Its optional system-managed namespace mode uses that same profile. Dependency resolution
 and APIService-owning operators are unsupported by OLMv1 and are deliberately rejected;
 they are not outstanding migration features.
@@ -36,7 +36,7 @@ Migrates OLMv0 `CatalogSource` resources to OLMv1 `ClusterCatalog` resources.
 | `--dry-run` | Print what would be created without modifying the cluster |
 
 ### `migrate-operators-v0-to-v1`
-Migrates OLMv0 `Subscription`/`CSV` installations to OLMv1 `ClusterExtension`/`ClusterObjectSet`.
+Migrates OLMv0 `Subscription`/`CSV` installations to OLMv1 `ClusterExtension`/`ClusterObjectDeployment`.
 
 Every action is a verb subcommand that takes either an operator name **or** `--all`
 (kubectl/`oc`-style). Because the target is an argument, an operator literally named
@@ -82,9 +82,9 @@ check ──────────────► convert ──────�
                                ├─ resolve target ClusterCatalog (by package/version/channel)
                                ├─ back up Subscription and OperatorGroup specs (CE annotations)
                                ├─ collect owned resources (5 sources, dedup)
-                               ├─ create migration ClusterObjectSet (SecretPacker, None)
-                               │     └─ wait for COS controller: Succeeded=True
-                               └─ create ClusterExtension (controller creates catalog revision)
+                               ├─ create COD with initial collision protection None
+                               │     └─ wait for initial COS rollout, then switch to Prevent
+                               └─ enable COD adoption and create ClusterExtension
                                ▲
                                └── rollback: start CE orphan deletion with finalizer; delete COS revisions;
                                    release preserved workloads; restore Subscription
@@ -98,14 +98,13 @@ minimized.
 ## Architecture at a glance
 
 - **Standalone `v0` module**, two binaries, prow + GitHub Actions CI.
-- Targets OLMv1's `ClusterObjectSet` (COS) — the current name for the revision object
-  (formerly `ClusterExtensionRevision`).
-- The migration tool **creates** the COS and **waits** for the COS controller to set
-  `Succeeded=True`; it never writes status on OLMv1 APIs. It then creates the
-  `ClusterExtension`; the controller creates the subsequent catalog-derived COS revision.
-- Collected objects are stored via boxcutter's **SecretPacker** (not inline) to support
-  large bundles, with migration collision protection `None`. The controller's catalog-derived
-  revision uses `Prevent`.
+- Targets OLMv1's experimental `ClusterObjectDeployment` (COD) manager and its
+  controller-created `ClusterObjectSet` (COS) revisions.
+- The migration tool creates one COD, waits for an initial `None` rollout, then
+  switches its template to `Prevent` and waits for that rollout before allowing
+  `ClusterExtension` adoption. It never writes status on OLMv1 APIs.
+- Collected objects use SecretPacker when they exceed inline limits. Later
+  controller-generated revisions retain `Prevent` collision protection.
 
 ## Prototype lineage
 

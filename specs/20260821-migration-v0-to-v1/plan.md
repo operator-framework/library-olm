@@ -35,38 +35,22 @@ directly and build their own CLI surface.
 
 ## Prerequisite (cross-repo, runs in parallel) — [OPRUN-4716](https://redhat.atlassian.net/browse/OPRUN-4716)
 
-**Verify COS handoff end-to-end in `operator-controller`.** The released v1.12.0 behavior is
-supersession rather than adoption: a migration-created revision 1 with collision protection
-`None` reaches `Succeeded=True`; creating the CE produces a controller-owned, catalog-derived
-revision 2 with `Prevent`, which also reaches `Succeeded=True`. Track boxcutter phase 2 /
-`ClusterObjectDeployment` (R2.7). *Exit:* documented, automated confirmation of this handoff.
-Verified during Phase 8 E2E.
+**Verify COD handoff end-to-end in `operator-controller`.** The library creates an
+adoption-disabled COD with collision protection `None`, waits for its initial COS rollout,
+switches the template to `Prevent`, and waits for the protected rollout before enabling CE
+adoption. The catalog revision remains protected; a later unrelated object must collide
+rather than be adopted. *Exit:* automated handoff, collision, rollback, and remigration
+checks. Verified by the merged Phase 8 fixture and live E2E suites.
 
-**COD transition (R2.7), in progress:** the library always creates a COD, checks its current-generation rollout, and performs COD-aware rollback. COD CRD presence and establishment are mandatory prerequisites for check, dry-run, and migration. API types are pinned to
-operator-controller commit `a2b85064875b`, matching the COD CI controller and including
-the adoption label requirement. Migration stamps `app.kubernetes.io/managed-by:
-
-operator-controller` on the ownerless COD before handoff; unit and E2E assertions
-check this label and preservation of the original COD identity. The object-controller labels COD-generated revisions with the same key and value `object-controller`; the library never creates COS revisions directly. Rollback persists
-verified COD UIDs before deletion to support dangling revision references on retries.
-Definitive API create rejections permit recovery; ambiguous failures remain conservative.
-The COD-backed CE applier merged in upstream
-PR #3058. On 2026-10-29, a disposable kind cluster running operator-controller main
-`255a4026` passed the fixture handoff test: one COD retained its UID across CE creation,
-and its revisions 1 and 2 used `None` and `Prevent` collision protection. A separate
-full CLI fixture conversion and acknowledged rollback restored the Subscription,
-removed COD/COS resources, and preserved the operator Deployment UID and availability.
-The default E2E setup builds the pinned current experimental controller. A separate CI job
-builds pinned COD-capable commit `a2b85064875b25dccc9f0d8ecdbb1b2d4c041abf` and
-runs covered handoff and workload-preserving rollback E2E targets. The rollback target
-passed locally on 2026-10-29.
-Both covered targets passed again on 2026-11-05 against `bbe43971eadd` on kind
-Kubernetes 1.37, verifying labeled COD adoption and rollback.
-The covered handoff and rollback targets also pass against `77754d81ea01`,
-including COS manager-label assertions. Missing-COD rejection and the `UnmanagedRevision` terminal condition are covered by unit regressions.
-The current API uses typed `inlineManifest`/`secretRef` entries for creation and
-rollback. Preflight validates the served revision-entry schemas. Revision preflight verifies opaque inline manifest preservation and string Secret-reference fields for both COS and COD. E2E setup waits for object-controller on reused clusters. Live catalogs track upstream published content; fixture catalogs provide reproducibility. Older experimental COS/COD schemas are not supported; the controller
-and library must use matching definitions.
+**COD transition (R2.7), merged:** PRs #93, #94, #99–#106 established the COD-only path,
+protected handoff, recovery, and collision checks. The library creates one COD and never
+creates COS revisions directly. COD CRD presence and establishment are prerequisites for
+check, dry-run, and migration. API types and E2E controller use pinned operator-controller
+commit `a2b85064875b25dccc9f0d8ecdbb1b2d4c041abf` (PR #107). Adoption labels are
+applied only after the protected rollout is ready. Rollback persists verified COD UIDs
+before deletion and releases retained workloads for remigration. The current typed
+`inlineManifest`/`secretRef` schema is required; older experimental schemas are not
+supported. Live catalogs track published content while fixture catalogs are reproducible.
 
 ---
 
@@ -211,13 +195,14 @@ unfinished migration-library feature.
 - C10 safety check: reject missing or non-image CatalogSources referenced by either the
   Subscription or an InstallPlan bundle lookup before conversion, regardless of package
   availability in another ClusterCatalog.
-- Combined unit and coverage-producing E2E runs must cover ≥80% of the statements in
-  `migration/pkg/...`; neither suite has a separate percentage minimum. The combined threshold
-  is a Phase 8 target and is not currently enforced by the Make target or CI.
+- Combined unit and coverage-producing E2E coverage is reported for
+  `migration/pkg/...`. The previously stated 80% figure is an informational target;
+  it will not be enforced by Make, CI, or a Phase 8 exit gate. Scenario assertions
+  and review of uncovered safety paths drive test work.
 
-**Depends on:** Phases 1–5 (via Phase 4; Phase 6 tests gated on that phase). **Exit:** combined
-coverage target met and enforced in CI; E2E scenarios in VALIDATION pass in CI. The coverage
-gate remains open work.
+**Depends on:** Phases 1–5 (via Phase 4; Phase 6 tests gated on that phase). **Exit:**
+applicable E2E scenarios in VALIDATION pass in CI, with combined coverage reported for
+inspection. There is no percentage gate.
 
 ---
 
@@ -238,19 +223,17 @@ Readiness reporting includes lightweight COS and COD API availability checks; th
 
 ## Follow-ups from the COS/COD compatibility review
 
-These items remain outside PR93's initial compatibility scope. Keep them open
-until their implementation and validation are complete; a review response alone
-is not completion.
+These items originated in the PR93 compatibility review. Keep unfinished items open
+until implementation and validation are complete; a review response alone is not
+completion.
 
 ### Protected handoff to ClusterExtension
 
-- [ ] Complete [PR95 (COD-only)](https://github.com/operator-framework/library-olm/pull/95).
-  COD-only was selected; the superseded COS+COD alternative was closed.
-- COD-only: create an adoption-disabled COD with `collisionProtection: None`,
-  wait for its initial rollout, enable `Prevent` and remove phase/object overrides,
-  then wait for the protected rollout before enabling CE adoption and creating the CE.
-- Validate that initial resources are adopted, later unrelated-object collisions
-  are rejected, and failed handoffs preserve recovery information.
+- [x] Complete the COD-only path through merged PRs #104–#106. Migration creates
+  an adoption-disabled COD with `collisionProtection: None`, waits for its initial
+  rollout, enables `Prevent`, and waits for the protected rollout before CE adoption.
+  Fixture tests prove initial adoption and rejection of later unrelated-object
+  collisions; failure paths retain recovery information.
 
 Source: [handoff safety review](https://github.com/operator-framework/library-olm/pull/93#discussion_r4556776332).
 

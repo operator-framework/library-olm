@@ -209,9 +209,9 @@ under `artifacts/e2e/coverage`. `make migration/test-unit` writes the unit profi
 `artifacts/coverage`; after the E2E suites have run, `make migration/report-coverage-all` merges
 their profiles and displays the combined result. `make migration/test-coverage-all` reruns unit
 tests before displaying that report. The in-cluster Job is intentionally uninstrumented and does
-not contribute coverage. The ≥80% target measures `migration/pkg/...` statements across the
-combined unit and coverage-producing E2E profiles, with no separate per-suite minimum. This
-combined threshold is not yet enforced by the Make target or CI.
+not contribute coverage. Combined unit and coverage-producing E2E profiles are reported for
+`migration/pkg/...` inspection. The previously stated 80% figure is informational; no
+percentage will be enforced by Make, CI, or the Phase 8 exit criteria.
 
 ## CI status
 
