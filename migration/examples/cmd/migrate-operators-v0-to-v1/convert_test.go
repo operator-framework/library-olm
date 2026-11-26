@@ -80,6 +80,77 @@ func TestDryRunPreviewSortsResourceKinds(t *testing.T) {
 	}
 }
 
+func TestDryRunPreviewUsesPreparedClusterExtensionName(t *testing.T) {
+	opts := migration.Options{
+		SubscriptionName:      "3scale-community-operator",
+		SubscriptionNamespace: "openshift-operators",
+		ClusterExtensionName:  "3scale-community-operator",
+		InstallNamespace:      "openshift-operators",
+	}
+	info := &migration.MigrationInfo{
+		PackageName:          "3scale-community-operator",
+		Version:              "0.12.0",
+		BundleName:           "3scale-community-operator.v0.12.0",
+		ClusterExtensionName: "ext-3scale-community-operator",
+		SystemNamespace:      "controller",
+	}
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalStdout := os.Stdout
+	os.Stdout = writer
+	type readResult struct {
+		output []byte
+		err    error
+	}
+	readDone := make(chan readResult, 1)
+	go func() {
+		output, readErr := io.ReadAll(reader)
+		readDone <- readResult{output: output, err: readErr}
+	}()
+	t.Cleanup(func() {
+		os.Stdout = originalStdout
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+	if err := printDryRunPreview(opts, opts, info); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = originalStdout
+	result := <-readDone
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	preview := string(result.output)
+	if !strings.Contains(preview, "ext-3scale-community-operator") {
+		t.Fatalf("dry-run preview missing the sanitized ClusterObjectDeployment name:\n%s", preview)
+	}
+	ceSection := strings.SplitN(preview, "ClusterExtension that would be created:", 2)
+	if len(ceSection) != 2 {
+		t.Fatalf("dry-run preview missing ClusterExtension section:\n%s", preview)
+	}
+	var nameLine string
+	for _, line := range strings.Split(ceSection[1], "\n") {
+		if strings.Contains(line, "Name:") {
+			nameLine = line
+			break
+		}
+	}
+	if fields := strings.Fields(nameLine); len(fields) == 0 || fields[len(fields)-1] != "ext-3scale-community-operator" {
+		t.Fatalf("ClusterExtension name line = %q, want sanitized name", nameLine)
+	}
+
+	record := dryRunRecord(opts, opts, info)
+	data, ok := record.Data.(dryRunData)
+	if !ok || data.ClusterExtension != "ext-3scale-community-operator" || data.ClusterObjectDeployment != "ext-3scale-community-operator" {
+		t.Fatalf("dry-run record = %#v", record.Data)
+	}
+}
+
 func TestDryRunCleanupPlan(t *testing.T) {
 	opts := migration.Options{
 		SubscriptionName:      "widget-operator",
