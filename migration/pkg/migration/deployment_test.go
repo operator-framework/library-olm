@@ -907,3 +907,128 @@ func TestDeploymentAdoptionRetry(t *testing.T) {
 		})
 	}
 }
+
+func TestFallbackDeploymentName(t *testing.T) {
+	if got := fallbackDeploymentName("redis-operator"); got != "redis-operator" {
+		t.Fatalf("valid name changed to %q", got)
+	}
+	if got := fallbackDeploymentName("3scale-community-operator"); got != "ext-3scale-community-operator" {
+		t.Fatalf("3scale community name = %q", got)
+	}
+	if got := fallbackDeploymentName("3scale-operator"); got != "ext-3scale-operator" {
+		t.Fatalf("3scale name = %q", got)
+	}
+	if !matchesSanitizedDeploymentName("3scale-operator", "ext-3scale-operator") {
+		t.Fatal("base sanitized name not accepted")
+	}
+	if !matchesSanitizedDeploymentName("3scale-operator", "ext-3scale-operator-2") || !matchesSanitizedDeploymentName("3scale-operator", "ext-3scale-operator-50") {
+		t.Fatal("collision suffix not accepted")
+	}
+	if matchesSanitizedDeploymentName("3scale-operator", "redis-operator") || matchesSanitizedDeploymentName("3scale-operator", "ext-3scale-operator-51") {
+		t.Fatal("unrelated name accepted")
+	}
+}
+
+func TestEnsureValidClusterExtensionName(t *testing.T) {
+	m := migrationTestClient(t)
+	got, err := m.ensureValidClusterExtensionName(context.Background(), Options{SubscriptionName: "redis-operator"})
+	if err != nil || got.ClusterExtensionName != "redis-operator" {
+		t.Fatalf("valid name = %q, err = %v", got.ClusterExtensionName, err)
+	}
+
+	var note string
+	m.Progress = func(event ProgressEvent) {
+		if event.Status == ProgressNote {
+			note = event.Message
+		}
+	}
+	got, err = m.ensureValidClusterExtensionName(context.Background(), Options{
+		SubscriptionName:     "3scale-community-operator",
+		ClusterExtensionName: "3scale-community-operator",
+	})
+	if err != nil || got.ClusterExtensionName != "ext-3scale-community-operator" || got.SubscriptionName != "3scale-community-operator" {
+		t.Fatalf("renamed target = %#v, err = %v", got, err)
+	}
+	if !strings.Contains(note, `Using "ext-3scale-community-operator"`) {
+		t.Fatalf("message = %q", note)
+	}
+
+	taken := migrationTestClient(t, &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "ext-3scale-community-operator"}})
+	got, err = taken.ensureValidClusterExtensionName(context.Background(), Options{SubscriptionName: "3scale-community-operator"})
+	if err != nil || got.ClusterExtensionName != "ext-3scale-community-operator-2" {
+		t.Fatalf("collision name = %q, err = %v", got.ClusterExtensionName, err)
+	}
+
+	subRef := "openshift-operators/3scale-community-operator"
+	ownedOpts := Options{SubscriptionName: "3scale-community-operator", SubscriptionNamespace: "openshift-operators"}
+	for _, occupant := range []client.Object{
+		&ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "ext-3scale-community-operator", Annotations: map[string]string{MigratedFromSubscriptionAnnotation: subRef}}},
+		&ocv1.ClusterObjectDeployment{ObjectMeta: metav1.ObjectMeta{Name: "ext-3scale-community-operator", Annotations: map[string]string{MigratedFromSubscriptionAnnotation: subRef}}},
+		&ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "ext-3scale-community-operator-1", Annotations: map[string]string{MigratedFromSubscriptionAnnotation: subRef}}, Spec: ocv1.ClusterObjectSetSpec{Group: "ext-3scale-community-operator"}},
+	} {
+		owned := migrationTestClient(t, occupant)
+		if _, err := owned.ensureValidClusterExtensionName(context.Background(), ownedOpts); err == nil || !strings.Contains(err.Error(), "migration target ext-3scale-community-operator already exists for Subscription "+subRef) {
+			t.Fatalf("owned %T error = %v", occupant, err)
+		}
+	}
+
+	other := migrationTestClient(t, &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{
+		Name:        "ext-3scale-community-operator",
+		Annotations: map[string]string{MigratedFromSubscriptionAnnotation: "other-ns/3scale-community-operator"},
+	}})
+	got, err = other.ensureValidClusterExtensionName(context.Background(), ownedOpts)
+	if err != nil || got.ClusterExtensionName != "ext-3scale-community-operator-2" {
+		t.Fatalf("other subscription collision name = %q, err = %v", got.ClusterExtensionName, err)
+	}
+
+	suffixOwned := migrationTestClient(t,
+		&ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "ext-3scale-community-operator"}},
+		&ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{
+			Name:        "ext-3scale-community-operator-2",
+			Annotations: map[string]string{MigratedFromSubscriptionAnnotation: subRef},
+		}},
+	)
+	if _, err := suffixOwned.ensureValidClusterExtensionName(context.Background(), ownedOpts); err == nil || !strings.Contains(err.Error(), "migration target ext-3scale-community-operator-2 already exists") {
+		t.Fatalf("owned suffix error = %v", err)
+	}
+
+	// The unrelated base occupant is gone, so the base looks free. The owned
+	// suffix must still reject the retry instead of selecting the base again.
+	freeBaseOwnedSuffix := migrationTestClient(t, &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{
+		Name:        "ext-3scale-community-operator-2",
+		Annotations: map[string]string{MigratedFromSubscriptionAnnotation: subRef},
+	}})
+	if _, err := freeBaseOwnedSuffix.ensureValidClusterExtensionName(context.Background(), ownedOpts); err == nil || !strings.Contains(err.Error(), "migration target ext-3scale-community-operator-2 already exists for Subscription "+subRef) {
+		t.Fatalf("free base with owned suffix error = %v", err)
+	}
+
+	laterUnrelated := migrationTestClient(t, &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{Name: "ext-3scale-community-operator-2"}})
+	got, err = laterUnrelated.ensureValidClusterExtensionName(context.Background(), ownedOpts)
+	if err != nil || got.ClusterExtensionName != "ext-3scale-community-operator" {
+		t.Fatalf("free base with unrelated suffix = %q, err = %v", got.ClusterExtensionName, err)
+	}
+}
+
+func TestMigrateRejectsOwnedSanitizedTarget(t *testing.T) {
+	ctx := context.Background()
+	subRef := "openshift-operators/3scale-community-operator"
+	sub, csv := healthySubscriptionFixtures()
+	sub.Name = "3scale-community-operator"
+	sub.Namespace = "openshift-operators"
+	csv.Namespace = sub.Namespace
+	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{
+		Name:        "ext-3scale-community-operator",
+		Annotations: map[string]string{MigratedFromSubscriptionAnnotation: subRef},
+	}}
+	m := migrationTestClient(t, sub, csv, ce)
+	err := m.Migrate(ctx, Options{SubscriptionName: sub.Name, SubscriptionNamespace: sub.Namespace})
+	if err == nil || !strings.Contains(err.Error(), "migration target ext-3scale-community-operator already exists for Subscription "+subRef) {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: "ext-3scale-community-operator-2"}, &ocv1.ClusterExtension{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("retry ClusterExtension lookup error = %v, want not found", err)
+	}
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(sub), &operatorsv1alpha1.Subscription{}); err != nil {
+		t.Fatalf("rejected retry changed Subscription: %v", err)
+	}
+}

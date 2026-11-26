@@ -245,17 +245,28 @@ func runConvertDryRun(cmd *cobra.Command, m *migration.Migrator, opts migration.
 	return output.dryRunPreview(opts, resourceOpts, info)
 }
 
+// plannedClusterExtensionName is the target Gather prepared. Dry-run callers
+// still hold the original Options, whose ClusterExtensionName may be an illegal
+// Subscription name such as 3scale-community-operator.
+func plannedClusterExtensionName(opts migration.Options, info *migration.MigrationInfo) string {
+	if info != nil && info.ClusterExtensionName != "" {
+		return info.ClusterExtensionName
+	}
+	return opts.ClusterExtensionName
+}
+
 // dryRunRecord describes planned COD staging and resource changes without mutating the cluster.
 func dryRunRecord(opts, resourceOpts migration.Options, info *migration.MigrationInfo) outputRecord {
 	kindCounts := make(map[string]int)
 	for _, obj := range info.CollectedObjects {
 		kindCounts[obj.GetKind()]++
 	}
+	ceName := plannedClusterExtensionName(opts, info)
 	return outputRecord{
 		Type: "dry-run", Command: "convert", Target: opts.SubscriptionNamespace + "/" + opts.SubscriptionName,
 		Data: dryRunData{
 			Package: info.PackageName, Version: info.Version, Channel: info.Channel,
-			ClusterObjectDeployment: opts.ClusterExtensionName, ClusterExtension: opts.ClusterExtensionName,
+			ClusterObjectDeployment: ceName, ClusterExtension: ceName,
 			InstallNamespace: resourceOpts.InstallNamespace, SystemNamespace: info.SystemNamespace,
 			ManualApproval: info.ManualApproval, KindCounts: kindCounts,
 			CleanupActions: dryRunCleanupPlan(opts, resourceOpts, info), BackupDirectory: opts.BackupDirectory,
@@ -268,9 +279,10 @@ func dryRunRecord(opts, resourceOpts migration.Options, info *migration.Migratio
 func printDryRunPreview(opts, resourceOpts migration.Options, info *migration.MigrationInfo) error {
 	success(fmt.Sprintf("ClusterObjectDeployment and ClusterObjectSet APIs established; using operator-controller namespace %s", info.SystemNamespace))
 
+	ceName := plannedClusterExtensionName(opts, info)
 	success(fmt.Sprintf("Package: %s  Version: %s  Channel: %s", info.PackageName, info.Version, valueOrDefault(info.Channel, "(default)")))
 	fmt.Printf("\n  Resources that would be created:\n")
-	detail("ClusterObjectDeployment:", fmt.Sprintf("%s (wait for rollout completion and availability before creating the ClusterExtension)", opts.ClusterExtensionName))
+	detail("ClusterObjectDeployment:", fmt.Sprintf("%s (wait for rollout completion and availability before creating the ClusterExtension)", ceName))
 	detail("Template CollisionProtection:", "None initially; Prevent before enabling ClusterExtension adoption")
 	fmt.Printf("\n  Resources that would be placed into its template and controller-created COS revisions:\n")
 
@@ -283,7 +295,7 @@ func printDryRunPreview(opts, resourceOpts migration.Options, info *migration.Mi
 	}
 
 	fmt.Printf("\n  ClusterExtension that would be created:\n")
-	detail("Name:", opts.ClusterExtensionName)
+	detail("Name:", ceName)
 	if opts.SystemManagedInstallNamespace {
 		detail("Namespace:", fmt.Sprintf("(omitted; OLMv1 resolves %s from bundle metadata)", resourceOpts.InstallNamespace))
 	} else {

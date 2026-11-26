@@ -772,6 +772,8 @@ func dependentsWarning(packageName string, dependents []string) string {
 
 // Gather checks the target COD/COS prerequisites and collects everything that would
 // be migrated without making cluster mutations — backs convert --dry-run (R1.1).
+// MigrationInfo.ClusterExtensionName is the prepared target, so a preview shows
+// the same sanitized name that Migrate would create.
 func (m *Migrator) Gather(ctx context.Context, opts Options) (*MigrationInfo, error) {
 	opts.ApplyDefaults()
 	prepared, err := m.PrepareClusterObjectSet(ctx, opts)
@@ -785,20 +787,58 @@ func (m *Migrator) Gather(ctx context.Context, opts Options) (*MigrationInfo, er
 	if err := m.validateMigrationRevision(ctx, prepared, info); err != nil {
 		return nil, err
 	}
+	info.ClusterExtensionName = prepared.ClusterExtensionName
 	info.SystemNamespace = prepared.SystemNamespace
 	return info, nil
+}
+
+// resolveEffectiveCEName returns the ClusterExtension that migration actually
+// created. A valid name that differs from the Subscription name is the
+// caller's explicit target, including CLI rollback, and is returned as given.
+// Equal names, and an explicit name that is not a legal ClusterObjectDeployment
+// name, are resolved through the migrated-from annotation. An invalid explicit
+// name is accepted only when the annotated object is the sanitized form of
+// that name, such as ext-3scale-operator or ext-3scale-operator-2.
+func (m *Migrator) resolveEffectiveCEName(ctx context.Context, opts Options) (string, error) {
+	explicitTarget := opts.ClusterExtensionName != opts.SubscriptionName
+	if explicitTarget && deploymentNameValid(opts.ClusterExtensionName) {
+		return opts.ClusterExtensionName, nil
+	}
+	subRef := fmt.Sprintf("%s/%s", opts.SubscriptionNamespace, opts.SubscriptionName)
+	var ceList ocv1.ClusterExtensionList
+	if err := m.Client.List(ctx, &ceList); err != nil {
+		return "", fmt.Errorf("list ClusterExtensions to resolve effective CE name: %w", err)
+	}
+	for _, ce := range ceList.Items {
+		if ce.Annotations[MigratedFromSubscriptionAnnotation] != subRef {
+			continue
+		}
+		if explicitTarget && !matchesSanitizedDeploymentName(opts.ClusterExtensionName, ce.Name) {
+			continue
+		}
+		return ce.Name, nil
+	}
+	return opts.ClusterExtensionName, nil
 }
 
 // Rollback restores an operator to OLMv0 management (R1.1).
 // opts.AcknowledgeInstalled must be true when the CE is Installed=True.
 func (m *Migrator) Rollback(ctx context.Context, opts Options) error {
 	opts.ApplyDefaults()
-	return m.RollbackClusterExtension(ctx, opts.ClusterExtensionName, opts.AcknowledgeInstalled)
+	ceName, err := m.resolveEffectiveCEName(ctx, opts)
+	if err != nil {
+		return err
+	}
+	return m.RollbackClusterExtension(ctx, ceName, opts.AcknowledgeInstalled)
 }
 
 // Cleanup finishes a partial migration in Conflict state by deleting the
 // Subscription and OLMv0 artifacts, leaving the CE intact (R1.1).
 func (m *Migrator) Cleanup(ctx context.Context, opts Options) error {
 	opts.ApplyDefaults()
-	return m.CleanupConflict(ctx, opts.ClusterExtensionName)
+	ceName, err := m.resolveEffectiveCEName(ctx, opts)
+	if err != nil {
+		return err
+	}
+	return m.CleanupConflict(ctx, ceName)
 }

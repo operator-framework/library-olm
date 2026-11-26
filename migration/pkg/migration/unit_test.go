@@ -30,6 +30,7 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	operatorsv1 "github.com/operator-framework/api/pkg/operators/v1"
 	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
@@ -1287,6 +1288,65 @@ func TestPrerequisitesAndRecoveryErrors(t *testing.T) {
 	}
 }
 
+func TestGatherReportsPreparedClusterExtensionName(t *testing.T) {
+	sub, csv := healthySubscriptionFixtures()
+	sub.Spec.CatalogSource = "catalog"
+	sub.Spec.CatalogSourceNamespace = "catalogs"
+	catalog := &operatorsv1alpha1.CatalogSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "catalog", Namespace: "catalogs"},
+		Spec: operatorsv1alpha1.CatalogSourceSpec{
+			SourceType: operatorsv1alpha1.SourceTypeGrpc,
+			Image:      "registry.example/catalog:latest",
+		},
+	}
+	for _, tc := range []struct {
+		name, subName, want string
+	}{
+		{name: "legal name", subName: "redis-operator", want: "redis-operator"},
+		{name: "digit prefix", subName: "3scale-community-operator", want: "ext-3scale-community-operator"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sub := sub.DeepCopy()
+			csv := csv.DeepCopy()
+			sub.Name = tc.subName
+			sub.Namespace = "openshift-operators"
+			csv.Namespace = sub.Namespace
+			m := migrationTestClient(t, sub, csv, catalog, establishedClusterObjectDeploymentCRD())
+			m.Client = interceptor.NewClient(m.Client.(client.WithWatch), interceptor.Funcs{
+				List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+					if _, ok := list.(*unstructured.UnstructuredList); ok {
+						return nil
+					}
+					return c.List(ctx, list, opts...)
+				},
+				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					options := &client.CreateOptions{}
+					options.ApplyOptions(opts)
+					if len(options.DryRun) > 0 {
+						return nil
+					}
+					return c.Create(ctx, obj, opts...)
+				},
+			})
+			info, err := m.Gather(t.Context(), Options{
+				SubscriptionName:      sub.Name,
+				SubscriptionNamespace: sub.Namespace,
+				SystemNamespace:       "controller",
+			})
+			if err != nil {
+				t.Fatalf("Gather() error = %v", err)
+			}
+			if info.ClusterExtensionName != tc.want || info.SystemNamespace != "controller" {
+				t.Fatalf("Gather() name = %q, namespace = %q", info.ClusterExtensionName, info.SystemNamespace)
+			}
+			var extensions ocv1.ClusterExtensionList
+			if err := m.Client.List(t.Context(), &extensions); err != nil || len(extensions.Items) != 0 {
+				t.Fatalf("Gather() persisted ClusterExtensions: %v, %+v", err, extensions.Items)
+			}
+		})
+	}
+}
+
 func TestGatherRequiresControllerNamespace(t *testing.T) {
 	sub, csv := healthySubscriptionFixtures()
 	m := migrationTestClient(t, sub, csv, establishedClusterObjectDeploymentCRD())
@@ -1898,6 +1958,173 @@ func TestRollbackRejectsMissingAndMalformedBackupsWithoutMutation(t *testing.T) 
 				t.Fatalf("invalid rollback deleted ClusterObjectSet: %v", err)
 			}
 		})
+	}
+}
+
+func TestRollbackResolvesRenamedCE(t *testing.T) {
+	ctx := context.Background()
+	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{
+		Name: "ext-3scale-community-operator",
+		Annotations: map[string]string{
+			MigratedFromSubscriptionAnnotation:    "openshift-operators/3scale-community-operator",
+			MigrationSubscriptionBackupAnnotation: `{"name":"3scale","source":"community-operators","sourceNamespace":"openshift-marketplace"}`,
+		},
+	}}
+	cos := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: "ext-3scale-community-operator-1"}}
+	m := migrationTestClient(t, ce, cos)
+
+	err := m.Rollback(ctx, Options{
+		SubscriptionName:      "3scale-community-operator",
+		SubscriptionNamespace: "openshift-operators",
+		AcknowledgeInstalled:  true,
+	})
+	if err == nil {
+		t.Fatal("expected rollback to fail on missing source namespace, got nil")
+	}
+	if strings.Contains(err.Error(), "failed to get ClusterExtension 3scale-community-operator") {
+		t.Fatalf("Rollback used subscription name instead of annotation-resolved CE name: %v", err)
+	}
+	if !strings.Contains(err.Error(), `source namespace "openshift-operators" must exist`) {
+		t.Fatalf("expected source namespace error (proving CE lookup succeeded), got: %v", err)
+	}
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(ce), &ocv1.ClusterExtension{}); err != nil {
+		t.Fatalf("Rollback deleted ClusterExtension before source namespace preflight: %v", err)
+	}
+}
+
+func TestCleanupResolvesRenamedCE(t *testing.T) {
+	ctx := context.Background()
+	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{
+		Name: "ext-3scale-community-operator",
+		Annotations: map[string]string{
+			MigratedFromSubscriptionAnnotation: "openshift-operators/3scale-community-operator",
+		},
+	}}
+	m := migrationTestClient(t, ce)
+
+	err := m.Cleanup(ctx, Options{
+		SubscriptionName:      "3scale-community-operator",
+		SubscriptionNamespace: "openshift-operators",
+	})
+	if err == nil {
+		t.Fatal("expected cleanup to fail on missing catalog package, got nil")
+	}
+	if strings.Contains(err.Error(), "failed to get ClusterExtension 3scale-community-operator") {
+		t.Fatalf("Cleanup used subscription name instead of annotation-resolved CE name: %v", err)
+	}
+	if !strings.Contains(err.Error(), "ext-3scale-community-operator") {
+		t.Fatalf("expected error referencing ext-3scale-community-operator, got: %v", err)
+	}
+}
+
+func TestRollbackResolvesExplicitInvalidTarget(t *testing.T) {
+	ctx := context.Background()
+	for _, ceName := range []string{"ext-3scale-operator", "ext-3scale-operator-2"} {
+		t.Run(ceName, func(t *testing.T) {
+			ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{
+				Name: ceName,
+				Annotations: map[string]string{
+					MigratedFromSubscriptionAnnotation:    "openshift-operators/redis-operator",
+					MigrationSubscriptionBackupAnnotation: `{"name":"redis","source":"community-operators","sourceNamespace":"openshift-marketplace"}`,
+				},
+			}}
+			cos := &ocv1.ClusterObjectSet{ObjectMeta: metav1.ObjectMeta{Name: ceName + "-1"}}
+			m := migrationTestClient(t, ce, cos)
+
+			err := m.Rollback(ctx, Options{
+				SubscriptionName:      "redis-operator",
+				SubscriptionNamespace: "openshift-operators",
+				ClusterExtensionName:  "3scale-operator",
+				AcknowledgeInstalled:  true,
+			})
+			if err == nil {
+				t.Fatal("expected rollback to fail on missing source namespace, got nil")
+			}
+			if strings.Contains(err.Error(), "failed to get ClusterExtension 3scale-operator") {
+				t.Fatalf("Rollback used the invalid requested name: %v", err)
+			}
+			if !strings.Contains(err.Error(), `source namespace "openshift-operators" must exist`) {
+				t.Fatalf("expected source namespace error, got: %v", err)
+			}
+			if err := m.Client.Get(ctx, client.ObjectKeyFromObject(ce), &ocv1.ClusterExtension{}); err != nil {
+				t.Fatalf("Rollback deleted ClusterExtension before source namespace preflight: %v", err)
+			}
+		})
+	}
+}
+
+func TestRollbackIgnoresUnrelatedAnnotatedCE(t *testing.T) {
+	ctx := context.Background()
+	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{
+		Name: "redis-operator",
+		Annotations: map[string]string{
+			MigratedFromSubscriptionAnnotation:    "openshift-operators/redis-operator",
+			MigrationSubscriptionBackupAnnotation: `{"name":"redis","source":"community-operators","sourceNamespace":"openshift-marketplace"}`,
+		},
+	}}
+	m := migrationTestClient(t, ce)
+
+	err := m.Rollback(ctx, Options{
+		SubscriptionName:      "redis-operator",
+		SubscriptionNamespace: "openshift-operators",
+		ClusterExtensionName:  "3scale-operator",
+		AcknowledgeInstalled:  true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "failed to get ClusterExtension 3scale-operator") {
+		t.Fatalf("Rollback() error = %v, want the requested invalid name", err)
+	}
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(ce), &ocv1.ClusterExtension{}); err != nil {
+		t.Fatalf("Rollback deleted the unrelated ClusterExtension: %v", err)
+	}
+}
+
+func TestRollbackKeepsExplicitValidTarget(t *testing.T) {
+	ctx := context.Background()
+	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{
+		Name: "ext-3scale-operator",
+		Annotations: map[string]string{
+			MigratedFromSubscriptionAnnotation: "openshift-operators/redis-operator",
+		},
+	}}
+	m := migrationTestClient(t, ce)
+
+	err := m.Rollback(ctx, Options{
+		SubscriptionName:      "redis-operator",
+		SubscriptionNamespace: "openshift-operators",
+		ClusterExtensionName:  "my-redis",
+		AcknowledgeInstalled:  true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "failed to get ClusterExtension my-redis") {
+		t.Fatalf("Rollback() error = %v, want the explicit valid name", err)
+	}
+	if err := m.Client.Get(ctx, client.ObjectKeyFromObject(ce), &ocv1.ClusterExtension{}); err != nil {
+		t.Fatalf("Rollback deleted the annotated ClusterExtension: %v", err)
+	}
+}
+
+func TestCleanupResolvesExplicitInvalidTarget(t *testing.T) {
+	ctx := context.Background()
+	ce := &ocv1.ClusterExtension{ObjectMeta: metav1.ObjectMeta{
+		Name: "ext-3scale-operator",
+		Annotations: map[string]string{
+			MigratedFromSubscriptionAnnotation: "openshift-operators/redis-operator",
+		},
+	}}
+	m := migrationTestClient(t, ce)
+
+	err := m.Cleanup(ctx, Options{
+		SubscriptionName:      "redis-operator",
+		SubscriptionNamespace: "openshift-operators",
+		ClusterExtensionName:  "3scale-operator",
+	})
+	if err == nil {
+		t.Fatal("expected cleanup to fail on missing catalog package, got nil")
+	}
+	if strings.Contains(err.Error(), "failed to get ClusterExtension 3scale-operator") {
+		t.Fatalf("Cleanup used the invalid requested name: %v", err)
+	}
+	if !strings.Contains(err.Error(), "ext-3scale-operator") {
+		t.Fatalf("expected error referencing ext-3scale-operator, got: %v", err)
 	}
 }
 

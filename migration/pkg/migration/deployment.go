@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -401,4 +402,185 @@ func buildClusterObjectDeployment(opts Options, info *MigrationInfo, phases []*o
 		return nil, fmt.Errorf("decode ClusterObjectDeployment: %w", err)
 	}
 	return &cod, nil
+}
+
+// ensureValidClusterExtensionName keeps a target name that already passes
+// deploymentNamePattern. A Classic Subscription name that does not, such as
+// 3scale-community-operator, is replaced with an ext- prefix. The Subscription
+// name itself is left unchanged so rollback can still find the source.
+// An existing target annotated for this Subscription is an error, including a
+// collision suffix. A suffix is used only when an earlier name belongs to an
+// unrelated object.
+func (m *Migrator) ensureValidClusterExtensionName(ctx context.Context, opts Options) (Options, error) {
+	opts.ApplyDefaults()
+	current := opts.ClusterExtensionName
+	if deploymentNameValid(current) {
+		return opts, nil
+	}
+	unique, err := m.uniqueDeploymentName(ctx, fallbackDeploymentName(current), fmt.Sprintf("%s/%s", opts.SubscriptionNamespace, opts.SubscriptionName))
+	if err != nil {
+		return opts, err
+	}
+	opts.ClusterExtensionName = unique
+	m.progress(ProgressEvent{
+		Step:    ProgressStepPrepare,
+		Status:  ProgressNote,
+		Message: fmt.Sprintf("Target name %q is not valid for ClusterObjectDeployment. Using %q.", current, unique),
+	})
+	return opts, nil
+}
+
+func deploymentNameValid(name string) bool {
+	return len(name) <= 52 && deploymentNamePattern.MatchString(name)
+}
+
+// fallbackDeploymentName turns an illegal target into a legal one without
+// changing names that are already legal.
+func fallbackDeploymentName(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(name) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	cleaned := strings.Trim(b.String(), "-")
+	if cleaned == "" {
+		cleaned = "operator"
+	}
+	if cleaned[0] < 'a' || cleaned[0] > 'z' {
+		cleaned = "ext-" + cleaned
+	}
+	return fitDeploymentName(cleaned, "")
+}
+
+// matchesSanitizedDeploymentName reports whether actual is a name
+// uniqueDeploymentName can select for requested. The first candidate is the
+// ext- form. Later candidates are the collision suffixes -2 through -50.
+func matchesSanitizedDeploymentName(requested, actual string) bool {
+	base := fallbackDeploymentName(requested)
+	for n := 1; n <= 50; n++ {
+		suffix := ""
+		if n > 1 {
+			suffix = fmt.Sprintf("-%d", n)
+		}
+		if fitDeploymentName(base, suffix) == actual {
+			return true
+		}
+	}
+	return false
+}
+
+// uniqueDeploymentName returns the first legal candidate that no other object
+// occupies. subRef is "<namespace>/<name>" of the source Subscription. Every
+// candidate is inspected before a free name is returned. A candidate already
+// annotated for that Subscription is an error, even when an earlier name is
+// now free, so a retry cannot create a second migrated target. A suffix is
+// selected only when the earlier candidates are occupied by unrelated objects.
+func (m *Migrator) uniqueDeploymentName(ctx context.Context, base, subRef string) (string, error) {
+	occupied, err := m.deploymentNameIndex(ctx, subRef)
+	if err != nil {
+		return "", err
+	}
+	free := ""
+	for n := 1; n <= 50; n++ {
+		suffix := ""
+		if n > 1 {
+			suffix = fmt.Sprintf("-%d", n)
+		}
+		candidate := fitDeploymentName(base, suffix)
+		state, taken := occupied[candidate]
+		if taken && state.owned {
+			return "", fmt.Errorf("migration target %s already exists for Subscription %s", candidate, subRef)
+		}
+		if !taken && free == "" {
+			free = candidate
+		}
+	}
+	if free == "" {
+		return "", fmt.Errorf("no available migration target name based on %q", base)
+	}
+	return free, nil
+}
+
+func fitDeploymentName(base, suffix string) string {
+	limit := 52 - len(suffix)
+	if limit < 1 {
+		limit = 1
+	}
+	name := base
+	if len(name) > limit {
+		name = name[:limit]
+	}
+	name = strings.TrimRight(name, "-")
+	if name == "" || name[0] < 'a' || name[0] > 'z' {
+		name = "ext"
+	}
+	name += suffix
+	if len(name) > 52 {
+		name = strings.TrimRight(name[:52], "-")
+	}
+	return name
+}
+
+// deploymentOccupant records a name that already has a migration object.
+// owned is true when one of those objects is annotated for the source Subscription.
+type deploymentOccupant struct {
+	owned bool
+}
+
+// deploymentNameIndex records every ClusterExtension, ClusterObjectDeployment,
+// and ClusterObjectSet group that already occupies a migration target name.
+// A missing API is ignored. Presence in the map means the name is taken.
+func (m *Migrator) deploymentNameIndex(ctx context.Context, subRef string) (map[string]deploymentOccupant, error) {
+	index := map[string]deploymentOccupant{}
+	note := func(name string, annotations map[string]string) {
+		if name == "" {
+			return
+		}
+		state := index[name]
+		if subRef != "" && annotations[MigratedFromSubscriptionAnnotation] == subRef {
+			state.owned = true
+		}
+		index[name] = state
+	}
+
+	var extensions ocv1.ClusterExtensionList
+	if err := m.Client.List(ctx, &extensions); err != nil {
+		if !apimeta.IsNoMatchError(err) {
+			return nil, fmt.Errorf("check ClusterExtension names: %w", err)
+		}
+	} else {
+		for _, extension := range extensions.Items {
+			note(extension.Name, extension.Annotations)
+		}
+	}
+
+	var deployments ocv1.ClusterObjectDeploymentList
+	if err := m.Client.List(ctx, &deployments); err != nil {
+		if !apimeta.IsNoMatchError(err) {
+			return nil, fmt.Errorf("check ClusterObjectDeployment names: %w", err)
+		}
+	} else {
+		for _, deployment := range deployments.Items {
+			note(deployment.Name, deployment.Annotations)
+		}
+	}
+
+	var revisions ocv1.ClusterObjectSetList
+	if err := m.Client.List(ctx, &revisions); err != nil {
+		if !apimeta.IsNoMatchError(err) {
+			return nil, fmt.Errorf("check migration target names: %w", err)
+		}
+	} else {
+		for _, revision := range revisions.Items {
+			note(revision.Spec.Group, revision.Annotations)
+			if revision.Labels != nil {
+				note(revision.Labels[LabelOwnerName], revision.Annotations)
+			}
+			if strings.HasSuffix(revision.Name, "-1") {
+				note(strings.TrimSuffix(revision.Name, "-1"), revision.Annotations)
+			}
+		}
+	}
+	return index, nil
 }

@@ -88,6 +88,10 @@ func (m *Migrator) Migrate(ctx context.Context, opts Options) error {
 
 // migrate runs preflight, backup, staging, handoff, and cleanup while reporting progress.
 func (m *Migrator) migrate(ctx context.Context, opts Options, nextStep func(ProgressStep, string)) error {
+	opts, err := m.ensureValidClusterExtensionName(ctx, opts)
+	if err != nil {
+		return err
+	}
 	_, csv, ip, err := m.GetCSVAndInstallPlan(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("failed to profile operator: %w", err)
@@ -250,7 +254,10 @@ func (m *Migrator) migrate(ctx context.Context, opts Options, nextStep func(Prog
 // and resolves where SecretPacker data belongs. Gather and Migrate validate the
 // prepared revision through server-side dry run before removing OLMv0 management.
 func (m *Migrator) PrepareClusterObjectSet(ctx context.Context, opts Options) (Options, error) {
-	opts.ApplyDefaults()
+	opts, err := m.ensureValidClusterExtensionName(ctx, opts)
+	if err != nil {
+		return opts, err
+	}
 	if err := m.ensureClusterExtensionAbsent(ctx, opts.ClusterExtensionName); err != nil {
 		return opts, err
 	}
@@ -618,7 +625,10 @@ func (m *Migrator) CreateMigrationResources(ctx context.Context, opts Options, i
 	if err != nil {
 		return MigrationResourcesResult{}, err
 	}
-	opts.ApplyDefaults()
+	opts, err = m.ensureValidClusterExtensionName(ctx, opts)
+	if err != nil {
+		return MigrationResourcesResult{}, err
+	}
 	resources, err := m.createMigrationDeployment(ctx, opts, info)
 	if err != nil {
 		result := MigrationResourcesResult{TargetMayBeActive: resources.cod != nil || resources.ownershipUnknown}

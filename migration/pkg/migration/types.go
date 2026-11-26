@@ -82,17 +82,21 @@ func (o *Options) ApplyDefaults() {
 
 // MigrationInfo holds the profiled operator information gathered during the migration.
 type MigrationInfo struct {
-	PackageName         string
-	Version             string
-	BundleName          string
-	BundleImage         string
-	Channel             string
-	ManualApproval      bool // true if the Subscription had Manual install plan approval
-	CatalogSourceRef    types.NamespacedName
-	CatalogSourceImage  string // tag-based image from CatalogSource.Spec.Image
-	ResolvedCatalogName string
-	SystemNamespace     string // operator-controller namespace for COS reference Secrets
-	CollectedObjects    []unstructured.Unstructured
+	// ClusterExtensionName is the target name a migration will create. Gather
+	// sets it from the prepared options, including the sanitized ext- name when
+	// the requested name is not legal for ClusterObjectDeployment.
+	ClusterExtensionName string
+	PackageName          string
+	Version              string
+	BundleName           string
+	BundleImage          string
+	Channel              string
+	ManualApproval       bool // true if the Subscription had Manual install plan approval
+	CatalogSourceRef     types.NamespacedName
+	CatalogSourceImage   string // tag-based image from CatalogSource.Spec.Image
+	ResolvedCatalogName  string
+	SystemNamespace      string // operator-controller namespace for COS reference Secrets
+	CollectedObjects     []unstructured.Unstructured
 
 	// SubscriptionConfig holds spec.config from the Subscription for mapping to CE (R4).
 	// spec.config.selector is dropped (never honored in OLMv0; no CE equivalent).
