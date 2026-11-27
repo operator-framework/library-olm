@@ -13,7 +13,7 @@ require (
 	github.com/stretchr/testify v1.12.1
 	go.podman.io/image/v5 v5.42.1
 	golang.org/x/sync v0.25.0
-	helm.sh/helm/v4 v4.3.1
+	helm.sh/helm/v4 v4.3.2
 	k8s.io/api v0.37.2
 	k8s.io/apiextensions-apiserver v0.37.2
 	k8s.io/apimachinery v0.37.2
@@ -317,7 +317,7 @@ require (
 	golang.org/x/exp v0.0.0-20260603202125-055de637280b // indirect
 	golang.org/x/exp/typeparams v0.0.0-20251023183803-a4bb9ffd2546 // indirect
 	golang.org/x/mod v0.42.0 // indirect
-	golang.org/x/net v0.61.0 // indirect
+	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/term v0.47.0 // indirect
